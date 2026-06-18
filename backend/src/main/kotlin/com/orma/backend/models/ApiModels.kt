@@ -14,6 +14,7 @@ data class HealthResponse(
     val environment: String,
     val databaseConfigured: Boolean,
     val firebaseAuthConfigured: Boolean,
+    val firebaseStorageConfigured: Boolean,
 )
 
 @Serializable
@@ -118,4 +119,16 @@ data class OnboardingMutationResponse(
     val onboardingStatus: String,
     val requiredStep: String,
     val accessPath: String,
+)
+
+@Serializable
+data class MediaUploadResponse(
+    val type: String,
+    val id: String? = null,
+    val workspaceId: String? = null,
+    val productId: String? = null,
+    val storagePath: String,
+    val downloadUrl: String? = null,
+    val contentType: String,
+    val sizeBytes: Long,
 )

@@ -9,6 +9,7 @@ Kotlin/Ktor backend module for ORMA. This folder is inside the main KMP app proj
 - PostgreSQL
 - Flyway migrations
 - Firebase Auth token verification
+- Firebase Cloud Storage for business and product images
 
 ## Run Locally
 
@@ -42,6 +43,7 @@ Important variables:
 - `RUN_MIGRATIONS`: set to `true` to run Flyway migrations on startup
 - `FIREBASE_PROJECT_ID`: Firebase project ID
 - `FIREBASE_CREDENTIALS_PATH`: service account JSON path for local/server auth verification
+- `FIREBASE_STORAGE_BUCKET`: Firebase Storage bucket, for example `orma-project-90.firebasestorage.app`
 - `ALLOWED_ORIGINS`: comma-separated CORS origins
 
 ## First APIs
@@ -54,6 +56,8 @@ POST /onboarding/business
 POST /onboarding/team-invites/lookup
 POST /onboarding/team-invites/join
 POST /onboarding/notifications
+POST /media/business-logo
+POST /media/product-images
 ```
 
 `POST /auth/session` expects:
@@ -70,6 +74,17 @@ Protected onboarding APIs expect:
 Authorization: Bearer <firebase-id-token>
 Content-Type: application/json
 ```
+
+Protected media APIs expect:
+
+```text
+Authorization: Bearer <firebase-id-token>
+Content-Type: multipart/form-data
+```
+
+`POST /media/business-logo` accepts one JPEG, PNG, or WebP file up to 5 MB. If business setup is not complete yet, it stores the file under a temporary user path and returns a `storagePath` that can be sent later as `logoFileName`.
+
+`POST /media/product-images` accepts one image file plus a `productId` form field. Product image metadata is stored in Postgres and the file is stored in Firebase Storage.
 
 See `docs/backend-onboarding-handoff.md` for the pilot onboarding contract.
 

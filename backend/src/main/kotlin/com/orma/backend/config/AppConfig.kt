@@ -10,6 +10,7 @@ data class AppConfig(
     val runMigrations: Boolean,
     val firebaseProjectId: String?,
     val firebaseCredentialsPath: String?,
+    val firebaseStorageBucket: String?,
     val allowedOrigins: List<String>,
 ) {
     val databaseConfigured: Boolean
@@ -18,8 +19,12 @@ data class AppConfig(
     val firebaseAuthConfigured: Boolean
         get() = !firebaseProjectId.isNullOrBlank()
 
+    val firebaseStorageConfigured: Boolean
+        get() = firebaseAuthConfigured && !firebaseStorageBucket.isNullOrBlank()
+
     companion object {
         fun load(env: Map<String, String> = System.getenv()): AppConfig {
+            val firebaseProjectId = env["FIREBASE_PROJECT_ID"].orNullIfBlank()
             return AppConfig(
                 host = env["HOST"].orEmpty().ifBlank { "0.0.0.0" },
                 port = env["PORT"]?.toIntOrNull() ?: 8080,
@@ -28,8 +33,10 @@ data class AppConfig(
                 databaseUser = env["DATABASE_USER"].orNullIfBlank(),
                 databasePassword = env["DATABASE_PASSWORD"].orNullIfBlank(),
                 runMigrations = env["RUN_MIGRATIONS"]?.toBooleanStrictOrNull() ?: false,
-                firebaseProjectId = env["FIREBASE_PROJECT_ID"].orNullIfBlank(),
+                firebaseProjectId = firebaseProjectId,
                 firebaseCredentialsPath = env["FIREBASE_CREDENTIALS_PATH"].orNullIfBlank(),
+                firebaseStorageBucket = env["FIREBASE_STORAGE_BUCKET"].orNullIfBlank()
+                    ?: firebaseProjectId?.let { "$it.firebasestorage.app" },
                 allowedOrigins = env["ALLOWED_ORIGINS"]
                     ?.split(",")
                     ?.map { it.trim() }
@@ -48,6 +55,7 @@ data class AppConfig(
             runMigrations = false,
             firebaseProjectId = null,
             firebaseCredentialsPath = null,
+            firebaseStorageBucket = null,
             allowedOrigins = listOf("*"),
         )
     }

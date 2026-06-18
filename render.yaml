@@ -24,5 +24,7 @@ services:
         value: orma-project-90
       - key: FIREBASE_CREDENTIALS_PATH
         value: /etc/secrets/firebase-adminsdk.json
+      - key: FIREBASE_STORAGE_BUCKET
+        value: orma-project-90.firebasestorage.app
       - key: ALLOWED_ORIGINS
         sync: false

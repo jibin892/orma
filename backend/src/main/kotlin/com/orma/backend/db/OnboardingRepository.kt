@@ -37,6 +37,16 @@ data class OnboardingSessionRecord(
     val accessPath: String,
 )
 
+data class ProductImageRecord(
+    val id: String,
+    val workspaceId: String,
+    val productId: String,
+    val storagePath: String,
+    val originalFileName: String?,
+    val contentType: String,
+    val sizeBytes: Long,
+)
+
 class OnboardingRepository(
     private val dataSource: DataSource,
 ) {
@@ -142,6 +152,37 @@ class OnboardingRepository(
             val updatedUser = connection.updateNotificationPreference(user.id, enabled)
             val workspace = connection.findPrimaryWorkspace(updatedUser.id)
             updatedUser.toSession(workspace)
+        }
+    }
+
+    suspend fun saveBusinessLogo(
+        workspaceId: String,
+        storagePath: String,
+    ) = withContext(Dispatchers.IO) {
+        dataSource.connection.use { connection ->
+            connection.updateBusinessLogo(workspaceId, storagePath)
+        }
+    }
+
+    suspend fun saveProductImage(
+        workspaceId: String,
+        userId: String,
+        productId: String,
+        storagePath: String,
+        originalFileName: String?,
+        contentType: String,
+        sizeBytes: Long,
+    ): ProductImageRecord = withContext(Dispatchers.IO) {
+        dataSource.connection.use { connection ->
+            connection.insertProductImage(
+                workspaceId = workspaceId,
+                userId = userId,
+                productId = productId,
+                storagePath = storagePath,
+                originalFileName = originalFileName,
+                contentType = contentType,
+                sizeBytes = sizeBytes,
+            )
         }
     }
 
@@ -550,6 +591,67 @@ class OnboardingRepository(
         }
     }
 
+    private fun Connection.updateBusinessLogo(
+        workspaceId: String,
+        storagePath: String,
+    ) {
+        val sql = """
+            update business_workspaces
+            set logo_file_name = ?, updated_at = now()
+            where id = ?::uuid
+        """.trimIndent()
+        prepareStatement(sql).use { statement ->
+            statement.setString(1, storagePath)
+            statement.setString(2, workspaceId)
+            statement.executeUpdate()
+        }
+    }
+
+    private fun Connection.insertProductImage(
+        workspaceId: String,
+        userId: String,
+        productId: String,
+        storagePath: String,
+        originalFileName: String?,
+        contentType: String,
+        sizeBytes: Long,
+    ): ProductImageRecord {
+        val sql = """
+            insert into product_images (
+                workspace_id,
+                product_id,
+                storage_path,
+                original_file_name,
+                content_type,
+                size_bytes,
+                created_by_user_id,
+                updated_at
+            )
+            values (?::uuid, ?, ?, ?, ?, ?, ?::uuid, now())
+            returning
+                id::text,
+                workspace_id::text,
+                product_id,
+                storage_path,
+                original_file_name,
+                content_type,
+                size_bytes
+        """.trimIndent()
+        return prepareStatement(sql).use { statement ->
+            statement.setString(1, workspaceId)
+            statement.setString(2, productId.trim())
+            statement.setString(3, storagePath)
+            statement.setNullableString(4, originalFileName?.trim()?.ifBlank { null })
+            statement.setString(5, contentType)
+            statement.setLong(6, sizeBytes)
+            statement.setString(7, userId)
+            statement.executeQuery().use { result ->
+                result.next()
+                result.toProductImageRecord()
+            }
+        }
+    }
+
     private fun PreparedStatement.bindBusinessSetup(
         userId: String,
         request: BusinessSetupRequest,
@@ -623,6 +725,17 @@ class OnboardingRepository(
             role = getString("role"),
             onboardingComplete = getBoolean("onboarding_complete"),
             inviteCode = getString("invite_code"),
+        )
+
+    private fun ResultSet.toProductImageRecord(): ProductImageRecord =
+        ProductImageRecord(
+            id = getString("id"),
+            workspaceId = getString("workspace_id"),
+            productId = getString("product_id"),
+            storagePath = getString("storage_path"),
+            originalFileName = getString("original_file_name"),
+            contentType = getString("content_type"),
+            sizeBytes = getLong("size_bytes"),
         )
 
     private fun AppUserRecord.toSession(workspace: WorkspaceRecord?): OnboardingSessionRecord {

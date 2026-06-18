@@ -5,6 +5,7 @@ import com.orma.backend.db.OnboardingRepository
 import com.orma.backend.models.ApiInfoResponse
 import com.orma.backend.routes.authRoutes
 import com.orma.backend.routes.healthRoutes
+import com.orma.backend.routes.mediaRoutes
 import com.orma.backend.routes.onboardingRoutes
 import io.ktor.server.application.Application
 import io.ktor.server.response.respond
@@ -28,5 +29,6 @@ fun Application.configureRouting(
         healthRoutes(config)
         authRoutes(config, onboardingRepository)
         onboardingRoutes(config, onboardingRepository)
+        mediaRoutes(config, onboardingRepository)
     }
 }

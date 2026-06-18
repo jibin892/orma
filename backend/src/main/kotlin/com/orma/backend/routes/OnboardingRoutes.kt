@@ -1,6 +1,5 @@
 package com.orma.backend.routes
 
-import com.orma.backend.auth.FirebaseTokenVerifier
 import com.orma.backend.config.AppConfig
 import com.orma.backend.db.OnboardingRepository
 import com.orma.backend.models.BusinessSetupRequest
@@ -10,7 +9,6 @@ import com.orma.backend.models.OnboardingMutationResponse
 import com.orma.backend.models.TeamInviteJoinRequest
 import com.orma.backend.models.TeamInviteLookupRequest
 import com.orma.backend.models.TeamInviteResponse
-import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.request.receive
@@ -84,26 +82,6 @@ fun Route.onboardingRoutes(
         val session = repository.updateNotificationPreference(firebaseUser, request.enabled)
         call.respond(session.toMutationResponse())
     }
-}
-
-private suspend fun ApplicationCall.verifiedFirebaseUser(config: AppConfig): com.orma.backend.auth.VerifiedFirebaseUser? {
-    val token = request.headers[HttpHeaders.Authorization]
-        ?.trim()
-        ?.removePrefix("Bearer")
-        ?.trim()
-
-    if (token.isNullOrBlank()) {
-        respond(
-            HttpStatusCode.Unauthorized,
-            ErrorResponse(
-                code = "missing_bearer_token",
-                message = "Authorization: Bearer <Firebase ID token> is required.",
-            ),
-        )
-        return null
-    }
-
-    return FirebaseTokenVerifier(config).verify(token)
 }
 
 private suspend fun ApplicationCall.databaseNotConfigured() {
