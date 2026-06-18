@@ -1,0 +1,6 @@
+.gradle/
+build/
+.env
+.DS_Store
+*.log
+*.hprof

@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: orma-backend
+    runtime: docker
+    plan: free
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    envVars:
+      - key: HOST
+        value: 0.0.0.0
+      - key: ENVIRONMENT
+        value: pilot
+      - key: RUN_MIGRATIONS
+        value: "true"
+      - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_USER
+        sync: false
+      - key: DATABASE_PASSWORD
+        sync: false
+      - key: FIREBASE_PROJECT_ID
+        value: orma-project-90
+      - key: FIREBASE_CREDENTIALS_PATH
+        value: /etc/secrets/firebase-adminsdk.json
+      - key: ALLOWED_ORIGINS
+        sync: false

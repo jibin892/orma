@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Orma</title>
+    <link type="text/css" rel="stylesheet" href="styles.css">
+</head>
+<body style="text-align: center; align-content: center">
+    <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 50 50" role="presentation">
+        <circle cx="25" cy="25" r="20" stroke="#ccc" stroke-width="4" fill="none"/>
+        <circle cx="25" cy="25" r="20" stroke="#333" stroke-width="4" fill="none" stroke-linecap="round"
+                stroke-dasharray="90 125">
+            <animateTransform attributeName="transform" type="rotate" from="0 25 25" to="360 25 25" dur="1s"
+                repeatCount="indefinite"/>
+        </circle>
+    </svg>
+    <script>
+        window.OrmaFirebaseGoogleAuth = {
+            signIn: async function () {
+                try {
+                    const [{ initializeApp, getApps }, authModule] = await Promise.all([
+                        import("https://www.gstatic.com/firebasejs/11.10.0/firebase-app.js"),
+                        import("https://www.gstatic.com/firebasejs/11.10.0/firebase-auth.js")
+                    ]);
+                    const {
+                        getAuth,
+                        GoogleAuthProvider,
+                        onAuthStateChanged,
+                        signInWithPopup
+                    } = authModule;
+                    const firebaseConfig = {
+                        apiKey: "AIzaSyCGglHuAEx0e1xz6o-A5FqSRAAWepffXlk",
+                        authDomain: "orma-project-90.firebaseapp.com",
+                        projectId: "orma-project-90",
+                        storageBucket: "orma-project-90.firebasestorage.app",
+                        messagingSenderId: "469264683998",
+                        appId: "1:469264683998:web:dc157cbbee2f29fe35834f"
+                    };
+                    const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
+                    const auth = getAuth(app);
+                    const provider = new GoogleAuthProvider();
+                    provider.setCustomParameters({ prompt: "select_account" });
+
+                    function currentUserWhenReady() {
+                        if (auth.currentUser) {
+                            return Promise.resolve(auth.currentUser);
+                        }
+                        return new Promise((resolve) => {
+                            let settled = false;
+                            let unsubscribe = () => {};
+                            const timeout = setTimeout(() => {
+                                if (!settled) {
+                                    settled = true;
+                                    unsubscribe();
+                                    resolve(null);
+                                }
+                            }, 900);
+                            unsubscribe = onAuthStateChanged(auth, (user) => {
+                                if (!settled) {
+                                    settled = true;
+                                    clearTimeout(timeout);
+                                    unsubscribe();
+                                    resolve(user || null);
+                                }
+                            });
+                        });
+                    }
+
+                    const existingUser = await currentUserWhenReady();
+                    if (existingUser) {
+                        const firebaseIdToken = await existingUser.getIdToken(true);
+                        if (firebaseIdToken) {
+                            const providerId = existingUser.providerData && existingUser.providerData.length
+                                ? existingUser.providerData[0].providerId
+                                : "google.com";
+                            return {
+                                firebaseIdToken,
+                                refreshToken: existingUser.refreshToken || "",
+                                uid: existingUser.uid || "",
+                                email: existingUser.email || "",
+                                phoneNumber: existingUser.phoneNumber || "",
+                                displayName: existingUser.displayName || "",
+                                providerId
+                            };
+                        }
+                    }
+
+                    const result = await signInWithPopup(auth, provider);
+                    const credential = GoogleAuthProvider.credentialFromResult(result);
+                    if (!credential || !credential.idToken) {
+                        return {
+                            errorTitle: "Google token missing",
+                            errorMessage: "Firebase web sign-in completed but Google did not return an ID token.",
+                            errorCode: "GOOGLE_WEB_ID_TOKEN_MISSING"
+                        };
+                    }
+                    return { idToken: credential.idToken };
+                } catch (error) {
+                    return {
+                        errorTitle: "Google sign-in failed",
+                        errorMessage: error && error.message ? error.message : "Google sign-in did not complete.",
+                        errorCode: error && error.code ? error.code : "GOOGLE_WEB_FAILED"
+                    };
+                }
+            }
+        };
+    </script>
+    <script type="application/javascript" src="webApp.js"></script>
+</body>
+</html>

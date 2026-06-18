@@ -1,0 +1,20 @@
+package com.orma.backend.routes
+
+import com.orma.backend.config.AppConfig
+import com.orma.backend.models.HealthResponse
+import io.ktor.server.response.respond
+import io.ktor.server.routing.Route
+import io.ktor.server.routing.get
+
+fun Route.healthRoutes(config: AppConfig) {
+    get("/health") {
+        call.respond(
+            HealthResponse(
+                status = "ok",
+                environment = config.environment,
+                databaseConfigured = config.databaseConfigured,
+                firebaseAuthConfigured = config.firebaseAuthConfigured,
+            ),
+        )
+    }
+}

@@ -1,0 +1,54 @@
+{
+  "project_info": {
+    "project_number": "469264683998",
+    "project_id": "orma-project-90",
+    "storage_bucket": "orma-project-90.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:469264683998:android:398c1cb979a331cd35834f",
+        "android_client_info": {
+          "package_name": "org.orma.project_90"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "469264683998-u6j0kuo086npcjp4rtcj8elt9flide8o.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "org.orma.project_90",
+            "certificate_hash": "2c8d22c372dd4714db15cdb10f3e60bc881413bf"
+          }
+        },
+        {
+          "client_id": "469264683998-5piadeka1ps6m1l8govm4nj3llcsd9a7.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAVpI5Nu2UH3wQxYCM1LaT705PwxWTnra4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "469264683998-5piadeka1ps6m1l8govm4nj3llcsd9a7.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "469264683998-kfqiuua87h2matib7ni095enp6c1utq3.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "org.orma.project90.orma"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
