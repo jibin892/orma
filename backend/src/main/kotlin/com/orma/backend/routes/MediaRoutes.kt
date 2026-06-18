@@ -4,10 +4,13 @@ import com.orma.backend.config.AppConfig
 import com.orma.backend.db.OnboardingRepository
 import com.orma.backend.models.ErrorResponse
 import com.orma.backend.models.MediaUploadResponse
+import com.orma.backend.storage.FirebaseStorageNotConfiguredException
 import com.orma.backend.storage.FirebaseStorageService
+import com.orma.backend.storage.StoredMediaObject
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.content.PartData
 import io.ktor.http.content.forEachPart
+import io.ktor.server.application.ApplicationCall
 import io.ktor.server.request.receiveMultipart
 import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
@@ -40,7 +43,7 @@ fun Route.mediaRoutes(
             "business/$workspaceId/logo/${UUID.randomUUID()}.${upload.extension}"
         }
 
-        val stored = storageService.upload(storagePath, upload.bytes, upload.contentType)
+        val stored = call.storeImageOrRespond(storageService, storagePath, upload) ?: return@post
         if (workspaceId != null) {
             repository.saveBusinessLogo(workspaceId, stored.storagePath)
         }
@@ -94,7 +97,7 @@ fun Route.mediaRoutes(
 
         val safeProductId = productId.sanitizedPathSegment()
         val storagePath = "business/${workspace.id}/products/$safeProductId/${UUID.randomUUID()}.${upload.extension}"
-        val stored = storageService.upload(storagePath, upload.bytes, upload.contentType)
+        val stored = call.storeImageOrRespond(storageService, storagePath, upload) ?: return@post
         val record = repository.saveProductImage(
             workspaceId = workspace.id,
             userId = session.user.id,
@@ -210,6 +213,27 @@ private suspend fun io.ktor.server.application.ApplicationCall.receiveImageUploa
         fields = fields,
     )
 }
+
+private suspend fun ApplicationCall.storeImageOrRespond(
+    storageService: FirebaseStorageService,
+    storagePath: String,
+    upload: IncomingImageUpload,
+): StoredMediaObject? =
+    try {
+        storageService.upload(storagePath, upload.bytes, upload.contentType)
+    } catch (error: FirebaseStorageNotConfiguredException) {
+        throw error
+    } catch (error: Throwable) {
+        application.environment.log.error("Firebase Storage upload failed for $storagePath", error)
+        respond(
+            HttpStatusCode.BadGateway,
+            ErrorResponse(
+                code = "media_storage_upload_failed",
+                message = "ORMA could not save this image in Firebase Storage. Check the Firebase Storage bucket and service account permissions, then try again.",
+            ),
+        )
+        null
+    }
 
 private suspend fun io.ktor.server.application.ApplicationCall.respondDatabaseNotConfigured() {
     respond(
