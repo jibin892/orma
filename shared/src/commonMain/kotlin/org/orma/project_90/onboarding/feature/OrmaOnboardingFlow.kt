@@ -324,14 +324,18 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
         val isSignedIn = state.authUserId.isNotBlank() || state.authIdToken.isNotBlank()
         state = when (state.step) {
             OnboardingStep.Authentication -> state
-            OnboardingStep.Otp -> state.copy(
-                step = OnboardingStep.Authentication,
-                otpCode = "",
-                authLoadingKind = AuthLoadingKind.None,
-                authErrorTitle = null,
-                authErrorMessage = null,
-                authErrorCode = null,
-            )
+            OnboardingStep.Otp -> if (isSignedIn) {
+                state.copy(onboardingLoading = false)
+            } else {
+                state.copy(
+                    step = OnboardingStep.Authentication,
+                    otpCode = "",
+                    authLoadingKind = AuthLoadingKind.None,
+                    authErrorTitle = null,
+                    authErrorMessage = null,
+                    authErrorCode = null,
+                )
+            }
             OnboardingStep.Owner,
             OnboardingStep.Team -> if (isSignedIn) {
                 state.copy(onboardingLoading = false)
