@@ -8,6 +8,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.orma.project_90.firebase.OrmaFirebaseClientConfig
 import org.orma.project_90.firebase.OrmaFirebaseConfig
+import java.io.ByteArrayOutputStream
 import java.awt.Desktop
 import java.io.IOException
 import java.io.OutputStream
@@ -34,20 +35,87 @@ actual suspend fun ormaPostJson(
     body: String,
 ): OrmaHttpResponse = postJson(url = url, body = body, bearerToken = null)
 
+actual suspend fun ormaPostFormUrlEncoded(
+    url: String,
+    body: String,
+): OrmaHttpResponse = postBody(
+    url = url,
+    body = body,
+    contentType = "application/x-www-form-urlencoded",
+    bearerToken = null,
+)
+
 actual suspend fun ormaPostJsonAuthorized(
     url: String,
     body: String,
     bearerToken: String,
 ): OrmaHttpResponse = postJson(url = url, body = body, bearerToken = bearerToken)
 
+actual suspend fun ormaGetAuthorized(
+    url: String,
+    bearerToken: String,
+): OrmaHttpResponse = withContext(Dispatchers.IO) {
+    val request = HttpRequest.newBuilder(URI.create(url))
+        .timeout(Duration.ofSeconds(15))
+        .header("Authorization", "Bearer $bearerToken")
+        .GET()
+        .build()
+    val response = ormaJvmHttpClient.send(
+        request,
+        HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8),
+    )
+    OrmaHttpResponse(
+        statusCode = response.statusCode(),
+        body = response.body(),
+    )
+}
+
+actual suspend fun ormaPostMultipartAuthorized(
+    url: String,
+    bearerToken: String,
+    fileFieldName: String,
+    fileName: String,
+    contentType: String,
+    bytes: ByteArray,
+    fields: Map<String, String>,
+): OrmaHttpResponse = withContext(Dispatchers.IO) {
+    val boundary = "----OrmaBoundary${System.currentTimeMillis()}"
+    val request = HttpRequest.newBuilder(URI.create(url))
+        .timeout(Duration.ofSeconds(30))
+        .header("Authorization", "Bearer $bearerToken")
+        .header("Content-Type", "multipart/form-data; boundary=$boundary")
+        .POST(HttpRequest.BodyPublishers.ofByteArray(buildMultipartBody(boundary, fields, fileFieldName, fileName, contentType, bytes)))
+        .build()
+    val response = ormaJvmHttpClient.send(
+        request,
+        HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8),
+    )
+    OrmaHttpResponse(
+        statusCode = response.statusCode(),
+        body = response.body(),
+    )
+}
+
 private suspend fun postJson(
     url: String,
     body: String,
     bearerToken: String?,
+): OrmaHttpResponse = postBody(
+    url = url,
+    body = body,
+    contentType = "application/json",
+    bearerToken = bearerToken,
+)
+
+private suspend fun postBody(
+    url: String,
+    body: String,
+    contentType: String,
+    bearerToken: String?,
 ): OrmaHttpResponse = withContext(Dispatchers.IO) {
     val requestBuilder = HttpRequest.newBuilder(URI.create(url))
         .timeout(Duration.ofSeconds(15))
-        .header("Content-Type", "application/json")
+        .header("Content-Type", contentType)
     if (!bearerToken.isNullOrBlank()) {
         requestBuilder.header("Authorization", "Bearer $bearerToken")
     }
@@ -63,6 +131,39 @@ private suspend fun postJson(
         body = response.body(),
     )
 }
+
+private fun buildMultipartBody(
+    boundary: String,
+    fields: Map<String, String>,
+    fileFieldName: String,
+    fileName: String,
+    contentType: String,
+    bytes: ByteArray,
+): ByteArray {
+    val output = ByteArrayOutputStream()
+    fields.forEach { (name, value) ->
+        output.writeUtf8("--$boundary\r\n")
+        output.writeUtf8("Content-Disposition: form-data; name=\"${name.multipartEscaped()}\"\r\n\r\n")
+        output.writeUtf8(value)
+        output.writeUtf8("\r\n")
+    }
+    output.writeUtf8("--$boundary\r\n")
+    output.writeUtf8(
+        "Content-Disposition: form-data; name=\"${fileFieldName.multipartEscaped()}\"; " +
+            "filename=\"${fileName.multipartEscaped()}\"\r\n",
+    )
+    output.writeUtf8("Content-Type: $contentType\r\n\r\n")
+    output.write(bytes)
+    output.writeUtf8("\r\n--$boundary--\r\n")
+    return output.toByteArray()
+}
+
+private fun ByteArrayOutputStream.writeUtf8(value: String) {
+    write(value.toByteArray(StandardCharsets.UTF_8))
+}
+
+private fun String.multipartEscaped(): String =
+    replace("\\", "\\\\").replace("\"", "\\\"")
 
 actual suspend fun requestGoogleIdToken(
     config: OrmaFirebaseClientConfig,
@@ -341,13 +442,6 @@ private fun desktopGoogleAuthPage(config: OrmaFirebaseClientConfig): String =
               await complete({ idToken: credential.idToken });
               document.body.innerHTML = "<main><h1>Signed in</h1><p>You can return to ORMA now.</p></main>";
               window.close();
-              return;
-            }
-
-            const existingUser = await currentUserWhenReady();
-            if (existingUser) {
-              sessionStorage.removeItem(redirectKey);
-              await completeWithUser(existingUser);
               return;
             }
 

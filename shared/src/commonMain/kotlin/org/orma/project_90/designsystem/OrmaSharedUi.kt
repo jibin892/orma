@@ -1,6 +1,7 @@
 package org.orma.project_90.designsystem
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -38,9 +39,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.path
@@ -77,6 +85,153 @@ fun OrmaGoogleBrandIcon(
         modifier = modifier.alpha(if (enabled) 1f else 0.32f),
         tint = Color.Unspecified,
     )
+}
+
+@Composable
+fun OrmaBrandMark(
+    modifier: Modifier = Modifier,
+    color: Color = OrmaColors.ScreenBackground,
+) {
+    Canvas(modifier = modifier) {
+        val unit = size.minDimension
+        val center = Offset(size.width / 2f, size.height / 2f)
+        drawCircle(
+            color = color,
+            radius = unit * 0.33f,
+            center = center,
+            style = Stroke(width = unit * 0.13f),
+        )
+        val leaf = Path().apply {
+            moveTo(center.x, center.y - unit * 0.29f)
+            cubicTo(
+                center.x + unit * 0.20f,
+                center.y - unit * 0.03f,
+                center.x + unit * 0.18f,
+                center.y + unit * 0.19f,
+                center.x,
+                center.y + unit * 0.31f,
+            )
+            cubicTo(
+                center.x - unit * 0.18f,
+                center.y + unit * 0.19f,
+                center.x - unit * 0.20f,
+                center.y - unit * 0.03f,
+                center.x,
+                center.y - unit * 0.29f,
+            )
+            close()
+        }
+        drawPath(path = leaf, color = color)
+    }
+}
+
+@Composable
+fun OrmaChevronDownIcon(
+    modifier: Modifier = Modifier.size(16.dp),
+    color: Color = OrmaColors.TextSecondary,
+) {
+    Canvas(modifier = modifier) {
+        val strokeWidth = (size.minDimension * 0.13f).coerceAtLeast(1.6f)
+        val path = Path().apply {
+            moveTo(size.width * 0.24f, size.height * 0.40f)
+            lineTo(size.width * 0.50f, size.height * 0.64f)
+            lineTo(size.width * 0.76f, size.height * 0.40f)
+        }
+        drawPath(
+            path = path,
+            color = color,
+            style = Stroke(
+                width = strokeWidth,
+                cap = StrokeCap.Round,
+                join = StrokeJoin.Round,
+            ),
+        )
+    }
+}
+
+@Composable
+fun OrmaCloseIcon(
+    modifier: Modifier = Modifier.size(18.dp),
+    color: Color = OrmaColors.Accent,
+) {
+    Canvas(modifier = modifier) {
+        val strokeWidth = (size.minDimension * 0.12f).coerceAtLeast(1.8f)
+        drawLine(
+            color = color,
+            start = Offset(size.width * 0.30f, size.height * 0.30f),
+            end = Offset(size.width * 0.70f, size.height * 0.70f),
+            strokeWidth = strokeWidth,
+            cap = StrokeCap.Round,
+        )
+        drawLine(
+            color = color,
+            start = Offset(size.width * 0.70f, size.height * 0.30f),
+            end = Offset(size.width * 0.30f, size.height * 0.70f),
+            strokeWidth = strokeWidth,
+            cap = StrokeCap.Round,
+        )
+    }
+}
+
+@Composable
+fun OrmaUploadImageIcon(
+    modifier: Modifier = Modifier.size(34.dp),
+    color: Color = OrmaColors.Accent,
+) {
+    Canvas(modifier = modifier) {
+        val strokeWidth = (size.minDimension * 0.07f).coerceAtLeast(1.4f)
+        val frameTopLeft = Offset(size.width * 0.14f, size.height * 0.22f)
+        val frameSize = Size(size.width * 0.72f, size.height * 0.58f)
+        drawRoundRect(
+            color = color.copy(alpha = 0.60f),
+            topLeft = frameTopLeft,
+            size = frameSize,
+            cornerRadius = CornerRadius(size.minDimension * 0.10f, size.minDimension * 0.10f),
+            style = Stroke(width = strokeWidth),
+        )
+        drawCircle(
+            color = color.copy(alpha = 0.72f),
+            radius = size.minDimension * 0.055f,
+            center = Offset(size.width * 0.34f, size.height * 0.39f),
+        )
+        val mountain = Path().apply {
+            moveTo(size.width * 0.24f, size.height * 0.68f)
+            lineTo(size.width * 0.43f, size.height * 0.52f)
+            lineTo(size.width * 0.55f, size.height * 0.63f)
+            lineTo(size.width * 0.66f, size.height * 0.50f)
+            lineTo(size.width * 0.80f, size.height * 0.68f)
+        }
+        drawPath(
+            path = mountain,
+            color = color,
+            style = Stroke(
+                width = strokeWidth,
+                cap = StrokeCap.Round,
+                join = StrokeJoin.Round,
+            ),
+        )
+        drawLine(
+            color = color,
+            start = Offset(size.width * 0.50f, size.height * 0.12f),
+            end = Offset(size.width * 0.50f, size.height * 0.34f),
+            strokeWidth = strokeWidth,
+            cap = StrokeCap.Round,
+        )
+        drawLine(
+            color = color,
+            start = Offset(size.width * 0.39f, size.height * 0.23f),
+            end = Offset(size.width * 0.50f, size.height * 0.12f),
+            strokeWidth = strokeWidth,
+            cap = StrokeCap.Round,
+        )
+        drawLine(
+            color = color,
+            start = Offset(size.width * 0.61f, size.height * 0.23f),
+            end = Offset(size.width * 0.50f, size.height * 0.12f),
+            strokeWidth = strokeWidth,
+            cap = StrokeCap.Round,
+        )
+    }
 }
 
 private val OrmaGoogleGIcon: ImageVector by lazy {
@@ -273,7 +428,12 @@ fun OrmaBrandRow(
                 shadowElevation = 0.dp,
             ) {
                 Box(contentAlignment = Alignment.Center) {
-                    Text(text = "O", style = MaterialTheme.typography.labelLarge)
+                    OrmaBrandMark(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(7.dp),
+                        color = OrmaColors.ScreenBackground,
+                    )
                 }
             }
             Text(

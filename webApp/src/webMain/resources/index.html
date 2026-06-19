@@ -4,6 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Orma</title>
+    <link rel="icon" type="image/png" sizes="32x32" href="favicon.png">
+    <link rel="icon" type="image/svg+xml" href="favicon.svg">
+    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
+    <link rel="manifest" href="site.webmanifest">
     <link type="text/css" rel="stylesheet" href="styles.css">
 </head>
 <body style="text-align: center; align-content: center">
@@ -16,79 +20,121 @@
         </circle>
     </svg>
     <script>
-        window.OrmaFirebaseGoogleAuth = {
-            signIn: async function () {
-                try {
-                    const [{ initializeApp, getApps }, authModule] = await Promise.all([
+        window.OrmaFirebaseGoogleAuth = (function () {
+            const firebaseConfig = {
+                apiKey: "AIzaSyCGglHuAEx0e1xz6o-A5FqSRAAWepffXlk",
+                authDomain: "orma-project-90.firebaseapp.com",
+                projectId: "orma-project-90",
+                storageBucket: "orma-project-90.firebasestorage.app",
+                messagingSenderId: "469264683998",
+                appId: "1:469264683998:web:dc157cbbee2f29fe35834f"
+            };
+            let authBundlePromise = null;
+
+            async function authBundle() {
+                if (!authBundlePromise) {
+                    authBundlePromise = Promise.all([
                         import("https://www.gstatic.com/firebasejs/11.10.0/firebase-app.js"),
                         import("https://www.gstatic.com/firebasejs/11.10.0/firebase-auth.js")
-                    ]);
-                    const {
-                        getAuth,
-                        GoogleAuthProvider,
-                        onAuthStateChanged,
-                        signInWithPopup
-                    } = authModule;
-                    const firebaseConfig = {
-                        apiKey: "AIzaSyCGglHuAEx0e1xz6o-A5FqSRAAWepffXlk",
-                        authDomain: "orma-project-90.firebaseapp.com",
-                        projectId: "orma-project-90",
-                        storageBucket: "orma-project-90.firebasestorage.app",
-                        messagingSenderId: "469264683998",
-                        appId: "1:469264683998:web:dc157cbbee2f29fe35834f"
-                    };
-                    const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
-                    const auth = getAuth(app);
-                    const provider = new GoogleAuthProvider();
+                    ]).then(([appModule, authModule]) => {
+                        const app = appModule.getApps().length
+                            ? appModule.getApps()[0]
+                            : appModule.initializeApp(firebaseConfig);
+                        return {
+                            authModule,
+                            auth: authModule.getAuth(app)
+                        };
+                    });
+                }
+                return authBundlePromise;
+            }
+
+            function currentUserWhenReady(auth, authModule, timeoutMs) {
+                if (auth.currentUser) {
+                    return Promise.resolve(auth.currentUser);
+                }
+                return new Promise((resolve) => {
+                    let settled = false;
+                    let unsubscribe = () => {};
+                    const timeout = setTimeout(() => {
+                        if (!settled) {
+                            settled = true;
+                            unsubscribe();
+                            resolve(null);
+                        }
+                    }, timeoutMs);
+                    unsubscribe = authModule.onAuthStateChanged(auth, (user) => {
+                        if (!settled) {
+                            settled = true;
+                            clearTimeout(timeout);
+                            unsubscribe();
+                            resolve(user || null);
+                        }
+                    });
+                });
+            }
+
+            async function firebaseSession(forceRefresh) {
+                const { auth, authModule } = await authBundle();
+                const existingUser = await currentUserWhenReady(auth, authModule, 1200);
+                if (!existingUser) {
+                    return null;
+                }
+                const firebaseIdToken = await existingUser.getIdToken(forceRefresh);
+                if (!firebaseIdToken) {
+                    return null;
+                }
+                const providerId = existingUser.providerData && existingUser.providerData.length
+                    ? existingUser.providerData[0].providerId
+                    : (existingUser.phoneNumber ? "phone" : "google.com");
+                return {
+                    firebaseIdToken,
+                    refreshToken: existingUser.refreshToken || "",
+                    uid: existingUser.uid || "",
+                    email: existingUser.email || "",
+                    phoneNumber: existingUser.phoneNumber || "",
+                    displayName: existingUser.displayName || "",
+                    providerId
+                };
+            }
+
+            return {
+                restoreSession: async function () {
+                    try {
+                        return await firebaseSession(true) || {};
+                    } catch (error) {
+                        return {
+                            errorTitle: "Session restore failed",
+                            errorMessage: error && error.message ? error.message : "ORMA could not restore the saved Firebase session.",
+                            errorCode: error && error.code ? error.code : "FIREBASE_WEB_RESTORE_FAILED"
+                        };
+                    }
+                },
+                signOut: async function () {
+                    try {
+                        const { auth, authModule } = await authBundle();
+                        await authModule.signOut(auth);
+                        return { ok: true };
+                    } catch (error) {
+                        return {
+                            ok: false,
+                            errorCode: error && error.code ? error.code : "FIREBASE_WEB_SIGN_OUT_FAILED"
+                        };
+                    }
+                },
+                signIn: async function () {
+                try {
+                    const { auth, authModule } = await authBundle();
+                    const provider = new authModule.GoogleAuthProvider();
                     provider.setCustomParameters({ prompt: "select_account" });
 
-                    function currentUserWhenReady() {
-                        if (auth.currentUser) {
-                            return Promise.resolve(auth.currentUser);
-                        }
-                        return new Promise((resolve) => {
-                            let settled = false;
-                            let unsubscribe = () => {};
-                            const timeout = setTimeout(() => {
-                                if (!settled) {
-                                    settled = true;
-                                    unsubscribe();
-                                    resolve(null);
-                                }
-                            }, 900);
-                            unsubscribe = onAuthStateChanged(auth, (user) => {
-                                if (!settled) {
-                                    settled = true;
-                                    clearTimeout(timeout);
-                                    unsubscribe();
-                                    resolve(user || null);
-                                }
-                            });
-                        });
-                    }
-
-                    const existingUser = await currentUserWhenReady();
-                    if (existingUser) {
-                        const firebaseIdToken = await existingUser.getIdToken(true);
-                        if (firebaseIdToken) {
-                            const providerId = existingUser.providerData && existingUser.providerData.length
-                                ? existingUser.providerData[0].providerId
-                                : "google.com";
-                            return {
-                                firebaseIdToken,
-                                refreshToken: existingUser.refreshToken || "",
-                                uid: existingUser.uid || "",
-                                email: existingUser.email || "",
-                                phoneNumber: existingUser.phoneNumber || "",
-                                displayName: existingUser.displayName || "",
-                                providerId
-                            };
-                        }
-                    }
-
-                    const result = await signInWithPopup(auth, provider);
-                    const credential = GoogleAuthProvider.credentialFromResult(result);
+                    const result = await authModule.signInWithPopup(auth, provider);
+                    const credential = authModule.GoogleAuthProvider.credentialFromResult(result);
                     if (!credential || !credential.idToken) {
+                        const signedSession = await firebaseSession(true);
+                        if (signedSession) {
+                            return signedSession;
+                        }
                         return {
                             errorTitle: "Google token missing",
                             errorMessage: "Firebase web sign-in completed but Google did not return an ID token.",
@@ -104,7 +150,8 @@
                     };
                 }
             }
-        };
+            };
+        })();
     </script>
     <script type="application/javascript" src="webApp.js"></script>
 </body>

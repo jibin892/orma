@@ -276,6 +276,238 @@ val OrmaSupportedCountries = listOf(
 
 val OrmaDefaultCountry = OrmaSupportedCountries.first { it.id == "IN" }
 
+data class OrmaRegionUi(
+    val id: String,
+    val name: String,
+)
+
+val OrmaBusinessRegionsByCountry = mapOf(
+    "IN" to listOf(
+        "Andhra Pradesh",
+        "Arunachal Pradesh",
+        "Assam",
+        "Bihar",
+        "Chhattisgarh",
+        "Goa",
+        "Gujarat",
+        "Haryana",
+        "Himachal Pradesh",
+        "Jharkhand",
+        "Karnataka",
+        "Kerala",
+        "Madhya Pradesh",
+        "Maharashtra",
+        "Manipur",
+        "Meghalaya",
+        "Mizoram",
+        "Nagaland",
+        "Odisha",
+        "Punjab",
+        "Rajasthan",
+        "Sikkim",
+        "Tamil Nadu",
+        "Telangana",
+        "Tripura",
+        "Uttar Pradesh",
+        "Uttarakhand",
+        "West Bengal",
+        "Andaman and Nicobar Islands",
+        "Chandigarh",
+        "Dadra and Nagar Haveli and Daman and Diu",
+        "Delhi",
+        "Jammu and Kashmir",
+        "Ladakh",
+        "Lakshadweep",
+        "Puducherry",
+    ).toRegionOptions(),
+    "AE" to listOf(
+        "Abu Dhabi",
+        "Dubai",
+        "Sharjah",
+        "Ajman",
+        "Umm Al Quwain",
+        "Ras Al Khaimah",
+        "Fujairah",
+    ).toRegionOptions(),
+    "SA" to listOf(
+        "Riyadh",
+        "Makkah",
+        "Madinah",
+        "Eastern Province",
+        "Qassim",
+        "Asir",
+        "Tabuk",
+        "Hail",
+        "Northern Borders",
+        "Jazan",
+        "Najran",
+        "Al Bahah",
+        "Al Jawf",
+    ).toRegionOptions(),
+    "BH" to listOf(
+        "Capital",
+        "Muharraq",
+        "Northern",
+        "Southern",
+    ).toRegionOptions(),
+    "KW" to listOf(
+        "Capital",
+        "Hawalli",
+        "Farwaniya",
+        "Ahmadi",
+        "Jahra",
+        "Mubarak Al-Kabeer",
+    ).toRegionOptions(),
+    "OM" to listOf(
+        "Muscat",
+        "Dhofar",
+        "Musandam",
+        "Al Buraimi",
+        "Ad Dakhiliyah",
+        "Al Batinah North",
+        "Al Batinah South",
+        "Ash Sharqiyah North",
+        "Ash Sharqiyah South",
+        "Ad Dhahirah",
+        "Al Wusta",
+    ).toRegionOptions(),
+    "QA" to listOf(
+        "Doha",
+        "Al Rayyan",
+        "Umm Salal",
+        "Al Khor",
+        "Al Wakrah",
+        "Al Daayen",
+        "Al Shamal",
+        "Al Shahaniya",
+    ).toRegionOptions(),
+    "US" to listOf(
+        "Alabama",
+        "Alaska",
+        "Arizona",
+        "Arkansas",
+        "California",
+        "Colorado",
+        "Connecticut",
+        "Delaware",
+        "Florida",
+        "Georgia",
+        "Hawaii",
+        "Idaho",
+        "Illinois",
+        "Indiana",
+        "Iowa",
+        "Kansas",
+        "Kentucky",
+        "Louisiana",
+        "Maine",
+        "Maryland",
+        "Massachusetts",
+        "Michigan",
+        "Minnesota",
+        "Mississippi",
+        "Missouri",
+        "Montana",
+        "Nebraska",
+        "Nevada",
+        "New Hampshire",
+        "New Jersey",
+        "New Mexico",
+        "New York",
+        "North Carolina",
+        "North Dakota",
+        "Ohio",
+        "Oklahoma",
+        "Oregon",
+        "Pennsylvania",
+        "Rhode Island",
+        "South Carolina",
+        "South Dakota",
+        "Tennessee",
+        "Texas",
+        "Utah",
+        "Vermont",
+        "Virginia",
+        "Washington",
+        "West Virginia",
+        "Wisconsin",
+        "Wyoming",
+        "District of Columbia",
+    ).toRegionOptions(),
+    "GB" to listOf(
+        "England",
+        "Scotland",
+        "Wales",
+        "Northern Ireland",
+    ).toRegionOptions(),
+    "CA" to listOf(
+        "Alberta",
+        "British Columbia",
+        "Manitoba",
+        "New Brunswick",
+        "Newfoundland and Labrador",
+        "Northwest Territories",
+        "Nova Scotia",
+        "Nunavut",
+        "Ontario",
+        "Prince Edward Island",
+        "Quebec",
+        "Saskatchewan",
+        "Yukon",
+    ).toRegionOptions(),
+    "AU" to listOf(
+        "Australian Capital Territory",
+        "New South Wales",
+        "Northern Territory",
+        "Queensland",
+        "South Australia",
+        "Tasmania",
+        "Victoria",
+        "Western Australia",
+    ).toRegionOptions(),
+)
+
+private fun List<String>.toRegionOptions(): List<OrmaRegionUi> =
+    map { name ->
+        OrmaRegionUi(
+            id = name.lowercase()
+                .replace("&", "and")
+                .replace(Regex("[^a-z0-9]+"), "-")
+                .trim('-'),
+            name = name,
+        )
+    }
+
+fun ormaBusinessRegionsForCountry(countryId: String): List<OrmaRegionUi> =
+    OrmaBusinessRegionsByCountry[countryId].orEmpty()
+
+fun ormaBusinessRegionLabel(countryId: String): String = when (countryId) {
+    "AE" -> "Emirate"
+    "SA" -> "Province"
+    "BH", "KW", "OM" -> "Governorate"
+    "QA" -> "Municipality"
+    "GB" -> "Nation"
+    "CA" -> "Province or territory"
+    "AU" -> "State or territory"
+    else -> "State"
+}
+
+fun ormaDefaultCurrencyForCountry(countryId: String): String = when (countryId) {
+    "IN" -> "INR"
+    "AE" -> "AED"
+    "SA" -> "SAR"
+    "QA" -> "QAR"
+    "OM" -> "OMR"
+    "KW" -> "KWD"
+    "BH" -> "BHD"
+    "GB" -> "GBP"
+    "CA" -> "CAD"
+    "AU" -> "AUD"
+    "AD", "AT", "BE", "CY", "EE", "FI", "FR", "DE", "GR", "IE", "IT", "LV", "LT", "LU",
+    "MT", "MC", "ME", "NL", "PT", "SM", "SK", "SI", "ES", "VA" -> "EUR"
+    else -> "USD"
+}
+
 private fun country(
     id: String,
     name: String,
@@ -315,13 +547,13 @@ enum class BusinessSetupStep(
     val title: String,
     val description: String,
 ) {
+    TaxDetails(
+        title = "GST/VAT details",
+        description = "Registration status and GSTIN verification.",
+    ),
     BusinessDetails(
         title = "Business details",
         description = "Trading name, legal name, and industry.",
-    ),
-    TaxDetails(
-        title = "GST/VAT details",
-        description = "Registration status, tax number, and tax label.",
     ),
     Address(
         title = "Business address",
@@ -353,14 +585,16 @@ data class BusinessSetupDraft(
     val addressLine: String = "",
     val city: String = "",
     val region: String = "",
-    val country: String = "United Arab Emirates",
+    val country: String = "India",
     val postalCode: String = "",
     val logoFileName: String = "",
+    val logoPreviewContentType: String = "",
+    val logoPreviewBytes: ByteArray = byteArrayOf(),
     val invoicePrefix: String = "ORMA",
     val nextInvoiceNumber: String = "0001",
     val paymentTerms: String = "Due on receipt",
     val invoiceFooter: String = "Thank you for your business.",
-    val currency: String = "AED",
+    val currency: String = ormaDefaultCurrencyForCountry(OrmaDefaultCountry.id),
     val taxMode: String = "Standard taxable",
     val pricesIncludeTax: Boolean = false,
 )
@@ -374,7 +608,20 @@ val OrmaSupportedIndustries = listOf(
     "B2B",
 )
 
-val OrmaSupportedCurrencies = listOf("AED", "USD", "SAR", "INR", "EUR")
+val OrmaSupportedCurrencies = listOf(
+    "INR",
+    "AED",
+    "SAR",
+    "QAR",
+    "OMR",
+    "KWD",
+    "BHD",
+    "USD",
+    "GBP",
+    "EUR",
+    "CAD",
+    "AUD",
+)
 
 val OrmaTaxModes = listOf(
     "Standard taxable",
@@ -397,6 +644,12 @@ fun isLoginIdentifierValid(
 
 fun isOtpValid(code: String): Boolean = code.filter(Char::isDigit).length == 6
 
+fun normalizeGstinNumber(value: String): String =
+    value.uppercase().filter(Char::isLetterOrDigit).take(GstinLength)
+
+fun isGstinNumberComplete(value: String): Boolean =
+    GstinRegex.matches(normalizeGstinNumber(value))
+
 fun canContinueBusinessSetup(
     step: BusinessSetupStep,
     draft: BusinessSetupDraft,
@@ -405,7 +658,7 @@ fun canContinueBusinessSetup(
         draft.ownerName.isNotBlank() && draft.businessName.isNotBlank() && draft.legalName.isNotBlank()
     }
     BusinessSetupStep.TaxDetails -> {
-        !draft.isTaxRegistered || draft.taxNumber.isNotBlank()
+        !draft.isTaxRegistered || isGstinNumberComplete(draft.taxNumber)
     }
     BusinessSetupStep.Address -> {
         draft.addressLine.isNotBlank() && draft.city.isNotBlank() && draft.country.isNotBlank()
@@ -421,3 +674,7 @@ fun canContinueBusinessSetup(
 
 fun isBusinessSetupComplete(draft: BusinessSetupDraft): Boolean =
     BusinessSetupStep.entries.all { canContinueBusinessSetup(it, draft) }
+
+private const val GstinLength = 15
+
+private val GstinRegex = Regex("^[0-9]{2}[A-Z0-9]{13}$")

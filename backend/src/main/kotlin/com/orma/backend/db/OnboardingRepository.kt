@@ -34,6 +34,7 @@ data class WorkspaceRecord(
 data class OnboardingSessionRecord(
     val user: AppUserRecord,
     val workspace: WorkspaceRecord?,
+    val pendingInvite: TeamInviteRecord?,
     val onboardingStatus: String,
     val requiredStep: String,
     val accessPath: String,
@@ -58,6 +59,12 @@ sealed interface TeamInviteCreateResult {
     data class Success(val invite: TeamInviteRecord) : TeamInviteCreateResult
     data object WorkspaceNotFound : TeamInviteCreateResult
     data object OwnerRequired : TeamInviteCreateResult
+}
+
+sealed interface TeamInviteJoinResult {
+    data class Success(val session: OnboardingSessionRecord) : TeamInviteJoinResult
+    data object NotFound : TeamInviteJoinResult
+    data object ContactMismatch : TeamInviteJoinResult
 }
 
 data class ProductImageRecord(
@@ -89,7 +96,12 @@ class OnboardingRepository(
                 displayNameFallback = displayNameFallback,
             )
             val workspace = connection.findPrimaryWorkspace(user.id)
-            user.toSession(workspace)
+            val pendingInvite = if (workspace == null) {
+                connection.findPendingInviteForUser(user)
+            } else {
+                null
+            }
+            user.toSession(workspace, pendingInvite)
         }
     }
 
@@ -112,7 +124,7 @@ class OnboardingRepository(
                 val inviteCode = connection.ensurePilotInvite(workspace.id, user.id, request.businessName)
                 val updatedUser = connection.markUserOwnerComplete(user.id, request.ownerName)
                 connection.commit()
-                updatedUser.toSession(workspace.copy(inviteCode = inviteCode))
+                updatedUser.toSession(workspace.copy(inviteCode = inviteCode), null)
             } catch (error: Throwable) {
                 connection.rollback()
                 throw error
@@ -125,6 +137,12 @@ class OnboardingRepository(
     suspend fun lookupInvite(code: String): WorkspaceRecord? = withContext(Dispatchers.IO) {
         dataSource.connection.use { connection ->
             connection.findInviteWorkspace(code.normalizedInviteCode())
+        }
+    }
+
+    suspend fun lookupInviteRecord(code: String): TeamInviteRecord? = withContext(Dispatchers.IO) {
+        dataSource.connection.use { connection ->
+            connection.findInviteRecord(code.normalizedInviteCode())
         }
     }
 
@@ -210,26 +228,32 @@ class OnboardingRepository(
     suspend fun joinInvite(
         firebaseUser: VerifiedFirebaseUser,
         code: String,
-    ): OnboardingSessionRecord? = withContext(Dispatchers.IO) {
+        displayName: String,
+    ): TeamInviteJoinResult = withContext(Dispatchers.IO) {
         dataSource.connection.use { connection ->
             connection.autoCommit = false
             try {
                 val user = connection.upsertUser(
-                    firebaseUser = firebaseUser,
+                    firebaseUser = firebaseUser.copy(displayName = firebaseUser.displayName ?: displayName.trim().take(120)),
                     providerFallback = null,
                     emailFallback = null,
                     phoneNumberFallback = null,
-                    displayNameFallback = null,
+                    displayNameFallback = displayName.trim().take(120),
                 )
-                val workspace = connection.findInviteWorkspace(code.normalizedInviteCode())
-                if (workspace == null) {
+                val invite = connection.findInviteRecord(code.normalizedInviteCode())
+                if (invite == null) {
                     connection.rollback()
-                    return@withContext null
+                    return@withContext TeamInviteJoinResult.NotFound
                 }
-                connection.ensureTeamMembership(workspace.id, user.id, workspace.role)
-                val updatedUser = connection.markUserTeamComplete(user.id)
+                if (!invite.canBeClaimedBy(user)) {
+                    connection.rollback()
+                    return@withContext TeamInviteJoinResult.ContactMismatch
+                }
+                connection.ensureTeamMembership(invite.workspace.id, user.id, invite.role)
+                connection.markInviteAccepted(invite.code)
+                val updatedUser = connection.markUserTeamComplete(user.id, displayName.trim().take(120))
                 connection.commit()
-                updatedUser.toSession(workspace)
+                TeamInviteJoinResult.Success(updatedUser.toSession(invite.workspace.copy(inviteCode = invite.code), null))
             } catch (error: Throwable) {
                 connection.rollback()
                 throw error
@@ -253,7 +277,7 @@ class OnboardingRepository(
             )
             val updatedUser = connection.updateNotificationPreference(user.id, enabled)
             val workspace = connection.findPrimaryWorkspace(updatedUser.id)
-            updatedUser.toSession(workspace)
+            updatedUser.toSession(workspace, null)
         }
     }
 
@@ -670,15 +694,63 @@ class OnboardingRepository(
     }
 
     private fun Connection.findInviteWorkspace(code: String): WorkspaceRecord? {
+        return findInviteRecord(code)?.workspace
+    }
+
+    private fun Connection.findPendingInviteForUser(user: AppUserRecord): TeamInviteRecord? {
+        val email = user.email?.trim()?.lowercase()?.takeIf { it.isNotBlank() }
+        val phoneNumber = user.phoneNumber?.normalizedPhoneForInvite()?.takeIf { it.isNotBlank() }
+        if (email == null && phoneNumber == null) return null
+
         val sql = """
             select
+                ti.code,
+                ti.invitee_name,
+                ti.invitee_email,
+                ti.invitee_phone_number,
+                ti.role,
                 bw.id::text,
                 bw.business_name,
                 bw.legal_name,
-                ti.role,
+                ti.role as workspace_role,
                 bw.onboarding_completed_at is not null as onboarding_complete,
-                bw.logo_file_name,
-                ti.code as invite_code
+                bw.logo_file_name
+            from team_invites ti
+            join business_workspaces bw on bw.id = ti.workspace_id
+            where ti.status = 'active'
+              and (ti.expires_at is null or ti.expires_at > now())
+              and (
+                    (? is not null and lower(ti.invitee_email) = ?)
+                 or (? is not null and regexp_replace(coalesce(ti.invitee_phone_number, ''), '[^0-9+]', '', 'g') = ?)
+              )
+            order by ti.created_at desc
+            limit 1
+        """.trimIndent()
+        return prepareStatement(sql).use { statement ->
+            statement.setNullableString(1, email)
+            statement.setNullableString(2, email)
+            statement.setNullableString(3, phoneNumber)
+            statement.setNullableString(4, phoneNumber)
+            statement.executeQuery().use { result ->
+                if (result.next()) result.toTeamInviteRecord() else null
+            }
+        }
+    }
+
+    private fun Connection.findInviteRecord(code: String): TeamInviteRecord? {
+        val sql = """
+            select
+                ti.code,
+                ti.invitee_name,
+                ti.invitee_email,
+                ti.invitee_phone_number,
+                ti.role,
+                bw.id::text,
+                bw.business_name,
+                bw.legal_name,
+                ti.role as workspace_role,
+                bw.onboarding_completed_at is not null as onboarding_complete,
+                bw.logo_file_name
             from team_invites ti
             join business_workspaces bw on bw.id = ti.workspace_id
             where ti.code = ?
@@ -689,7 +761,7 @@ class OnboardingRepository(
         return prepareStatement(sql).use { statement ->
             statement.setString(1, code)
             statement.executeQuery().use { result ->
-                if (result.next()) result.toWorkspaceRecord() else null
+                if (result.next()) result.toTeamInviteRecord() else null
             }
         }
     }
@@ -725,11 +797,25 @@ class OnboardingRepository(
         }
     }
 
-    private fun Connection.markUserTeamComplete(userId: String): AppUserRecord {
+    private fun Connection.markInviteAccepted(code: String) {
+        val sql = """
+            update team_invites
+            set status = 'accepted', updated_at = now()
+            where code = ?
+              and invitee_name is not null
+        """.trimIndent()
+        prepareStatement(sql).use { statement ->
+            statement.setString(1, code)
+            statement.executeUpdate()
+        }
+    }
+
+    private fun Connection.markUserTeamComplete(userId: String, displayName: String): AppUserRecord {
         val sql = """
             update app_users
             set
                 role = 'team_member',
+                display_name = coalesce(nullif(?, ''), display_name),
                 onboarding_status = 'complete',
                 updated_at = now()
             where id = ?::uuid
@@ -743,7 +829,8 @@ class OnboardingRepository(
                 notifications_enabled
         """.trimIndent()
         return prepareStatement(sql).use { statement ->
-            statement.setString(1, userId)
+            statement.setString(1, displayName)
+            statement.setString(2, userId)
             statement.executeQuery().use { result ->
                 result.next()
                 result.toUserRecord()
@@ -911,11 +998,34 @@ class OnboardingRepository(
             id = getString("id"),
             businessName = getString("business_name"),
             legalName = getString("legal_name"),
-            role = getString("role"),
+            role = runCatching { getString("role") }.getOrNull()
+                ?: runCatching { getString("workspace_role") }.getOrNull()
+                ?: RoleTeamMember,
             onboardingComplete = getBoolean("onboarding_complete"),
             logoFileName = getString("logo_file_name"),
-            inviteCode = getString("invite_code"),
+            inviteCode = runCatching { getString("invite_code") }.getOrNull()
+                ?: runCatching { getString("code") }.getOrNull(),
         )
+
+    private fun ResultSet.toTeamInviteRecord(): TeamInviteRecord {
+        val workspace = WorkspaceRecord(
+            id = getString("id"),
+            businessName = getString("business_name"),
+            legalName = getString("legal_name"),
+            role = getString("workspace_role"),
+            onboardingComplete = getBoolean("onboarding_complete"),
+            logoFileName = getString("logo_file_name"),
+            inviteCode = getString("code"),
+        )
+        return TeamInviteRecord(
+            code = getString("code"),
+            workspace = workspace,
+            inviteeName = getString("invitee_name") ?: "",
+            inviteeEmail = getString("invitee_email"),
+            inviteePhoneNumber = getString("invitee_phone_number"),
+            role = getString("role").normalizedTeamRole(),
+        )
+    }
 
     private fun ResultSet.toProductImageRecord(): ProductImageRecord =
         ProductImageRecord(
@@ -928,13 +1038,17 @@ class OnboardingRepository(
             sizeBytes = getLong("size_bytes"),
         )
 
-    private fun AppUserRecord.toSession(workspace: WorkspaceRecord?): OnboardingSessionRecord {
-        val accessPath = if (workspace?.role == RoleTeamMember || role == RoleTeamMember) {
+    private fun AppUserRecord.toSession(
+        workspace: WorkspaceRecord?,
+        pendingInvite: TeamInviteRecord?,
+    ): OnboardingSessionRecord {
+        val accessPath = if (pendingInvite != null || workspace?.role == RoleTeamMember || role == RoleTeamMember) {
             RoleTeamMember
         } else {
             RoleBusinessOwner
         }
         val onboardingStatus = when {
+            pendingInvite != null -> "invited_team_member"
             workspace == null -> "new_account"
             workspace.role == RoleTeamMember -> "team_member_ready"
             workspace.onboardingComplete -> "complete"
@@ -942,12 +1056,14 @@ class OnboardingRepository(
         }
         val requiredStep = when (onboardingStatus) {
             "new_account" -> "owner"
+            "invited_team_member" -> "team"
             "business_setup_required" -> "business_setup"
             else -> "complete"
         }
         return OnboardingSessionRecord(
             user = this,
             workspace = workspace,
+            pendingInvite = pendingInvite,
             onboardingStatus = onboardingStatus,
             requiredStep = requiredStep,
             accessPath = accessPath,
@@ -964,6 +1080,19 @@ class OnboardingRepository(
 
     private fun String.normalizedInviteCode(): String =
         trim().uppercase().filter(Char::isLetterOrDigit).take(16)
+
+    private fun String.normalizedPhoneForInvite(): String =
+        trim().filter { it.isDigit() || it == '+' }.take(24)
+
+    private fun TeamInviteRecord.canBeClaimedBy(user: AppUserRecord): Boolean {
+        val inviteEmail = inviteeEmail?.trim()?.lowercase()?.takeIf { it.isNotBlank() }
+        val invitePhone = inviteePhoneNumber?.normalizedPhoneForInvite()?.takeIf { it.isNotBlank() }
+        if (inviteEmail == null && invitePhone == null) return true
+        val userEmail = user.email?.trim()?.lowercase()
+        val userPhone = user.phoneNumber?.normalizedPhoneForInvite()
+        return (inviteEmail != null && inviteEmail == userEmail) ||
+            (invitePhone != null && invitePhone == userPhone)
+    }
 
     private fun generateInviteCode(businessName: String): String {
         val prefix = businessName

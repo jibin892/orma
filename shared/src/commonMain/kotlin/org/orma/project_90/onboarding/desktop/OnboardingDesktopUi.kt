@@ -7,7 +7,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -49,6 +48,7 @@ import org.orma.project_90.designsystem.OrmaColors
 import org.orma.project_90.designsystem.OrmaGoogleBrandIcon
 import org.orma.project_90.designsystem.OrmaOtpCells
 import org.orma.project_90.designsystem.OrmaShapes
+import org.orma.project_90.onboarding.AccessPath
 import org.orma.project_90.onboarding.AuthLoadingKind
 import org.orma.project_90.onboarding.AuthIdentifierType
 import org.orma.project_90.onboarding.CountryPickerSheet
@@ -60,7 +60,6 @@ import org.orma.project_90.onboarding.OnboardingUiState
 import org.orma.project_90.onboarding.OrmaCountryUi
 import org.orma.project_90.onboarding.isOtpValid
 import org.orma.project_90.onboarding.loginIdentifierError
-import org.orma.project_90.onboarding.mobile.OrmaOnboardingMobileUi
 
 @Composable
 internal fun OrmaOnboardingDesktopUi(
@@ -80,15 +79,339 @@ internal fun OrmaOnboardingDesktopUi(
             actions = actions,
             modifier = modifier,
         )
+        OnboardingStep.Owner -> WebOwnerProfileScreen(
+            state = state,
+            actions = actions,
+            modifier = modifier,
+        )
+        OnboardingStep.Team -> WebTeamAccessScreen(
+            state = state,
+            actions = actions,
+            modifier = modifier,
+        )
         OnboardingStep.BusinessSetup -> WebBusinessSetupScreen(
             state = state,
             actions = actions,
             modifier = modifier,
         )
-        else -> CenteredMobileFlow(
+        OnboardingStep.Notification,
+        OnboardingStep.Complete -> WebSharedWideStageScreen(
             state = state,
             actions = actions,
             modifier = modifier,
+        )
+        OnboardingStep.Dashboard -> WebDashboardScreen(
+            state = state,
+            actions = actions,
+            modifier = modifier,
+        )
+    }
+}
+
+@Composable
+private fun WebOwnerProfileScreen(
+    state: OnboardingUiState,
+    actions: OnboardingActions,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(OrmaColors.ScreenBackground)
+            .safeContentPadding()
+            .imePadding(),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            modifier = Modifier
+                .widthIn(max = 760.dp)
+                .fillMaxWidth()
+                .padding(horizontal = 48.dp)
+                .verticalScroll(rememberScrollState()),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(28.dp),
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                Text(
+                    text = "Create the workspace owner",
+                    style = MaterialTheme.typography.displayLarge,
+                    color = OrmaColors.TextPrimary,
+                    textAlign = TextAlign.Center,
+                )
+                Text(
+                    text = "Add the person responsible for setup and workspace administration.",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = OrmaColors.TextSecondary,
+                    textAlign = TextAlign.Center,
+                )
+            }
+
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                Text(
+                    text = "OWNER NAME",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = OrmaColors.TextSecondary,
+                )
+                WebTextInputField(
+                    value = state.draft.ownerName,
+                    onValueChange = { actions.onDraftChange(state.draft.copy(ownerName = it.take(80))) },
+                    placeholder = "Full name",
+                    enabled = !state.onboardingLoading,
+                )
+            }
+
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                WebSendCodeButton(
+                    text = "Continue",
+                    enabled = state.ownerReady && !state.onboardingLoading,
+                    onClick = actions.onContinue,
+                )
+                WebTextAuthButton(
+                    text = "Back",
+                    enabled = !state.onboardingLoading,
+                    onClick = actions.onBack,
+                )
+                WebTextAuthButton(
+                    text = "Join existing workspace",
+                    enabled = !state.onboardingLoading,
+                    onClick = { actions.onAccessPathChange(AccessPath.TeamMember) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun WebTeamAccessScreen(
+    state: OnboardingUiState,
+    actions: OnboardingActions,
+    modifier: Modifier = Modifier,
+) {
+    val hasMatchedInvite = state.workspaceId.isNotBlank() && state.teamInviteCode.isNotBlank()
+    val contactLabel = state.pendingInviteEmail
+        .ifBlank { state.pendingInvitePhoneNumber }
+        .ifBlank { state.identifier.trim() }
+        .ifBlank { "Signed-in account" }
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(OrmaColors.ScreenBackground)
+            .safeContentPadding()
+            .imePadding(),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            modifier = Modifier
+                .widthIn(max = 760.dp)
+                .fillMaxWidth()
+                .padding(horizontal = 48.dp)
+                .verticalScroll(rememberScrollState()),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(28.dp),
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                Text(
+                    text = if (hasMatchedInvite) "Complete team profile" else "Join your workspace",
+                    style = MaterialTheme.typography.displayLarge,
+                    color = OrmaColors.TextPrimary,
+                    textAlign = TextAlign.Center,
+                )
+                Text(
+                    text = if (hasMatchedInvite) {
+                        "Confirm the invited business and add the name your team will see."
+                    } else {
+                        "Enter the invite code from the business owner, then finish your team profile."
+                    },
+                    style = MaterialTheme.typography.titleSmall,
+                    color = OrmaColors.TextSecondary,
+                    textAlign = TextAlign.Center,
+                )
+            }
+
+            if (hasMatchedInvite) {
+                WebInviteSummaryCard(
+                    rows = buildList {
+                        add("Business" to state.workspaceName.ifBlank { "Workspace" })
+                        state.workspaceLegalName.takeIf { it.isNotBlank() }?.let { add("Legal name" to it) }
+                        add("Role" to webTeamRoleLabel(state.pendingInviteRole.ifBlank { "team_member" }))
+                        add("Invited account" to contactLabel)
+                    },
+                )
+            } else {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    Text(
+                        text = "INVITE CODE",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = OrmaColors.TextSecondary,
+                    )
+                    WebTextInputField(
+                        value = state.teamInviteCode,
+                        onValueChange = actions.onTeamInviteCodeChange,
+                        placeholder = "Code from owner",
+                        enabled = !state.onboardingLoading,
+                    )
+                }
+            }
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                Text(
+                    text = "TEAM PROFILE",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = OrmaColors.TextSecondary,
+                )
+                WebTextInputField(
+                    value = state.teamProfileName,
+                    onValueChange = actions.onTeamProfileNameChange,
+                    placeholder = state.teamProfileName.ifBlank { "Full name" },
+                    enabled = !state.onboardingLoading,
+                )
+            }
+
+            val inviteErrorMessage = state.inviteErrorMessage
+            if (!inviteErrorMessage.isNullOrBlank()) {
+                Text(
+                    text = inviteErrorMessage,
+                    modifier = Modifier.fillMaxWidth(),
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = OrmaColors.Error,
+                    textAlign = TextAlign.Center,
+                )
+            }
+
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                WebSendCodeButton(
+                    text = if (state.onboardingLoading) "Joining..." else "Continue",
+                    enabled = !state.onboardingLoading && state.teamProfileReady,
+                    onClick = actions.onContinue,
+                )
+                WebTextAuthButton(
+                    text = "Set up a business instead",
+                    enabled = !state.onboardingLoading,
+                    onClick = actions.onCreateBusiness,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun WebInviteSummaryCard(
+    rows: List<Pair<String, String>>,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = OrmaShapes.StandardCell,
+        color = OrmaColors.CellBackground,
+        contentColor = OrmaColors.TextPrimary,
+        border = BorderStroke(1.dp, OrmaColors.Hairline),
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 26.dp, vertical = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            rows.forEach { row ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = row.first,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = OrmaColors.TextSecondary,
+                    )
+                    Text(
+                        text = row.second,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = OrmaColors.TextPrimary,
+                        textAlign = TextAlign.End,
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun webTeamRoleLabel(role: String): String = when (role) {
+    "manager" -> "Manager"
+    "cashier" -> "Cashier"
+    "accountant" -> "Accountant"
+    "inventory_manager" -> "Inventory"
+    "sales_staff" -> "Sales"
+    else -> "Staff"
+}
+
+@Composable
+private fun WebSharedWideStageScreen(
+    state: OnboardingUiState,
+    actions: OnboardingActions,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(OrmaColors.ScreenBackground)
+            .safeContentPadding()
+            .imePadding(),
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            modifier = Modifier
+                .widthIn(max = 1180.dp)
+                .fillMaxWidth()
+                .padding(horizontal = 48.dp, vertical = 36.dp)
+                .verticalScroll(rememberScrollState()),
+        ) {
+            OnboardingStageContent(
+                state = state,
+                actions = actions,
+                wide = true,
+            )
+        }
+    }
+}
+
+@Composable
+private fun WebDashboardScreen(
+    state: OnboardingUiState,
+    actions: OnboardingActions,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(OrmaColors.ScreenBackground)
+            .safeContentPadding(),
+        contentAlignment = Alignment.TopCenter,
+    ) {
+        OnboardingStageContent(
+            state = state,
+            actions = actions,
+            wide = true,
         )
     }
 }
@@ -504,6 +827,55 @@ private fun WebPhoneTextField(
 }
 
 @Composable
+private fun WebTextInputField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier.height(72.dp),
+        shape = OrmaShapes.Field,
+        color = OrmaColors.ScreenBackground,
+        contentColor = OrmaColors.TextPrimary,
+        border = BorderStroke(1.dp, OrmaColors.Hairline),
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
+    ) {
+        BasicTextField(
+            value = value,
+            onValueChange = onValueChange,
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 30.dp),
+            enabled = enabled,
+            singleLine = true,
+            keyboardOptions = KeyboardOptions.Default,
+            textStyle = MaterialTheme.typography.headlineMedium.merge(
+                TextStyle(color = OrmaColors.TextPrimary),
+            ),
+            cursorBrush = SolidColor(OrmaColors.Accent),
+            decorationBox = { innerTextField ->
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.CenterStart,
+                ) {
+                    if (value.isEmpty()) {
+                        Text(
+                            text = placeholder,
+                            style = MaterialTheme.typography.headlineMedium,
+                            color = OrmaColors.TextSecondary,
+                        )
+                    }
+                    innerTextField()
+                }
+            },
+        )
+    }
+}
+
+@Composable
 private fun WebSendCodeButton(
     text: String,
     enabled: Boolean,
@@ -649,50 +1021,6 @@ private fun WebChevronDown() {
             end = Offset(size.width / 2f, size.height - 2.dp.toPx()),
             strokeWidth = strokeWidth,
         )
-    }
-}
-
-@Composable
-private fun CenteredMobileFlow(
-    state: OnboardingUiState,
-    actions: OnboardingActions,
-    modifier: Modifier = Modifier,
-) {
-    BoxWithConstraints(
-        modifier = modifier
-            .fillMaxSize()
-            .background(OrmaColors.ScreenBackground)
-            .safeContentPadding(),
-    ) {
-        val horizontalPadding = if (maxWidth < 900.dp) 20.dp else 40.dp
-        val verticalPadding = if (maxHeight < 720.dp) 12.dp else 36.dp
-        val phoneWidth = if (maxWidth < 900.dp) maxWidth - (horizontalPadding * 2) else 430.dp
-        val phoneHeight = if (maxHeight < 860.dp) maxHeight - (verticalPadding * 2) else 812.dp
-
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = horizontalPadding, vertical = verticalPadding),
-            contentAlignment = Alignment.Center,
-        ) {
-            Surface(
-                modifier = Modifier
-                    .width(phoneWidth)
-                    .height(phoneHeight),
-                shape = OrmaShapes.Sheet,
-                color = OrmaColors.ScreenBackground,
-                contentColor = OrmaColors.TextPrimary,
-                border = BorderStroke(1.dp, OrmaColors.Hairline),
-                tonalElevation = 0.dp,
-                shadowElevation = 6.dp,
-            ) {
-                OrmaOnboardingMobileUi(
-                    state = state,
-                    actions = actions,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            }
-        }
     }
 }
 

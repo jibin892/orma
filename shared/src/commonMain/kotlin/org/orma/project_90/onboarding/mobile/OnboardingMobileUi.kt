@@ -18,21 +18,29 @@ internal fun OrmaOnboardingMobileUi(
     actions: OnboardingActions,
     modifier: Modifier = Modifier,
 ) {
-    OrmaMobileShell(
-        modifier = modifier,
-        header = {
-            if (state.step == OnboardingStep.Authentication) {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    OrmaBrandRow()
+    if (state.step == OnboardingStep.Dashboard) {
+        OnboardingStageContent(
+            state = state,
+            actions = actions,
+            wide = false,
+        )
+    } else {
+        OrmaMobileShell(
+            modifier = modifier,
+            header = {
+                if (state.step == OnboardingStep.Authentication) {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        OrmaBrandRow()
+                    }
                 }
-            }
-        },
-        content = {
-            OnboardingStageContent(
-                state = state,
-                actions = actions,
-                wide = false,
-            )
-        },
-    )
+            },
+            content = {
+                OnboardingStageContent(
+                    state = state,
+                    actions = actions,
+                    wide = false,
+                )
+            },
+        )
+    }
 }

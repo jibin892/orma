@@ -4,6 +4,7 @@ import com.orma.backend.config.AppConfig
 import com.orma.backend.db.OnboardingRepository
 import com.orma.backend.db.OwnerTeamInviteResult
 import com.orma.backend.db.TeamInviteCreateResult
+import com.orma.backend.db.TeamInviteJoinResult
 import com.orma.backend.models.BusinessSetupRequest
 import com.orma.backend.models.ErrorResponse
 import com.orma.backend.models.NotificationPreferenceRequest
@@ -38,8 +39,8 @@ fun Route.onboardingRoutes(
         val request = call.receive<TeamInviteLookupRequest>()
         call.verifiedFirebaseUser(config) ?: return@post
 
-        val workspace = repository.lookupInvite(request.code)
-        if (workspace == null) {
+        val invite = repository.lookupInviteRecord(request.code)
+        if (invite == null) {
             call.respond(
                 HttpStatusCode.NotFound,
                 ErrorResponse(
@@ -52,8 +53,12 @@ fun Route.onboardingRoutes(
 
         call.respond(
             TeamInviteResponse(
-                code = workspace.inviteCode ?: request.code.trim().uppercase(),
-                workspace = workspace.toResponse(config),
+                code = invite.code,
+                workspace = invite.workspace.toResponse(config),
+                inviteeName = invite.inviteeName,
+                inviteeEmail = invite.inviteeEmail,
+                inviteePhoneNumber = invite.inviteePhoneNumber,
+                role = invite.role,
             ),
         )
     }
@@ -157,20 +162,38 @@ fun Route.onboardingRoutes(
         val repository = onboardingRepository ?: return@post call.databaseNotConfigured()
         val request = call.receive<TeamInviteJoinRequest>()
         val firebaseUser = call.verifiedFirebaseUser(config) ?: return@post
-
-        val session = repository.joinInvite(firebaseUser, request.code)
-        if (session == null) {
+        if (request.displayName.isBlank() || request.displayName.trim().length < 2) {
             call.respond(
-                HttpStatusCode.NotFound,
+                HttpStatusCode.BadRequest,
                 ErrorResponse(
-                    code = "invite_not_found",
-                    message = "Invite code is invalid or expired.",
+                    code = "team_profile_name_required",
+                    message = "Enter your name before joining this workspace.",
                 ),
             )
             return@post
         }
 
-        call.respond(session.toMutationResponse(config))
+        when (val result = repository.joinInvite(firebaseUser, request.code, request.displayName)) {
+            is TeamInviteJoinResult.Success -> call.respond(result.session.toMutationResponse(config))
+            TeamInviteJoinResult.NotFound -> {
+                call.respond(
+                    HttpStatusCode.NotFound,
+                    ErrorResponse(
+                        code = "invite_not_found",
+                        message = "Invite code is invalid or expired.",
+                    ),
+                )
+            }
+            TeamInviteJoinResult.ContactMismatch -> {
+                call.respond(
+                    HttpStatusCode.Forbidden,
+                    ErrorResponse(
+                        code = "invite_contact_mismatch",
+                        message = "This invite belongs to a different phone number or email. Sign in with the invited account.",
+                    ),
+                )
+            }
+        }
     }
 
     post("/onboarding/notifications") {

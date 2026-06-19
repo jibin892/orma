@@ -4,6 +4,7 @@ import org.orma.project_90.firebase.OrmaFirebaseClientConfig
 
 object OrmaAndroidGoogleAuthRegistry {
     var requestIdToken: (suspend () -> OrmaGoogleSignInResult)? = null
+    var clearSession: (suspend () -> Unit)? = null
 }
 
 actual suspend fun requestGoogleIdToken(
@@ -19,4 +20,8 @@ actual suspend fun requestGoogleIdToken(
     } else {
         provider()
     }
+}
+
+internal actual suspend fun clearOrmaProviderAuthSession() {
+    OrmaAndroidGoogleAuthRegistry.clearSession?.invoke()
 }

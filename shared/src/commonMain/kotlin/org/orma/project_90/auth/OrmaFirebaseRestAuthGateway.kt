@@ -8,6 +8,26 @@ internal class OrmaFirebaseRestAuthGateway(
     private var pendingPhoneSessionInfo: String? = null
     private var pendingPhoneNumber: String? = null
 
+    override suspend fun restoreSession(): OrmaAuthResult? {
+        val storedSession = loadOrmaStoredAuthSession() ?: return null
+        if (storedSession.refreshToken.isBlank()) {
+            if (storedSession.idToken.isNotBlank()) {
+                return storedSession.toRestoredResult()
+            }
+            return OrmaAuthResult.Failure(
+                title = "Session expired",
+                message = "Sign in again so ORMA can reopen your workspace securely.",
+                code = "RESTORE_REFRESH_TOKEN_MISSING",
+            )
+        }
+        return refreshStoredSession(storedSession)
+    }
+
+    override suspend fun clearStoredSession() {
+        clearOrmaStoredAuthSession()
+        clearOrmaProviderAuthSession()
+    }
+
     override suspend fun signInOrCreateWithEmail(
         email: String,
         password: String,
@@ -22,7 +42,7 @@ internal class OrmaFirebaseRestAuthGateway(
         if (password.length < 6) {
             return OrmaAuthResult.Failure(
                 title = "Check password",
-                message = "Firebase requires at least 6 characters for email/password sign-in.",
+                message = "Use at least 6 characters for email sign-in.",
             )
         }
 
@@ -32,9 +52,11 @@ internal class OrmaFirebaseRestAuthGateway(
         )
 
         if (signIn is FirebaseAuthResponse.Success) {
-            return signIn.toResult(
-                provider = OrmaAuthProvider.EmailPassword,
-                message = "Signed in with Firebase email/password.",
+            return persistResult(
+                signIn.toResult(
+                    provider = OrmaAuthProvider.EmailPassword,
+                    message = "Signed in.",
+                ),
             )
         }
 
@@ -49,9 +71,11 @@ internal class OrmaFirebaseRestAuthGateway(
         )
 
         return when (signUp) {
-            is FirebaseAuthResponse.Success -> signUp.toResult(
-                provider = OrmaAuthProvider.EmailPassword,
-                message = "Created a Firebase user and signed in.",
+            is FirebaseAuthResponse.Success -> persistResult(
+                signUp.toResult(
+                    provider = OrmaAuthProvider.EmailPassword,
+                    message = "Account created and signed in.",
+                ),
             )
             is FirebaseAuthResponse.Error -> signUp.toFailure()
         }
@@ -79,7 +103,7 @@ internal class OrmaFirebaseRestAuthGateway(
         if (sessionInfo.isNullOrBlank()) {
             return OrmaAuthResult.Failure(
                 title = "OTP session missing",
-                message = "Firebase did not return a phone verification session. Use the configured test number +971 50 000 0000 with OTP 123456 for desktop testing.",
+                message = "ORMA could not start phone verification. Use the configured test number +971 50 000 0000 with OTP 123456 for desktop testing.",
                 code = "OTP_SESSION_MISSING",
             )
         }
@@ -89,7 +113,7 @@ internal class OrmaFirebaseRestAuthGateway(
         return OrmaAuthResult.OtpSent(
             phoneNumber = normalizedPhoneNumber,
             message = if (normalizedPhoneNumber in FirebaseTestPhoneNumbers) {
-                "Firebase test OTP ready. Use code 123456."
+                "Test OTP ready. Use code 123456."
             } else {
                 "OTP sent. Enter the 6 digit code to continue."
             },
@@ -126,9 +150,11 @@ internal class OrmaFirebaseRestAuthGateway(
             is FirebaseAuthResponse.Success -> {
                 pendingPhoneSessionInfo = null
                 pendingPhoneNumber = null
-                response.copy(phoneNumber = response.phoneNumber ?: verifiedPhoneNumber).toResult(
-                    provider = OrmaAuthProvider.PhoneOtp,
-                    message = "Signed in with Firebase phone OTP.",
+                persistResult(
+                    response.copy(phoneNumber = response.phoneNumber ?: verifiedPhoneNumber).toResult(
+                        provider = OrmaAuthProvider.PhoneOtp,
+                        message = "Phone number verified.",
+                    ),
                 )
             }
             is FirebaseAuthResponse.Error -> response.toFailure()
@@ -139,9 +165,11 @@ internal class OrmaFirebaseRestAuthGateway(
         val googleResult = requestGoogleIdToken(config)
         val googleIdToken = when (googleResult) {
             is OrmaGoogleSignInResult.Success -> googleResult.idToken
-            is OrmaGoogleSignInResult.ExistingFirebaseSession -> return OrmaAuthResult.Success(
-                session = googleResult.session,
-                message = "Signed in with the existing Firebase session.",
+            is OrmaGoogleSignInResult.ExistingFirebaseSession -> return persistResult(
+                OrmaAuthResult.Success(
+                    session = googleResult.session,
+                    message = "Signed in.",
+                ),
             )
             is OrmaGoogleSignInResult.Failure -> return OrmaAuthResult.Failure(
                 title = googleResult.title,
@@ -155,12 +183,74 @@ internal class OrmaFirebaseRestAuthGateway(
             body = googleIdpBody(googleIdToken),
         )
         return when (response) {
-            is FirebaseAuthResponse.Success -> response.toResult(
-                provider = OrmaAuthProvider.Google,
-                message = "Signed in with Firebase Google authentication.",
+            is FirebaseAuthResponse.Success -> persistResult(
+                response.toResult(
+                    provider = OrmaAuthProvider.Google,
+                    message = "Signed in with Google.",
+                ),
             )
             is FirebaseAuthResponse.Error -> response.toFailure()
         }
+    }
+
+    private suspend fun refreshStoredSession(storedSession: OrmaAuthSession): OrmaAuthResult {
+        val url = "https://securetoken.googleapis.com/v1/token?key=${config.apiKey}"
+        return try {
+            val response = ormaPostFormUrlEncoded(
+                url = url,
+                body = "grant_type=refresh_token&refresh_token=${storedSession.refreshToken.formUrlEncoded()}",
+            )
+            if (response.statusCode !in 200..299) {
+                val code = response.body.firebaseErrorCode()
+                    ?: response.body.firebaseErrorMessage()
+                    ?: "RESTORE_SESSION_FAILED"
+                if (storedSession.idToken.isNotBlank()) {
+                    return storedSession.toRestoredResult()
+                }
+                return OrmaAuthResult.Failure(
+                    title = "Session expired",
+                    message = "Sign in again so ORMA can reopen your workspace securely.",
+                    code = code,
+                )
+            }
+            val refreshedIdToken = response.body.jsonString("id_token")
+                ?: response.body.jsonString("access_token")
+            if (refreshedIdToken.isNullOrBlank()) {
+                clearOrmaStoredAuthSession()
+                return OrmaAuthResult.Failure(
+                    title = "Session expired",
+                    message = "ORMA could not refresh your saved sign-in. Sign in again to continue.",
+                    code = "RESTORE_ID_TOKEN_MISSING",
+                )
+            }
+            val refreshedSession = storedSession.copy(
+                uid = response.body.jsonString("user_id") ?: storedSession.uid,
+                idToken = refreshedIdToken,
+                refreshToken = response.body.jsonString("refresh_token") ?: storedSession.refreshToken,
+            )
+            saveOrmaStoredAuthSession(refreshedSession)
+            OrmaAuthResult.Success(
+                session = refreshedSession,
+                message = "Session restored.",
+            )
+        } catch (error: Throwable) {
+            if (storedSession.idToken.isNotBlank()) {
+                storedSession.toRestoredResult()
+            } else {
+                OrmaAuthResult.Failure(
+                    title = "Session check failed",
+                    message = error.message ?: "ORMA could not verify your saved sign-in. Check your connection and try again.",
+                    code = "RESTORE_SESSION_NETWORK_ERROR",
+                )
+            }
+        }
+    }
+
+    private suspend fun persistResult(result: OrmaAuthResult): OrmaAuthResult {
+        if (result is OrmaAuthResult.Success) {
+            saveOrmaStoredAuthSession(result.session)
+        }
+        return result
     }
 
     private suspend fun firebaseRequest(
@@ -182,13 +272,13 @@ internal class OrmaFirebaseRestAuthGateway(
             } else {
                 FirebaseAuthResponse.Error(
                     code = response.body.firebaseErrorCode() ?: "HTTP_${response.statusCode}",
-                    message = response.body.firebaseErrorMessage() ?: "Firebase Auth request failed.",
+                    message = response.body.firebaseErrorMessage() ?: "Authentication request failed.",
                 )
             }
         } catch (error: Throwable) {
             FirebaseAuthResponse.Error(
                 code = "NETWORK_ERROR",
-                message = error.message ?: "Unable to reach Firebase Auth.",
+                message = error.message ?: "Unable to reach the authentication service.",
             )
         }
     }
@@ -220,17 +310,23 @@ internal class OrmaFirebaseRestAuthGateway(
             } else {
                 FirebaseAuthResponse.Error(
                     code = response.body.firebaseErrorCode() ?: "HTTP_${response.statusCode}",
-                    message = response.body.firebaseErrorMessage() ?: "Firebase Auth request failed.",
+                    message = response.body.firebaseErrorMessage() ?: "Authentication request failed.",
                 )
             }
         } catch (error: Throwable) {
             FirebaseAuthResponse.Error(
                 code = "NETWORK_ERROR",
-                message = error.message ?: "Unable to reach Firebase Auth.",
+                message = error.message ?: "Unable to reach the authentication service.",
             )
         }
     }
 }
+
+private fun OrmaAuthSession.toRestoredResult(): OrmaAuthResult.Success =
+    OrmaAuthResult.Success(
+        session = this,
+        message = "Session restored.",
+    )
 
 private val FirebaseTestPhoneNumbers = setOf("+971500000000", "+15555550100")
 
@@ -302,16 +398,16 @@ private fun firebaseErrorBody(code: String, fallback: String): String = when (co
     "EMAIL_EXISTS" -> "This email is already registered. Use the same password to sign in."
     "INVALID_PASSWORD",
     "INVALID_LOGIN_CREDENTIALS" -> "The email exists, but the password does not match."
-    "INVALID_CODE" -> "The OTP does not match this Firebase phone session."
+    "INVALID_CODE" -> "The OTP does not match this phone verification session."
     "SESSION_EXPIRED" -> "This OTP session expired. Send OTP again."
     "MISSING_SESSION_INFO" -> "Send OTP first, then enter the code from the OTP screen."
     "MISSING_PHONE_NUMBER" -> "Enter a valid phone number with the country code."
     "CAPTCHA_CHECK_FAILED",
     "MISSING_RECAPTCHA_TOKEN",
-    "INVALID_APP_CREDENTIAL" -> "Desktop and web testing must use the configured Firebase test number: +971 50 000 0000 with OTP 123456. Real SMS needs Android/iOS native verification or a web reCAPTCHA verifier."
-    "USER_DISABLED" -> "This Firebase user is disabled."
-    "OPERATION_NOT_ALLOWED" -> "This sign-in provider is disabled in Firebase Authentication."
-    "TOO_MANY_ATTEMPTS_TRY_LATER" -> "Firebase blocked this device temporarily due to repeated attempts. Try again later."
+    "INVALID_APP_CREDENTIAL" -> "Desktop and web testing must use the configured test number: +971 50 000 0000 with OTP 123456. Real SMS needs mobile verification or web verification support."
+    "USER_DISABLED" -> "This account is disabled."
+    "OPERATION_NOT_ALLOWED" -> "This sign-in method is currently disabled."
+    "TOO_MANY_ATTEMPTS_TRY_LATER" -> "Sign-in is temporarily blocked due to repeated attempts. Try again later."
     "NETWORK_ERROR" -> fallback
     else -> fallback.replace('_', ' ').lowercase().replaceFirstChar { it.uppercase() }
 }

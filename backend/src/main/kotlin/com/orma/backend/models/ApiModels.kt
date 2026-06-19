@@ -45,6 +45,7 @@ data class SessionResponse(
     val displayName: String? = null,
     val user: UserResponse? = null,
     val workspace: WorkspaceResponse? = null,
+    val pendingInvite: TeamInviteResponse? = null,
     val onboardingStatus: String = "unknown",
     val requiredStep: String = "unknown",
     val accessPath: String = "business_owner",
@@ -114,6 +115,7 @@ data class TeamInviteCreateRequest(
 @Serializable
 data class TeamInviteJoinRequest(
     val code: String,
+    val displayName: String = "",
 )
 
 @Serializable

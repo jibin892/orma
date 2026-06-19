@@ -31,6 +31,11 @@ compose.desktop {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
             packageName = "Orma"
             packageVersion = "1.0.0"
+
+            macOS {
+                iconFile.set(project.file("src/main/resources/orma-app-icon.icns"))
+                bundleID = "org.orma.project_90"
+            }
         }
     }
 }

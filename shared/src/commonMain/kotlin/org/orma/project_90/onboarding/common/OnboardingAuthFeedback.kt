@@ -34,7 +34,9 @@ internal fun OrmaAuthFeedbackDialog(
     val errorTitle = state.authErrorTitle
     val errorMessage = state.authErrorMessage
     when {
-        state.isAuthLoading -> OrmaAuthLoadingDialog(kind = state.authLoadingKind)
+        state.isAuthLoading && state.authLoadingKind != AuthLoadingKind.VerifyingOtp -> {
+            OrmaAuthLoadingDialog(kind = state.authLoadingKind)
+        }
         errorTitle != null && errorMessage != null -> OrmaAuthErrorDialog(
             title = errorTitle,
             message = errorMessage,
@@ -150,17 +152,23 @@ private fun OrmaAuthErrorDialog(
 }
 
 private fun AuthLoadingKind.dialogTitle(): String = when (this) {
+    AuthLoadingKind.RestoringSession -> "Opening workspace"
     AuthLoadingKind.SendingOtp -> "Sending verification code"
     AuthLoadingKind.VerifyingOtp -> "Verifying OTP"
     AuthLoadingKind.SigningInEmail -> "Signing in"
     AuthLoadingKind.SigningInGoogle -> "Opening Google sign-in"
+    AuthLoadingKind.ResolvingWorkspace -> "Checking workspace"
+    AuthLoadingKind.SigningOut -> "Signing out"
     AuthLoadingKind.None -> "Checking access"
 }
 
 private fun AuthLoadingKind.dialogBody(): String = when (this) {
-    AuthLoadingKind.SendingOtp -> "Keep this screen open while Firebase prepares the OTP session."
+    AuthLoadingKind.RestoringSession -> "ORMA is checking your saved sign-in and workspace access."
+    AuthLoadingKind.SendingOtp -> "Keep this screen open while ORMA prepares the OTP session."
     AuthLoadingKind.VerifyingOtp -> "ORMA is checking the six-digit code and signing you in."
-    AuthLoadingKind.SigningInEmail -> "ORMA is checking the Firebase user and workspace access."
+    AuthLoadingKind.SigningInEmail -> "ORMA is checking your account and workspace access."
     AuthLoadingKind.SigningInGoogle -> "Choose the Google account connected to this ORMA workspace."
+    AuthLoadingKind.ResolvingWorkspace -> "Google sign-in is complete. ORMA is opening the right workspace for this account."
+    AuthLoadingKind.SigningOut -> "ORMA is clearing this device session before returning to sign-in."
     AuthLoadingKind.None -> "This should only take a moment."
 }

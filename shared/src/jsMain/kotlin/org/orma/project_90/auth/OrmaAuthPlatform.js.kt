@@ -20,12 +20,64 @@ actual suspend fun ormaPostJson(
     )
 }
 
+actual suspend fun ormaPostFormUrlEncoded(
+    url: String,
+    body: String,
+): OrmaHttpResponse {
+    val response = fetchPostFormUrlEncoded(url, body).await()
+    val text = response.text().await()
+    return OrmaHttpResponse(
+        statusCode = response.status,
+        body = text,
+    )
+}
+
 actual suspend fun ormaPostJsonAuthorized(
     url: String,
     body: String,
     bearerToken: String,
 ): OrmaHttpResponse {
     val response = fetchPostAuthorized(url, body, bearerToken).await()
+    val text = response.text().await()
+    return OrmaHttpResponse(
+        statusCode = response.status,
+        body = text,
+    )
+}
+
+actual suspend fun ormaGetAuthorized(
+    url: String,
+    bearerToken: String,
+): OrmaHttpResponse {
+    val response = fetchGetAuthorized(url, bearerToken).await()
+    val text = response.text().await()
+    return OrmaHttpResponse(
+        statusCode = response.status,
+        body = text,
+    )
+}
+
+actual suspend fun ormaPostMultipartAuthorized(
+    url: String,
+    bearerToken: String,
+    fileFieldName: String,
+    fileName: String,
+    contentType: String,
+    bytes: ByteArray,
+    fields: Map<String, String>,
+): OrmaHttpResponse {
+    val fieldNames = fields.keys.toTypedArray()
+    val fieldValues = fieldNames.map { fields.getValue(it) }.toTypedArray()
+    val response = fetchPostMultipartAuthorized(
+        url = url,
+        bearerToken = bearerToken,
+        fileFieldName = fileFieldName,
+        fileName = fileName,
+        contentType = contentType,
+        bytes = bytes,
+        fieldNames = fieldNames,
+        fieldValues = fieldValues,
+    ).await()
     val text = response.text().await()
     return OrmaHttpResponse(
         statusCode = response.status,
@@ -47,12 +99,57 @@ private fun fetchPost(
 )
 
 @Suppress("UNUSED_PARAMETER")
+private fun fetchPostFormUrlEncoded(
+    url: String,
+    body: String,
+): Promise<JsFetchResponse> = js(
+    "fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body })",
+)
+
+@Suppress("UNUSED_PARAMETER")
 private fun fetchPostAuthorized(
     url: String,
     body: String,
     bearerToken: String,
 ): Promise<JsFetchResponse> = js(
     "fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + bearerToken }, body: body })",
+)
+
+@Suppress("UNUSED_PARAMETER")
+private fun fetchGetAuthorized(
+    url: String,
+    bearerToken: String,
+): Promise<JsFetchResponse> = js(
+    "fetch(url, { method: 'GET', headers: { 'Authorization': 'Bearer ' + bearerToken } })",
+)
+
+@Suppress("UNUSED_PARAMETER")
+private fun fetchPostMultipartAuthorized(
+    url: String,
+    bearerToken: String,
+    fileFieldName: String,
+    fileName: String,
+    contentType: String,
+    bytes: ByteArray,
+    fieldNames: Array<String>,
+    fieldValues: Array<String>,
+): Promise<JsFetchResponse> = js(
+    """
+    (function() {
+    const formData = new FormData();
+    for (let index = 0; index < fieldNames.length; index += 1) {
+      formData.append(fieldNames[index], fieldValues[index]);
+    }
+    const array = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    const blob = new Blob([array], { type: contentType });
+    formData.append(fileFieldName, blob, fileName);
+    return fetch(url, {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + bearerToken },
+      body: formData
+    });
+    })()
+    """,
 )
 
 actual suspend fun requestGoogleIdToken(
