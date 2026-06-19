@@ -18,6 +18,7 @@ fun Route.healthRoutes(config: AppConfig) {
                 mediaStorageProvider = config.activeMediaStorageProvider,
                 mediaStorageConfigured = config.mediaStorageConfigured,
                 cloudinaryConfigured = config.cloudinaryConfigured,
+                gstinCheckConfigured = config.gstinCheckConfigured,
             ),
         )
     }

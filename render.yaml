@@ -26,5 +26,9 @@ services:
         value: /etc/secrets/firebase-adminsdk.json
       - key: FIREBASE_STORAGE_BUCKET
         value: orma-project-90.firebasestorage.app
+      - key: GSTINCHECK_API_KEY
+        sync: false
+      - key: GSTINCHECK_BASE_URL
+        value: https://sheet.gstincheck.co.in/check
       - key: ALLOWED_ORIGINS
         sync: false

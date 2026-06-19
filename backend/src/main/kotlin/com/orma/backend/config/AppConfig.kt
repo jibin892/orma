@@ -15,6 +15,8 @@ data class AppConfig(
     val cloudinaryCloudName: String?,
     val cloudinaryApiKey: String?,
     val cloudinaryApiSecret: String?,
+    val gstinCheckApiKey: String?,
+    val gstinCheckBaseUrl: String,
     val allowedOrigins: List<String>,
 ) {
     val databaseConfigured: Boolean
@@ -48,6 +50,9 @@ data class AppConfig(
             else -> false
         }
 
+    val gstinCheckConfigured: Boolean
+        get() = !gstinCheckApiKey.isNullOrBlank()
+
     companion object {
         fun load(env: Map<String, String> = System.getenv()): AppConfig {
             val firebaseProjectId = env["FIREBASE_PROJECT_ID"].orNullIfBlank()
@@ -67,6 +72,9 @@ data class AppConfig(
                 cloudinaryCloudName = env["CLOUDINARY_CLOUD_NAME"].orNullIfBlank(),
                 cloudinaryApiKey = env["CLOUDINARY_API_KEY"].orNullIfBlank(),
                 cloudinaryApiSecret = env["CLOUDINARY_API_SECRET"].orNullIfBlank(),
+                gstinCheckApiKey = env["GSTINCHECK_API_KEY"].orNullIfBlank(),
+                gstinCheckBaseUrl = env["GSTINCHECK_BASE_URL"].orEmpty()
+                    .ifBlank { "https://sheet.gstincheck.co.in/check" },
                 allowedOrigins = env["ALLOWED_ORIGINS"]
                     ?.split(",")
                     ?.map { it.trim() }
@@ -90,6 +98,8 @@ data class AppConfig(
             cloudinaryCloudName = null,
             cloudinaryApiKey = null,
             cloudinaryApiSecret = null,
+            gstinCheckApiKey = null,
+            gstinCheckBaseUrl = "https://sheet.gstincheck.co.in/check",
             allowedOrigins = listOf("*"),
         )
     }

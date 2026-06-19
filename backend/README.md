@@ -10,6 +10,7 @@ Kotlin/Ktor backend module for ORMA. This folder is inside the main KMP app proj
 - Flyway migrations
 - Firebase Auth token verification
 - Cloudinary for business and product images
+- GSTINCheck provider with Postgres cache
 
 ## Run Locally
 
@@ -47,6 +48,8 @@ Important variables:
 - `CLOUDINARY_CLOUD_NAME`: Cloudinary cloud name
 - `CLOUDINARY_API_KEY`: Cloudinary API key
 - `CLOUDINARY_API_SECRET`: Cloudinary API secret
+- `GSTINCHECK_API_KEY`: GSTINCheck provider API key
+- `GSTINCHECK_BASE_URL`: optional provider base URL, defaults to `https://sheet.gstincheck.co.in/check`
 - `FIREBASE_STORAGE_BUCKET`: optional Firebase Storage bucket if `MEDIA_STORAGE_PROVIDER=firebase`
 - `ALLOWED_ORIGINS`: comma-separated CORS origins
 
@@ -62,6 +65,7 @@ POST /onboarding/team-invites/join
 POST /onboarding/notifications
 POST /media/business-logo
 POST /media/product-images
+GET  /gstin/{gstin}
 ```
 
 `POST /auth/session` expects:
@@ -89,6 +93,8 @@ Content-Type: multipart/form-data
 `POST /media/business-logo` accepts one JPEG, PNG, or WebP file up to 5 MB. If business setup is not complete yet, it stores the file under a temporary user path and returns a `storagePath` that can be sent later as `logoFileName`.
 
 `POST /media/product-images` accepts one image file plus a `productId` form field. Product image metadata is stored in Postgres and the file is stored in the configured media provider.
+
+`GET /gstin/{gstin}` is protected by Firebase auth. It checks Postgres first and returns the cached lookup when available. If the GSTIN is not cached, it calls GSTINCheck, saves the provider response in `gstin_lookups`, then returns it. The response includes `source: "cache"` or `source: "provider"`.
 
 See `docs/backend-onboarding-handoff.md` for the pilot onboarding contract.
 

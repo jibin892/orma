@@ -1,6 +1,7 @@
 package com.orma.backend.models
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
 
 @Serializable
 data class ApiInfoResponse(
@@ -18,6 +19,7 @@ data class HealthResponse(
     val mediaStorageProvider: String,
     val mediaStorageConfigured: Boolean,
     val cloudinaryConfigured: Boolean,
+    val gstinCheckConfigured: Boolean,
 )
 
 @Serializable
@@ -134,4 +136,15 @@ data class MediaUploadResponse(
     val downloadUrl: String? = null,
     val contentType: String,
     val sizeBytes: Long,
+)
+
+@Serializable
+data class GstinLookupResponse(
+    val gstin: String,
+    val flag: Boolean,
+    val message: String,
+    val data: JsonElement? = null,
+    val source: String,
+    val cached: Boolean,
+    val cachedAt: String,
 )
