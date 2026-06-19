@@ -2,6 +2,7 @@ package com.orma.backend.routes
 
 import com.orma.backend.config.AppConfig
 import com.orma.backend.db.OnboardingRepository
+import com.orma.backend.db.OwnerTeamInviteResult
 import com.orma.backend.models.BusinessSetupRequest
 import com.orma.backend.models.ErrorResponse
 import com.orma.backend.models.NotificationPreferenceRequest
@@ -14,6 +15,7 @@ import io.ktor.server.application.ApplicationCall
 import io.ktor.server.request.receive
 import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
+import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 
 fun Route.onboardingRoutes(
@@ -52,6 +54,40 @@ fun Route.onboardingRoutes(
                 workspace = workspace.toResponse(config),
             ),
         )
+    }
+
+    get("/onboarding/team-invites/active") {
+        val repository = onboardingRepository ?: return@get call.databaseNotConfigured()
+        val firebaseUser = call.verifiedFirebaseUser(config) ?: return@get
+
+        when (val result = repository.getOrCreateOwnerTeamInvite(firebaseUser)) {
+            is OwnerTeamInviteResult.Success -> {
+                call.respond(
+                    TeamInviteResponse(
+                        code = result.workspace.inviteCode.orEmpty(),
+                        workspace = result.workspace.toResponse(config),
+                    ),
+                )
+            }
+            OwnerTeamInviteResult.WorkspaceNotFound -> {
+                call.respond(
+                    HttpStatusCode.NotFound,
+                    ErrorResponse(
+                        code = "workspace_not_found",
+                        message = "Complete business setup before inviting team members.",
+                    ),
+                )
+            }
+            OwnerTeamInviteResult.OwnerRequired -> {
+                call.respond(
+                    HttpStatusCode.Forbidden,
+                    ErrorResponse(
+                        code = "owner_required",
+                        message = "Only the business owner can create team invite codes.",
+                    ),
+                )
+            }
+        }
     }
 
     post("/onboarding/team-invites/join") {

@@ -21,4 +21,16 @@ class ApplicationTest {
         assertEquals(HttpStatusCode.OK, response.status)
         assertContains(response.body<String>(), "\"status\":\"ok\"")
     }
+
+    @Test
+    fun activeTeamInviteRequiresConfiguredDatabase() = testApplication {
+        application {
+            module(AppConfig.test())
+        }
+
+        val response = client.get("/onboarding/team-invites/active")
+
+        assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
+        assertContains(response.body<String>(), "\"code\":\"database_not_configured\"")
+    }
 }

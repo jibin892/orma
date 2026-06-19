@@ -38,6 +38,12 @@ data class OnboardingSessionRecord(
     val accessPath: String,
 )
 
+sealed interface OwnerTeamInviteResult {
+    data class Success(val workspace: WorkspaceRecord) : OwnerTeamInviteResult
+    data object WorkspaceNotFound : OwnerTeamInviteResult
+    data object OwnerRequired : OwnerTeamInviteResult
+}
+
 data class ProductImageRecord(
     val id: String,
     val workspaceId: String,
@@ -103,6 +109,45 @@ class OnboardingRepository(
     suspend fun lookupInvite(code: String): WorkspaceRecord? = withContext(Dispatchers.IO) {
         dataSource.connection.use { connection ->
             connection.findInviteWorkspace(code.normalizedInviteCode())
+        }
+    }
+
+    suspend fun getOrCreateOwnerTeamInvite(
+        firebaseUser: VerifiedFirebaseUser,
+    ): OwnerTeamInviteResult = withContext(Dispatchers.IO) {
+        dataSource.connection.use { connection ->
+            connection.autoCommit = false
+            try {
+                val user = connection.upsertUser(
+                    firebaseUser = firebaseUser,
+                    providerFallback = null,
+                    emailFallback = null,
+                    phoneNumberFallback = null,
+                    displayNameFallback = null,
+                )
+                val workspace = connection.findPrimaryWorkspace(user.id)
+                if (workspace == null) {
+                    connection.rollback()
+                    return@withContext OwnerTeamInviteResult.WorkspaceNotFound
+                }
+                if (workspace.role != RoleBusinessOwner) {
+                    connection.rollback()
+                    return@withContext OwnerTeamInviteResult.OwnerRequired
+                }
+
+                val inviteCode = connection.ensurePilotInvite(
+                    workspaceId = workspace.id,
+                    userId = user.id,
+                    businessName = workspace.businessName,
+                )
+                connection.commit()
+                OwnerTeamInviteResult.Success(workspace.copy(inviteCode = inviteCode))
+            } catch (error: Throwable) {
+                connection.rollback()
+                throw error
+            } finally {
+                connection.autoCommit = true
+            }
         }
     }
 
@@ -759,7 +804,6 @@ class OnboardingRepository(
         val requiredStep = when (onboardingStatus) {
             "new_account" -> "owner"
             "business_setup_required" -> "business_setup"
-            "team_member_ready" -> "team"
             else -> "complete"
         }
         return OnboardingSessionRecord(

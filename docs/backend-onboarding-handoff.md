@@ -37,6 +37,7 @@ Protected with `Authorization: Bearer <Firebase ID token>`:
 
 ```text
 POST /onboarding/business
+GET  /onboarding/team-invites/active
 POST /onboarding/team-invites/lookup
 POST /onboarding/team-invites/join
 POST /onboarding/notifications
@@ -54,6 +55,10 @@ Called immediately after Firebase phone OTP, email/password, or Google sign-in. 
 ### `POST /onboarding/business`
 
 Saves the full `BusinessSetupDraft`, creates or updates the owner workspace, creates owner membership, and generates a pilot team invite code.
+
+### `GET /onboarding/team-invites/active`
+
+Owner-only endpoint that returns the active invite code for the signed-in owner's workspace, creating one if the workspace has no active invite.
 
 ### `POST /onboarding/team-invites/join`
 
