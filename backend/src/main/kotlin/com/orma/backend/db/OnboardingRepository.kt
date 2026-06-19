@@ -26,6 +26,7 @@ data class WorkspaceRecord(
     val legalName: String,
     val role: String,
     val onboardingComplete: Boolean,
+    val logoFileName: String?,
     val inviteCode: String?,
 )
 
@@ -245,6 +246,7 @@ class OnboardingRepository(
                 bw.legal_name,
                 wm.role,
                 bw.onboarding_completed_at is not null as onboarding_complete,
+                bw.logo_file_name,
                 ti.code as invite_code
             from workspace_members wm
             join business_workspaces bw on bw.id = wm.workspace_id
@@ -336,6 +338,7 @@ class OnboardingRepository(
                 legal_name,
                 'business_owner' as role,
                 onboarding_completed_at is not null as onboarding_complete,
+                logo_file_name,
                 null::text as invite_code
         """.trimIndent()
 
@@ -384,6 +387,7 @@ class OnboardingRepository(
                 legal_name,
                 'business_owner' as role,
                 onboarding_completed_at is not null as onboarding_complete,
+                logo_file_name,
                 null::text as invite_code
         """.trimIndent()
 
@@ -489,6 +493,7 @@ class OnboardingRepository(
                 bw.legal_name,
                 ti.role,
                 bw.onboarding_completed_at is not null as onboarding_complete,
+                bw.logo_file_name,
                 ti.code as invite_code
             from team_invites ti
             join business_workspaces bw on bw.id = ti.workspace_id
@@ -724,6 +729,7 @@ class OnboardingRepository(
             legalName = getString("legal_name"),
             role = getString("role"),
             onboardingComplete = getBoolean("onboarding_complete"),
+            logoFileName = getString("logo_file_name"),
             inviteCode = getString("invite_code"),
         )
 

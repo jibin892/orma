@@ -68,6 +68,8 @@ data class WorkspaceResponse(
     val legalName: String,
     val role: String,
     val onboardingComplete: Boolean,
+    val logoFileName: String? = null,
+    val logoUrl: String? = null,
     val inviteCode: String? = null,
 )
 

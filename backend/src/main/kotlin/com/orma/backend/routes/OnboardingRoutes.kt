@@ -26,7 +26,7 @@ fun Route.onboardingRoutes(
         val firebaseUser = call.verifiedFirebaseUser(config) ?: return@post
 
         val session = repository.completeBusinessSetup(firebaseUser, request)
-        call.respond(session.toMutationResponse())
+        call.respond(session.toMutationResponse(config))
     }
 
     post("/onboarding/team-invites/lookup") {
@@ -49,7 +49,7 @@ fun Route.onboardingRoutes(
         call.respond(
             TeamInviteResponse(
                 code = workspace.inviteCode ?: request.code.trim().uppercase(),
-                workspace = workspace.toResponse(),
+                workspace = workspace.toResponse(config),
             ),
         )
     }
@@ -71,7 +71,7 @@ fun Route.onboardingRoutes(
             return@post
         }
 
-        call.respond(session.toMutationResponse())
+        call.respond(session.toMutationResponse(config))
     }
 
     post("/onboarding/notifications") {
@@ -80,7 +80,7 @@ fun Route.onboardingRoutes(
         val firebaseUser = call.verifiedFirebaseUser(config) ?: return@post
 
         val session = repository.updateNotificationPreference(firebaseUser, request.enabled)
-        call.respond(session.toMutationResponse())
+        call.respond(session.toMutationResponse(config))
     }
 }
 
@@ -94,10 +94,10 @@ private suspend fun ApplicationCall.databaseNotConfigured() {
     )
 }
 
-private fun com.orma.backend.db.OnboardingSessionRecord.toMutationResponse(): OnboardingMutationResponse =
+private fun com.orma.backend.db.OnboardingSessionRecord.toMutationResponse(config: AppConfig): OnboardingMutationResponse =
     OnboardingMutationResponse(
         user = user.toResponse(),
-        workspace = workspace?.toResponse(),
+        workspace = workspace?.toResponse(config),
         onboardingStatus = onboardingStatus,
         requiredStep = requiredStep,
         accessPath = accessPath,

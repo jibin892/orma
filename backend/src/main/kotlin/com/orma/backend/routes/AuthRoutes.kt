@@ -52,7 +52,7 @@ fun Route.authRoutes(
             phoneNumberFallback = request.phoneNumber,
             displayNameFallback = request.displayName,
         )
-        call.respond(session.toSessionResponse(firebaseUser.uid))
+        call.respond(session.toSessionResponse(firebaseUser.uid, config))
     }
 }
 
@@ -68,6 +68,9 @@ fun OnboardingSessionRecord.toSessionResponse(uid: String): SessionResponse =
         requiredStep = requiredStep,
         accessPath = accessPath,
     )
+
+fun OnboardingSessionRecord.toSessionResponse(uid: String, config: AppConfig): SessionResponse =
+    toSessionResponse(uid).copy(workspace = workspace?.toResponse(config))
 
 fun com.orma.backend.db.AppUserRecord.toResponse(): UserResponse =
     UserResponse(
@@ -87,5 +90,25 @@ fun com.orma.backend.db.WorkspaceRecord.toResponse(): WorkspaceResponse =
         legalName = legalName,
         role = role,
         onboardingComplete = onboardingComplete,
+        logoFileName = logoFileName,
         inviteCode = inviteCode,
     )
+
+fun com.orma.backend.db.WorkspaceRecord.toResponse(config: AppConfig): WorkspaceResponse =
+    toResponse().copy(logoUrl = logoFileName.toMediaUrl(config))
+
+fun String?.toMediaUrl(config: AppConfig): String? {
+    val value = this?.trim()?.takeIf { it.isNotBlank() } ?: return null
+    if (value.startsWith("https://") || value.startsWith("http://")) return value
+    if (config.activeMediaStorageProvider != "cloudinary") return null
+    val cloudName = config.cloudinaryCloudName?.trim()?.takeIf { it.isNotBlank() } ?: return null
+    return "https://res.cloudinary.com/$cloudName/image/upload/${value.cloudinaryPathEncoded()}"
+}
+
+private fun String.cloudinaryPathEncoded(): String =
+    split("/")
+        .filter { it.isNotBlank() }
+        .joinToString("/") { segment ->
+            java.net.URLEncoder.encode(segment, Charsets.UTF_8)
+                .replace("+", "%20")
+        }
