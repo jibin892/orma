@@ -104,6 +104,14 @@ data class TeamInviteLookupRequest(
 )
 
 @Serializable
+data class TeamInviteCreateRequest(
+    val name: String,
+    val email: String? = null,
+    val phoneNumber: String? = null,
+    val role: String = "team_member",
+)
+
+@Serializable
 data class TeamInviteJoinRequest(
     val code: String,
 )
@@ -112,6 +120,10 @@ data class TeamInviteJoinRequest(
 data class TeamInviteResponse(
     val code: String,
     val workspace: WorkspaceResponse,
+    val inviteeName: String? = null,
+    val inviteeEmail: String? = null,
+    val inviteePhoneNumber: String? = null,
+    val role: String? = null,
 )
 
 @Serializable

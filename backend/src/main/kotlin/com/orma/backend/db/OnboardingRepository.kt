@@ -2,6 +2,7 @@ package com.orma.backend.db
 
 import com.orma.backend.auth.VerifiedFirebaseUser
 import com.orma.backend.models.BusinessSetupRequest
+import com.orma.backend.models.TeamInviteCreateRequest
 import java.sql.Connection
 import java.sql.PreparedStatement
 import java.sql.ResultSet
@@ -42,6 +43,21 @@ sealed interface OwnerTeamInviteResult {
     data class Success(val workspace: WorkspaceRecord) : OwnerTeamInviteResult
     data object WorkspaceNotFound : OwnerTeamInviteResult
     data object OwnerRequired : OwnerTeamInviteResult
+}
+
+data class TeamInviteRecord(
+    val code: String,
+    val workspace: WorkspaceRecord,
+    val inviteeName: String,
+    val inviteeEmail: String?,
+    val inviteePhoneNumber: String?,
+    val role: String,
+)
+
+sealed interface TeamInviteCreateResult {
+    data class Success(val invite: TeamInviteRecord) : TeamInviteCreateResult
+    data object WorkspaceNotFound : TeamInviteCreateResult
+    data object OwnerRequired : TeamInviteCreateResult
 }
 
 data class ProductImageRecord(
@@ -151,6 +167,46 @@ class OnboardingRepository(
         }
     }
 
+    suspend fun createOwnerTeamInvite(
+        firebaseUser: VerifiedFirebaseUser,
+        request: TeamInviteCreateRequest,
+    ): TeamInviteCreateResult = withContext(Dispatchers.IO) {
+        dataSource.connection.use { connection ->
+            connection.autoCommit = false
+            try {
+                val user = connection.upsertUser(
+                    firebaseUser = firebaseUser,
+                    providerFallback = null,
+                    emailFallback = null,
+                    phoneNumberFallback = null,
+                    displayNameFallback = null,
+                )
+                val workspace = connection.findPrimaryWorkspace(user.id)
+                if (workspace == null) {
+                    connection.rollback()
+                    return@withContext TeamInviteCreateResult.WorkspaceNotFound
+                }
+                if (workspace.role != RoleBusinessOwner) {
+                    connection.rollback()
+                    return@withContext TeamInviteCreateResult.OwnerRequired
+                }
+
+                val invite = connection.createInviteCode(
+                    workspace = workspace,
+                    userId = user.id,
+                    request = request,
+                )
+                connection.commit()
+                TeamInviteCreateResult.Success(invite)
+            } catch (error: Throwable) {
+                connection.rollback()
+                throw error
+            } finally {
+                connection.autoCommit = true
+            }
+        }
+    }
+
     suspend fun joinInvite(
         firebaseUser: VerifiedFirebaseUser,
         code: String,
@@ -170,10 +226,10 @@ class OnboardingRepository(
                     connection.rollback()
                     return@withContext null
                 }
-                connection.ensureTeamMembership(workspace.id, user.id)
+                connection.ensureTeamMembership(workspace.id, user.id, workspace.role)
                 val updatedUser = connection.markUserTeamComplete(user.id)
                 connection.commit()
-                updatedUser.toSession(workspace.copy(role = RoleTeamMember))
+                updatedUser.toSession(workspace)
             } catch (error: Throwable) {
                 connection.rollback()
                 throw error
@@ -461,10 +517,14 @@ class OnboardingRepository(
         }
     }
 
-    private fun Connection.ensureTeamMembership(workspaceId: String, userId: String) {
+    private fun Connection.ensureTeamMembership(
+        workspaceId: String,
+        userId: String,
+        role: String,
+    ) {
         val sql = """
             insert into workspace_members (workspace_id, user_id, role, status, updated_at)
-            values (?::uuid, ?::uuid, 'team_member', 'active', now())
+            values (?::uuid, ?::uuid, ?, 'active', now())
             on conflict (workspace_id, user_id) do update set
                 role = excluded.role,
                 status = 'active',
@@ -473,6 +533,7 @@ class OnboardingRepository(
         prepareStatement(sql).use { statement ->
             statement.setString(1, workspaceId)
             statement.setString(2, userId)
+            statement.setString(3, role.normalizedTeamRole())
             statement.executeUpdate()
         }
     }
@@ -524,6 +585,84 @@ class OnboardingRepository(
             statement.setString(1, code)
             statement.setString(2, workspaceId)
             statement.setString(3, userId)
+            statement.executeQuery().use { result ->
+                if (result.next()) result.getString("code") else null
+            }
+        }
+    }
+
+    private fun Connection.createInviteCode(
+        workspace: WorkspaceRecord,
+        userId: String,
+        request: TeamInviteCreateRequest,
+    ): TeamInviteRecord {
+        val inviteeName = request.name.trim().take(120)
+        val inviteeEmail = request.email?.trim()?.lowercase()?.take(160)?.ifBlank { null }
+        val inviteePhoneNumber = request.phoneNumber
+            ?.trim()
+            ?.filter { it.isDigit() || it == '+' }
+            ?.take(24)
+            ?.ifBlank { null }
+        val role = request.role.normalizedTeamRole()
+
+        repeat(5) {
+            val code = generateInviteCode(workspace.businessName)
+            val insertedCode = insertInviteCode(
+                workspaceId = workspace.id,
+                userId = userId,
+                code = code,
+                role = role,
+                inviteeName = inviteeName,
+                inviteeEmail = inviteeEmail,
+                inviteePhoneNumber = inviteePhoneNumber,
+            )
+            if (insertedCode != null) {
+                return TeamInviteRecord(
+                    code = insertedCode,
+                    workspace = workspace.copy(inviteCode = insertedCode),
+                    inviteeName = inviteeName,
+                    inviteeEmail = inviteeEmail,
+                    inviteePhoneNumber = inviteePhoneNumber,
+                    role = role,
+                )
+            }
+        }
+        error("Unable to create a unique team invite code.")
+    }
+
+    private fun Connection.insertInviteCode(
+        workspaceId: String,
+        userId: String,
+        code: String,
+        role: String,
+        inviteeName: String,
+        inviteeEmail: String?,
+        inviteePhoneNumber: String?,
+    ): String? {
+        val sql = """
+            insert into team_invites (
+                code,
+                workspace_id,
+                created_by_user_id,
+                role,
+                invitee_name,
+                invitee_email,
+                invitee_phone_number,
+                status,
+                updated_at
+            )
+            values (?, ?::uuid, ?::uuid, ?, ?, ?, ?, 'active', now())
+            on conflict (code) do nothing
+            returning code
+        """.trimIndent()
+        return prepareStatement(sql).use { statement ->
+            statement.setString(1, code)
+            statement.setString(2, workspaceId)
+            statement.setString(3, userId)
+            statement.setString(4, role.normalizedTeamRole())
+            statement.setString(5, inviteeName)
+            statement.setNullableString(6, inviteeEmail)
+            statement.setNullableString(7, inviteePhoneNumber)
             statement.executeQuery().use { result ->
                 if (result.next()) result.getString("code") else null
             }
@@ -840,8 +979,23 @@ class OnboardingRepository(
         return (prefix + suffix).take(12)
     }
 
+    private fun String.normalizedTeamRole(): String {
+        val normalized = trim()
+            .lowercase()
+            .filter { it.isLetterOrDigit() || it == '_' }
+        return if (normalized in AllowedTeamRoles) normalized else RoleTeamMember
+    }
+
     private companion object {
         const val RoleBusinessOwner = "business_owner"
         const val RoleTeamMember = "team_member"
+        val AllowedTeamRoles = setOf(
+            RoleTeamMember,
+            "manager",
+            "cashier",
+            "accountant",
+            "inventory_manager",
+            "sales_staff",
+        )
     }
 }

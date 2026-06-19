@@ -3,10 +3,12 @@ package com.orma.backend.routes
 import com.orma.backend.config.AppConfig
 import com.orma.backend.db.OnboardingRepository
 import com.orma.backend.db.OwnerTeamInviteResult
+import com.orma.backend.db.TeamInviteCreateResult
 import com.orma.backend.models.BusinessSetupRequest
 import com.orma.backend.models.ErrorResponse
 import com.orma.backend.models.NotificationPreferenceRequest
 import com.orma.backend.models.OnboardingMutationResponse
+import com.orma.backend.models.TeamInviteCreateRequest
 import com.orma.backend.models.TeamInviteJoinRequest
 import com.orma.backend.models.TeamInviteLookupRequest
 import com.orma.backend.models.TeamInviteResponse
@@ -84,6 +86,67 @@ fun Route.onboardingRoutes(
                     ErrorResponse(
                         code = "owner_required",
                         message = "Only the business owner can create team invite codes.",
+                    ),
+                )
+            }
+        }
+    }
+
+    post("/onboarding/team-invites") {
+        val repository = onboardingRepository ?: return@post call.databaseNotConfigured()
+        val request = call.receive<TeamInviteCreateRequest>()
+        val firebaseUser = call.verifiedFirebaseUser(config) ?: return@post
+
+        if (request.name.isBlank() || request.name.trim().length < 2) {
+            call.respond(
+                HttpStatusCode.BadRequest,
+                ErrorResponse(
+                    code = "invitee_name_required",
+                    message = "Enter the team member name before creating an invite.",
+                ),
+            )
+            return@post
+        }
+        if (request.email.isNullOrBlank() && request.phoneNumber.isNullOrBlank()) {
+            call.respond(
+                HttpStatusCode.BadRequest,
+                ErrorResponse(
+                    code = "invite_contact_required",
+                    message = "Enter a phone number or email for this team member.",
+                ),
+            )
+            return@post
+        }
+
+        when (val result = repository.createOwnerTeamInvite(firebaseUser, request)) {
+            is TeamInviteCreateResult.Success -> {
+                val invite = result.invite
+                call.respond(
+                    TeamInviteResponse(
+                        code = invite.code,
+                        workspace = invite.workspace.toResponse(config),
+                        inviteeName = invite.inviteeName,
+                        inviteeEmail = invite.inviteeEmail,
+                        inviteePhoneNumber = invite.inviteePhoneNumber,
+                        role = invite.role,
+                    ),
+                )
+            }
+            TeamInviteCreateResult.WorkspaceNotFound -> {
+                call.respond(
+                    HttpStatusCode.NotFound,
+                    ErrorResponse(
+                        code = "workspace_not_found",
+                        message = "Complete business setup before inviting team members.",
+                    ),
+                )
+            }
+            TeamInviteCreateResult.OwnerRequired -> {
+                call.respond(
+                    HttpStatusCode.Forbidden,
+                    ErrorResponse(
+                        code = "owner_required",
+                        message = "Only the business owner can invite team members.",
                     ),
                 )
             }
