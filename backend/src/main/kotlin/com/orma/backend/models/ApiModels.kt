@@ -162,3 +162,210 @@ data class GstinLookupResponse(
     val cached: Boolean,
     val cachedAt: String,
 )
+
+@Serializable
+data class DashboardSummaryResponse(
+    val currency: String,
+    val totalCustomers: Int,
+    val totalPaidAmount: String,
+    val ordersCount: Int,
+    val bookingsCount: Int,
+    val productsInStock: Int,
+    val lowStockProducts: Int,
+    val recentOrders: List<OrderResponse> = emptyList(),
+    val lowStockItems: List<ProductResponse> = emptyList(),
+)
+
+@Serializable
+data class CustomerListResponse(
+    val customers: List<CustomerResponse>,
+)
+
+@Serializable
+data class CustomerRequest(
+    val name: String,
+    val phoneNumber: String? = null,
+    val email: String? = null,
+    val addressLine: String? = null,
+    val city: String? = null,
+    val region: String? = null,
+    val country: String? = null,
+    val postalCode: String? = null,
+    val notes: String? = null,
+)
+
+@Serializable
+data class CustomerResponse(
+    val id: String,
+    val name: String,
+    val phoneNumber: String? = null,
+    val email: String? = null,
+    val addressLine: String? = null,
+    val city: String? = null,
+    val region: String? = null,
+    val country: String? = null,
+    val postalCode: String? = null,
+    val notes: String? = null,
+    val status: String,
+    val createdAt: String,
+    val updatedAt: String,
+)
+
+@Serializable
+data class SupplierListResponse(
+    val suppliers: List<SupplierResponse>,
+)
+
+@Serializable
+data class SupplierRequest(
+    val name: String,
+    val phoneNumber: String? = null,
+    val email: String? = null,
+    val taxNumber: String? = null,
+    val addressLine: String? = null,
+    val notes: String? = null,
+)
+
+@Serializable
+data class SupplierResponse(
+    val id: String,
+    val name: String,
+    val phoneNumber: String? = null,
+    val email: String? = null,
+    val taxNumber: String? = null,
+    val addressLine: String? = null,
+    val notes: String? = null,
+    val status: String,
+    val createdAt: String,
+    val updatedAt: String,
+)
+
+@Serializable
+data class ProductListResponse(
+    val products: List<ProductResponse>,
+)
+
+@Serializable
+data class ProductRequest(
+    val name: String,
+    val sku: String? = null,
+    val barcode: String? = null,
+    val description: String? = null,
+    val unit: String = "pcs",
+    val sellingPrice: String = "0",
+    val costPrice: String = "0",
+    val currency: String? = null,
+    val taxRate: String = "0",
+    val pricesIncludeTax: Boolean = false,
+    val stockQuantity: String = "0",
+    val reorderLevel: String = "0",
+    val trackStock: Boolean = true,
+    val supplierId: String? = null,
+)
+
+@Serializable
+data class ProductResponse(
+    val id: String,
+    val supplierId: String? = null,
+    val supplierName: String? = null,
+    val name: String,
+    val sku: String? = null,
+    val barcode: String? = null,
+    val description: String? = null,
+    val unit: String,
+    val sellingPrice: String,
+    val costPrice: String,
+    val currency: String,
+    val taxRate: String,
+    val pricesIncludeTax: Boolean,
+    val stockQuantity: String,
+    val reorderLevel: String,
+    val trackStock: Boolean,
+    val lowStock: Boolean,
+    val status: String,
+    val createdAt: String,
+    val updatedAt: String,
+)
+
+@Serializable
+data class StockAdjustmentRequest(
+    val quantityDelta: String,
+    val note: String? = null,
+)
+
+@Serializable
+data class StockMovementResponse(
+    val id: String,
+    val productId: String,
+    val movementType: String,
+    val quantityDelta: String,
+    val balanceAfter: String,
+    val note: String? = null,
+    val createdAt: String,
+)
+
+@Serializable
+data class OrderListResponse(
+    val orders: List<OrderResponse>,
+)
+
+@Serializable
+data class OrderRequest(
+    val customerId: String? = null,
+    val customerName: String? = null,
+    val status: String = "confirmed",
+    val scheduledAt: String? = null,
+    val paidTotal: String = "0",
+    val currency: String? = null,
+    val notes: String? = null,
+    val items: List<OrderItemRequest>,
+)
+
+@Serializable
+data class OrderItemRequest(
+    val productId: String? = null,
+    val description: String,
+    val quantity: String,
+    val unitPrice: String,
+    val taxRate: String = "0",
+)
+
+@Serializable
+data class OrderStatusRequest(
+    val status: String,
+)
+
+@Serializable
+data class OrderResponse(
+    val id: String,
+    val orderNumber: String,
+    val customerId: String? = null,
+    val customerName: String? = null,
+    val status: String,
+    val scheduledAt: String? = null,
+    val subtotal: String,
+    val taxTotal: String,
+    val discountTotal: String,
+    val paidTotal: String,
+    val total: String,
+    val currency: String,
+    val notes: String? = null,
+    val itemCount: Int,
+    val items: List<OrderItemResponse> = emptyList(),
+    val createdAt: String,
+    val updatedAt: String,
+)
+
+@Serializable
+data class OrderItemResponse(
+    val id: String,
+    val productId: String? = null,
+    val productName: String? = null,
+    val description: String,
+    val quantity: String,
+    val unitPrice: String,
+    val taxRate: String,
+    val lineSubtotal: String,
+    val lineTax: String,
+    val lineTotal: String,
+)

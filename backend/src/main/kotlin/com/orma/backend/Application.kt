@@ -1,6 +1,7 @@
 package com.orma.backend
 
 import com.orma.backend.config.AppConfig
+import com.orma.backend.db.DashboardRepository
 import com.orma.backend.db.DatabaseFactory
 import com.orma.backend.db.GstinRepository
 import com.orma.backend.db.OnboardingRepository
@@ -30,12 +31,13 @@ fun Application.module(config: AppConfig = AppConfig.load()) {
     closeOnStop(dataSource)
 
     val onboardingRepository = dataSource?.let { OnboardingRepository(it) }
+    val dashboardRepository = dataSource?.let { DashboardRepository(it) }
     val gstinRepository = dataSource?.let { GstinRepository(it) }
 
     configureSerialization()
     configureHTTP(config)
     configureStatusPages()
-    configureRouting(config, onboardingRepository, gstinRepository)
+    configureRouting(config, onboardingRepository, dashboardRepository, gstinRepository)
 }
 
 private fun Application.closeOnStop(dataSource: HikariDataSource?) {

@@ -60,4 +60,16 @@ class ApplicationTest {
         assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
         assertContains(response.body<String>(), "\"code\":\"database_not_configured\"")
     }
+
+    @Test
+    fun dashboardSummaryRequiresConfiguredDatabase() = testApplication {
+        application {
+            module(AppConfig.test())
+        }
+
+        val response = client.get("/dashboard/summary")
+
+        assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
+        assertContains(response.body<String>(), "\"code\":\"database_not_configured\"")
+    }
 }
