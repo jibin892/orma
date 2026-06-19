@@ -4,9 +4,10 @@ import com.orma.backend.config.AppConfig
 import com.orma.backend.db.OnboardingRepository
 import com.orma.backend.models.ErrorResponse
 import com.orma.backend.models.MediaUploadResponse
-import com.orma.backend.storage.FirebaseStorageNotConfiguredException
-import com.orma.backend.storage.FirebaseStorageService
+import com.orma.backend.storage.MediaStorageNotConfiguredException
+import com.orma.backend.storage.MediaStorageService
 import com.orma.backend.storage.StoredMediaObject
+import com.orma.backend.storage.createMediaStorageService
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.content.PartData
 import io.ktor.http.content.forEachPart
@@ -22,7 +23,7 @@ import kotlinx.io.readByteArray
 fun Route.mediaRoutes(
     config: AppConfig,
     onboardingRepository: OnboardingRepository?,
-    storageService: FirebaseStorageService = FirebaseStorageService(config),
+    storageService: MediaStorageService = createMediaStorageService(config),
 ) {
     post("/media/business-logo") {
         val repository = onboardingRepository ?: return@post call.respondDatabaseNotConfigured()
@@ -215,21 +216,21 @@ private suspend fun io.ktor.server.application.ApplicationCall.receiveImageUploa
 }
 
 private suspend fun ApplicationCall.storeImageOrRespond(
-    storageService: FirebaseStorageService,
+    storageService: MediaStorageService,
     storagePath: String,
     upload: IncomingImageUpload,
 ): StoredMediaObject? =
     try {
         storageService.upload(storagePath, upload.bytes, upload.contentType)
-    } catch (error: FirebaseStorageNotConfiguredException) {
+    } catch (error: MediaStorageNotConfiguredException) {
         throw error
     } catch (error: Throwable) {
-        application.environment.log.error("Firebase Storage upload failed for $storagePath", error)
+        application.environment.log.error("${storageService.providerName} media upload failed for $storagePath", error)
         respond(
             HttpStatusCode.BadGateway,
             ErrorResponse(
                 code = "media_storage_upload_failed",
-                message = "ORMA could not save this image in Firebase Storage. Check the Firebase Storage bucket and service account permissions, then try again.",
+                message = "ORMA could not save this image in ${storageService.providerName}. Check the media storage credentials and try again.",
             ),
         )
         null

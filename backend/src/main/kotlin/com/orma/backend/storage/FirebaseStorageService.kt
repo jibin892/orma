@@ -7,21 +7,17 @@ import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-class FirebaseStorageNotConfiguredException : RuntimeException(
-    "Firebase Storage is not configured. Set FIREBASE_PROJECT_ID, credentials, and FIREBASE_STORAGE_BUCKET.",
-)
-
-data class StoredMediaObject(
-    val storagePath: String,
-    val downloadUrl: String?,
-    val contentType: String,
-    val sizeBytes: Long,
+class FirebaseStorageNotConfiguredException : MediaStorageNotConfiguredException(
+    providerName = "firebase",
+    message = "Firebase Storage is not configured. Set FIREBASE_PROJECT_ID, credentials, and FIREBASE_STORAGE_BUCKET.",
 )
 
 class FirebaseStorageService(
     private val config: AppConfig,
-) {
-    suspend fun upload(
+) : MediaStorageService {
+    override val providerName: String = "firebase"
+
+    override suspend fun upload(
         storagePath: String,
         bytes: ByteArray,
         contentType: String,

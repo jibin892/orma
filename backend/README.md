@@ -9,7 +9,7 @@ Kotlin/Ktor backend module for ORMA. This folder is inside the main KMP app proj
 - PostgreSQL
 - Flyway migrations
 - Firebase Auth token verification
-- Firebase Cloud Storage for business and product images
+- Cloudinary for business and product images
 
 ## Run Locally
 
@@ -43,7 +43,11 @@ Important variables:
 - `RUN_MIGRATIONS`: set to `true` to run Flyway migrations on startup
 - `FIREBASE_PROJECT_ID`: Firebase project ID
 - `FIREBASE_CREDENTIALS_PATH`: service account JSON path for local/server auth verification
-- `FIREBASE_STORAGE_BUCKET`: Firebase Storage bucket, for example `orma-project-90.firebasestorage.app`
+- `MEDIA_STORAGE_PROVIDER`: `cloudinary` for pilot uploads, or `firebase` if Firebase Storage is enabled
+- `CLOUDINARY_CLOUD_NAME`: Cloudinary cloud name
+- `CLOUDINARY_API_KEY`: Cloudinary API key
+- `CLOUDINARY_API_SECRET`: Cloudinary API secret
+- `FIREBASE_STORAGE_BUCKET`: optional Firebase Storage bucket if `MEDIA_STORAGE_PROVIDER=firebase`
 - `ALLOWED_ORIGINS`: comma-separated CORS origins
 
 ## First APIs
@@ -84,7 +88,7 @@ Content-Type: multipart/form-data
 
 `POST /media/business-logo` accepts one JPEG, PNG, or WebP file up to 5 MB. If business setup is not complete yet, it stores the file under a temporary user path and returns a `storagePath` that can be sent later as `logoFileName`.
 
-`POST /media/product-images` accepts one image file plus a `productId` form field. Product image metadata is stored in Postgres and the file is stored in Firebase Storage.
+`POST /media/product-images` accepts one image file plus a `productId` form field. Product image metadata is stored in Postgres and the file is stored in the configured media provider.
 
 See `docs/backend-onboarding-handoff.md` for the pilot onboarding contract.
 

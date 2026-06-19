@@ -15,6 +15,9 @@ data class HealthResponse(
     val databaseConfigured: Boolean,
     val firebaseAuthConfigured: Boolean,
     val firebaseStorageConfigured: Boolean,
+    val mediaStorageProvider: String,
+    val mediaStorageConfigured: Boolean,
+    val cloudinaryConfigured: Boolean,
 )
 
 @Serializable

@@ -3,7 +3,7 @@ package com.orma.backend.plugins
 import com.google.firebase.auth.FirebaseAuthException
 import com.orma.backend.auth.FirebaseAuthNotConfiguredException
 import com.orma.backend.models.ErrorResponse
-import com.orma.backend.storage.FirebaseStorageNotConfiguredException
+import com.orma.backend.storage.MediaStorageNotConfiguredException
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
 import io.ktor.server.application.install
@@ -22,12 +22,12 @@ fun Application.configureStatusPages() {
             )
         }
 
-        exception<FirebaseStorageNotConfiguredException> { call, cause ->
+        exception<MediaStorageNotConfiguredException> { call, cause ->
             call.respond(
                 HttpStatusCode.ServiceUnavailable,
                 ErrorResponse(
-                    code = "firebase_storage_not_configured",
-                    message = cause.message ?: "Firebase Storage is not configured.",
+                    code = cause.notConfiguredCode(),
+                    message = cause.message ?: "Media storage is not configured.",
                 ),
             )
         }
@@ -54,3 +54,10 @@ fun Application.configureStatusPages() {
         }
     }
 }
+
+private fun MediaStorageNotConfiguredException.notConfiguredCode(): String =
+    when (providerName) {
+        "cloudinary" -> "cloudinary_storage_not_configured"
+        "firebase" -> "firebase_storage_not_configured"
+        else -> "media_storage_not_configured"
+    }

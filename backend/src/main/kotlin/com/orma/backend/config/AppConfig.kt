@@ -11,6 +11,10 @@ data class AppConfig(
     val firebaseProjectId: String?,
     val firebaseCredentialsPath: String?,
     val firebaseStorageBucket: String?,
+    val mediaStorageProvider: String?,
+    val cloudinaryCloudName: String?,
+    val cloudinaryApiKey: String?,
+    val cloudinaryApiSecret: String?,
     val allowedOrigins: List<String>,
 ) {
     val databaseConfigured: Boolean
@@ -21,6 +25,28 @@ data class AppConfig(
 
     val firebaseStorageConfigured: Boolean
         get() = firebaseAuthConfigured && !firebaseStorageBucket.isNullOrBlank()
+
+    val cloudinaryConfigured: Boolean
+        get() = !cloudinaryCloudName.isNullOrBlank() &&
+            !cloudinaryApiKey.isNullOrBlank() &&
+            !cloudinaryApiSecret.isNullOrBlank()
+
+    val activeMediaStorageProvider: String
+        get() = mediaStorageProvider
+            ?.lowercase()
+            ?.takeIf { it.isNotBlank() }
+            ?: when {
+                cloudinaryConfigured -> "cloudinary"
+                firebaseStorageConfigured -> "firebase"
+                else -> "none"
+            }
+
+    val mediaStorageConfigured: Boolean
+        get() = when (activeMediaStorageProvider) {
+            "cloudinary" -> cloudinaryConfigured
+            "firebase" -> firebaseStorageConfigured
+            else -> false
+        }
 
     companion object {
         fun load(env: Map<String, String> = System.getenv()): AppConfig {
@@ -37,6 +63,10 @@ data class AppConfig(
                 firebaseCredentialsPath = env["FIREBASE_CREDENTIALS_PATH"].orNullIfBlank(),
                 firebaseStorageBucket = env["FIREBASE_STORAGE_BUCKET"].orNullIfBlank()
                     ?: firebaseProjectId?.let { "$it.firebasestorage.app" },
+                mediaStorageProvider = env["MEDIA_STORAGE_PROVIDER"].orNullIfBlank(),
+                cloudinaryCloudName = env["CLOUDINARY_CLOUD_NAME"].orNullIfBlank(),
+                cloudinaryApiKey = env["CLOUDINARY_API_KEY"].orNullIfBlank(),
+                cloudinaryApiSecret = env["CLOUDINARY_API_SECRET"].orNullIfBlank(),
                 allowedOrigins = env["ALLOWED_ORIGINS"]
                     ?.split(",")
                     ?.map { it.trim() }
@@ -56,6 +86,10 @@ data class AppConfig(
             firebaseProjectId = null,
             firebaseCredentialsPath = null,
             firebaseStorageBucket = null,
+            mediaStorageProvider = null,
+            cloudinaryCloudName = null,
+            cloudinaryApiKey = null,
+            cloudinaryApiSecret = null,
             allowedOrigins = listOf("*"),
         )
     }
