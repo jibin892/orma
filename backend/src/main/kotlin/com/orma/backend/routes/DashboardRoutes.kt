@@ -188,8 +188,21 @@ fun Route.dashboardRoutes(
         val repository = dashboardRepository ?: return@post call.dashboardDatabaseNotConfigured()
         val firebaseUser = call.verifiedFirebaseUser(config) ?: return@post
         val request = call.receive<ProductOfferRequest>()
+        val scope = request.appliesTo.normalizedOfferScope()
         if (request.name.isBlank()) {
             call.respondValidation("offer_name_required", "Enter the offer name.")
+            return@post
+        }
+        if ((request.discountValue.toDoubleOrNull() ?: 0.0) <= 0.0) {
+            call.respondValidation("offer_discount_required", "Enter a discount greater than zero.")
+            return@post
+        }
+        if (scope == "category" && request.categoryId.isNullOrBlank()) {
+            call.respondValidation("offer_category_required", "Choose the category for this offer.")
+            return@post
+        }
+        if (scope == "product" && request.productId.isNullOrBlank()) {
+            call.respondValidation("offer_product_required", "Choose the product or service for this offer.")
             return@post
         }
         call.respondWorkspaceResult(repository.createProductOffer(firebaseUser, request))
@@ -391,6 +404,11 @@ private fun ApplicationCall.dashboardFilters(): DashboardQueryFilters {
 
 private fun String?.toBooleanQuery(): Boolean =
     this?.trim()?.lowercase() in setOf("true", "1", "yes")
+
+private fun String.normalizedOfferScope(): String {
+    val normalized = trim().lowercase().replace("-", "_").filter { it.isLetterOrDigit() || it == '_' }
+    return if (normalized in setOf("all", "category", "product")) normalized else "product"
+}
 
 private suspend fun ApplicationCall.respondWorkspaceResult(value: Any?) {
     if (value == null) {
