@@ -3,6 +3,7 @@ package com.orma.backend.routes
 import com.orma.backend.config.AppConfig
 import com.orma.backend.db.DashboardQueryFilters
 import com.orma.backend.db.DashboardRepository
+import com.orma.backend.db.PublicCatalogOrderSubmitResult
 import com.orma.backend.models.CustomerListResponse
 import com.orma.backend.models.CustomerRequest
 import com.orma.backend.models.ErrorResponse
@@ -11,6 +12,7 @@ import com.orma.backend.models.OrderRequest
 import com.orma.backend.models.OrderStatusRequest
 import com.orma.backend.models.PrinterProfileListResponse
 import com.orma.backend.models.PrinterProfileRequest
+import com.orma.backend.models.PublicCatalogOrderRequest
 import com.orma.backend.models.ProductImportCsvRequest
 import com.orma.backend.models.ProductImportRequest
 import com.orma.backend.models.ProductListResponse
@@ -31,6 +33,48 @@ fun Route.dashboardRoutes(
     config: AppConfig,
     dashboardRepository: DashboardRepository?,
 ) {
+    get("/public/workspaces/{workspaceId}/catalog") {
+        val repository = dashboardRepository ?: return@get call.dashboardDatabaseNotConfigured()
+        val workspaceId = call.parameters["workspaceId"].orEmpty()
+        val catalog = repository.publicCatalog(workspaceId)
+            ?: return@get call.publicCatalogNotFound()
+        call.respond(catalog)
+    }
+
+    post("/public/workspaces/{workspaceId}/catalog") {
+        val repository = dashboardRepository ?: return@post call.dashboardDatabaseNotConfigured()
+        val workspaceId = call.parameters["workspaceId"].orEmpty()
+        val catalog = repository.publicCatalog(workspaceId)
+            ?: return@post call.publicCatalogNotFound()
+        call.respond(catalog)
+    }
+
+    post("/public/workspaces/{workspaceId}/orders") {
+        val repository = dashboardRepository ?: return@post call.dashboardDatabaseNotConfigured()
+        val workspaceId = call.parameters["workspaceId"].orEmpty()
+        val request = call.receive<PublicCatalogOrderRequest>()
+        if (request.customerName.isBlank()) {
+            call.respondValidation("public_customer_name_required", "Enter your name.")
+            return@post
+        }
+        if (request.phoneNumber.isBlank()) {
+            call.respondValidation("public_customer_phone_required", "Enter your phone number.")
+            return@post
+        }
+        if (request.items.isEmpty()) {
+            call.respondValidation("public_items_required", "Select at least one item.")
+            return@post
+        }
+        when (val result = repository.createPublicCatalogOrder(workspaceId, request)) {
+            is PublicCatalogOrderSubmitResult.Success -> call.respond(result.response)
+            PublicCatalogOrderSubmitResult.WorkspaceNotFound -> call.publicCatalogNotFound()
+            PublicCatalogOrderSubmitResult.ItemsUnavailable -> call.respondValidation(
+                code = "public_items_unavailable",
+                message = "Selected items are unavailable. Refresh the catalog and try again.",
+            )
+        }
+    }
+
     get("/dashboard/summary") {
         val repository = dashboardRepository ?: return@get call.dashboardDatabaseNotConfigured()
         val firebaseUser = call.verifiedFirebaseUser(config) ?: return@get
@@ -299,6 +343,16 @@ private suspend fun ApplicationCall.workspaceNotFound() {
         ErrorResponse(
             code = "workspace_not_found",
             message = "Complete business setup before using this workspace module.",
+        ),
+    )
+}
+
+private suspend fun ApplicationCall.publicCatalogNotFound() {
+    respond(
+        HttpStatusCode.NotFound,
+        ErrorResponse(
+            code = "public_catalog_not_found",
+            message = "This ORMA ordering link is not active.",
         ),
     )
 }

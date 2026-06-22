@@ -348,6 +348,57 @@ data class ProductResponse(
 )
 
 @Serializable
+data class PublicCatalogWorkspaceResponse(
+    val id: String,
+    val businessName: String,
+    val industry: String,
+    val city: String,
+    val currency: String,
+    val logoUrl: String? = null,
+)
+
+@Serializable
+data class PublicCatalogProductResponse(
+    val id: String,
+    val name: String,
+    val description: String? = null,
+    val unit: String,
+    val sellingPrice: String,
+    val currency: String,
+    val taxRate: String,
+    val pricesIncludeTax: Boolean,
+    val trackStock: Boolean,
+    val stockQuantity: String,
+    val inStock: Boolean,
+)
+
+@Serializable
+data class PublicCatalogResponse(
+    val workspace: PublicCatalogWorkspaceResponse,
+    val products: List<PublicCatalogProductResponse>,
+)
+
+@Serializable
+data class PublicCatalogOrderRequest(
+    val customerName: String,
+    val phoneNumber: String,
+    val notes: String? = null,
+    val items: List<PublicCatalogOrderItemRequest>,
+)
+
+@Serializable
+data class PublicCatalogOrderItemRequest(
+    val productId: String,
+    val quantity: String = "1",
+)
+
+@Serializable
+data class PublicCatalogOrderResponse(
+    val message: String,
+    val order: OrderResponse,
+)
+
+@Serializable
 data class StockAdjustmentRequest(
     val quantityDelta: String,
     val note: String? = null,

@@ -10,6 +10,11 @@ import com.orma.backend.models.OrderRequest
 import com.orma.backend.models.OrderResponse
 import com.orma.backend.models.PrinterProfileRequest
 import com.orma.backend.models.PrinterProfileResponse
+import com.orma.backend.models.PublicCatalogOrderRequest
+import com.orma.backend.models.PublicCatalogOrderResponse
+import com.orma.backend.models.PublicCatalogProductResponse
+import com.orma.backend.models.PublicCatalogResponse
+import com.orma.backend.models.PublicCatalogWorkspaceResponse
 import com.orma.backend.models.ProductExportResponse
 import com.orma.backend.models.ProductImportErrorResponse
 import com.orma.backend.models.ProductImportRequest
@@ -50,6 +55,16 @@ data class DashboardQueryFilters(
     val scheduledOnly: Boolean = false,
 )
 
+sealed interface PublicCatalogOrderSubmitResult {
+    data class Success(
+        val response: PublicCatalogOrderResponse,
+    ) : PublicCatalogOrderSubmitResult
+
+    data object WorkspaceNotFound : PublicCatalogOrderSubmitResult
+
+    data object ItemsUnavailable : PublicCatalogOrderSubmitResult
+}
+
 private val ProductCsvColumns = listOf(
     "name",
     "sku",
@@ -72,6 +87,75 @@ private val RequiredProductCsvColumns = listOf("name")
 class DashboardRepository(
     private val dataSource: DataSource,
 ) {
+    suspend fun publicCatalog(
+        workspaceId: String,
+    ): PublicCatalogResponse? = withContext(Dispatchers.IO) {
+        dataSource.connection.use { connection ->
+            val workspace = connection.findPublicCatalogWorkspace(workspaceId) ?: return@withContext null
+            PublicCatalogResponse(
+                workspace = workspace,
+                products = connection.listPublicCatalogProducts(workspace.id),
+            )
+        }
+    }
+
+    suspend fun createPublicCatalogOrder(
+        workspaceId: String,
+        request: PublicCatalogOrderRequest,
+    ): PublicCatalogOrderSubmitResult = withContext(Dispatchers.IO) {
+        dataSource.connection.use { connection ->
+            connection.autoCommit = false
+            try {
+                val access = connection.resolvePublicWorkspaceAccess(workspaceId) ?: run {
+                    connection.rollback()
+                    return@withContext PublicCatalogOrderSubmitResult.WorkspaceNotFound
+                }
+                val publicItems = connection.publicOrderItems(access.workspaceId, request)
+                if (publicItems.isEmpty()) {
+                    connection.rollback()
+                    return@withContext PublicCatalogOrderSubmitResult.ItemsUnavailable
+                }
+                val customer = connection.findCustomerByPhone(
+                    workspaceId = access.workspaceId,
+                    phoneNumber = request.phoneNumber,
+                ) ?: connection.insertCustomer(
+                    workspaceId = access.workspaceId,
+                    request = CustomerRequest(
+                        name = request.customerName,
+                        phoneNumber = request.phoneNumber,
+                        notes = "Created from public catalog.",
+                    ),
+                )
+                val publicNote = request.notes.cleanOptional()
+                    ?.let { "Public catalog request. $it" }
+                    ?: "Public catalog request."
+                val order = connection.insertOrder(
+                    access = access,
+                    request = OrderRequest(
+                        customerId = customer.id,
+                        status = "draft",
+                        paidTotal = "0",
+                        currency = access.currency,
+                        notes = publicNote,
+                        items = publicItems,
+                    ),
+                )
+                connection.commit()
+                PublicCatalogOrderSubmitResult.Success(
+                    PublicCatalogOrderResponse(
+                        message = "Request received. The business will review it shortly.",
+                        order = order,
+                    ),
+                )
+            } catch (error: Throwable) {
+                connection.rollback()
+                throw error
+            } finally {
+                connection.autoCommit = true
+            }
+        }
+    }
+
     suspend fun summary(firebaseUser: VerifiedFirebaseUser): DashboardSummaryResponse? = withContext(Dispatchers.IO) {
         dataSource.connection.use { connection ->
             val access = connection.resolveWorkspaceAccess(firebaseUser) ?: return@withContext null
@@ -567,6 +651,213 @@ class DashboardRepository(
                 throw error
             } finally {
                 connection.autoCommit = true
+            }
+        }
+    }
+
+    private fun Connection.findPublicCatalogWorkspace(workspaceId: String): PublicCatalogWorkspaceResponse? {
+        val cleanWorkspaceId = workspaceId.cleanUuidOrNull() ?: return null
+        val sql = """
+            select
+                id::text,
+                business_name,
+                industry,
+                city,
+                currency,
+                logo_file_name
+            from business_workspaces
+            where id = ?::uuid
+              and onboarding_completed_at is not null
+            limit 1
+        """.trimIndent()
+        return prepareStatement(sql).use { statement ->
+            statement.setString(1, cleanWorkspaceId)
+            statement.executeQuery().use { result ->
+                if (!result.next()) {
+                    null
+                } else {
+                    PublicCatalogWorkspaceResponse(
+                        id = result.getString("id"),
+                        businessName = result.getString("business_name"),
+                        industry = result.getString("industry"),
+                        city = result.getString("city"),
+                        currency = result.getString("currency") ?: "INR",
+                        logoUrl = result.getString("logo_file_name"),
+                    )
+                }
+            }
+        }
+    }
+
+    private fun Connection.resolvePublicWorkspaceAccess(workspaceId: String): DashboardWorkspaceAccess? {
+        val cleanWorkspaceId = workspaceId.cleanUuidOrNull() ?: return null
+        val sql = """
+            select
+                id::text as workspace_id,
+                owner_user_id::text as user_id,
+                currency
+            from business_workspaces
+            where id = ?::uuid
+              and onboarding_completed_at is not null
+            limit 1
+        """.trimIndent()
+        return prepareStatement(sql).use { statement ->
+            statement.setString(1, cleanWorkspaceId)
+            statement.executeQuery().use { result ->
+                if (!result.next()) {
+                    null
+                } else {
+                    DashboardWorkspaceAccess(
+                        userId = result.getString("user_id"),
+                        workspaceId = result.getString("workspace_id"),
+                        role = "public_catalog",
+                        currency = result.getString("currency") ?: "INR",
+                    )
+                }
+            }
+        }
+    }
+
+    private fun Connection.listPublicCatalogProducts(workspaceId: String): List<PublicCatalogProductResponse> {
+        val sql = """
+            select
+                id::text,
+                name,
+                description,
+                unit,
+                selling_price,
+                currency,
+                tax_rate,
+                prices_include_tax,
+                track_stock,
+                stock_quantity
+            from products
+            where workspace_id = ?::uuid
+              and status = 'active'
+              and (track_stock = false or stock_quantity > 0)
+            order by name asc
+            limit 200
+        """.trimIndent()
+        return prepareStatement(sql).use { statement ->
+            statement.setString(1, workspaceId)
+            statement.executeQuery().use { result ->
+                buildList {
+                    while (result.next()) {
+                        val trackStock = result.getBoolean("track_stock")
+                        val stockQuantity = result.getBigDecimal("stock_quantity") ?: BigDecimal.ZERO
+                        add(
+                            PublicCatalogProductResponse(
+                                id = result.getString("id"),
+                                name = result.getString("name"),
+                                description = result.getString("description"),
+                                unit = result.getString("unit"),
+                                sellingPrice = result.getBigDecimal("selling_price").moneyString(),
+                                currency = result.getString("currency") ?: "INR",
+                                taxRate = result.getBigDecimal("tax_rate").decimalString(),
+                                pricesIncludeTax = result.getBoolean("prices_include_tax"),
+                                trackStock = trackStock,
+                                stockQuantity = stockQuantity.decimalString(),
+                                inStock = !trackStock || stockQuantity > BigDecimal.ZERO,
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private fun Connection.findCustomerByPhone(
+        workspaceId: String,
+        phoneNumber: String,
+    ): CustomerResponse? {
+        val phone = phoneNumber.cleanOptional() ?: return null
+        val sql = """
+            select *
+            from customers
+            where workspace_id = ?::uuid
+              and status = 'active'
+              and phone_number = ?
+            order by created_at desc
+            limit 1
+        """.trimIndent()
+        return prepareStatement(sql).use { statement ->
+            statement.setString(1, workspaceId)
+            statement.setString(2, phone)
+            statement.executeQuery().use { result ->
+                if (result.next()) result.toCustomerResponse() else null
+            }
+        }
+    }
+
+    private fun Connection.publicOrderItems(
+        workspaceId: String,
+        request: PublicCatalogOrderRequest,
+    ): List<OrderItemRequest> =
+        request.items
+            .take(50)
+            .mapNotNull { requestedItem ->
+                val productId = requestedItem.productId.cleanUuidOrNull() ?: return@mapNotNull null
+                val quantity = requestedItem.quantity.decimalOrZero()
+                    .takeIf { it > BigDecimal.ZERO }
+                    ?: BigDecimal.ONE
+                val product = publicOrderProduct(workspaceId, productId) ?: return@mapNotNull null
+                if (product.trackStock && product.stockQuantity.decimalOrZero() <= BigDecimal.ZERO) {
+                    return@mapNotNull null
+                }
+                OrderItemRequest(
+                    productId = product.id,
+                    description = product.name,
+                    quantity = quantity.decimalString(),
+                    unitPrice = product.sellingPrice,
+                    taxRate = product.taxRate,
+                )
+            }
+
+    private fun Connection.publicOrderProduct(
+        workspaceId: String,
+        productId: String,
+    ): PublicCatalogProductResponse? {
+        val sql = """
+            select
+                id::text,
+                name,
+                description,
+                unit,
+                selling_price,
+                currency,
+                tax_rate,
+                prices_include_tax,
+                track_stock,
+                stock_quantity
+            from products
+            where id = ?::uuid
+              and workspace_id = ?::uuid
+              and status = 'active'
+            limit 1
+        """.trimIndent()
+        return prepareStatement(sql).use { statement ->
+            statement.setString(1, productId)
+            statement.setString(2, workspaceId)
+            statement.executeQuery().use { result ->
+                if (!result.next()) {
+                    null
+                } else {
+                    val trackStock = result.getBoolean("track_stock")
+                    val stockQuantity = result.getBigDecimal("stock_quantity") ?: BigDecimal.ZERO
+                    PublicCatalogProductResponse(
+                        id = result.getString("id"),
+                        name = result.getString("name"),
+                        description = result.getString("description"),
+                        unit = result.getString("unit"),
+                        sellingPrice = result.getBigDecimal("selling_price").moneyString(),
+                        currency = result.getString("currency") ?: "INR",
+                        taxRate = result.getBigDecimal("tax_rate").decimalString(),
+                        pricesIncludeTax = result.getBoolean("prices_include_tax"),
+                        trackStock = trackStock,
+                        stockQuantity = stockQuantity.decimalString(),
+                        inStock = !trackStock || stockQuantity > BigDecimal.ZERO,
+                    )
+                }
             }
         }
     }
