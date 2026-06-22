@@ -25,6 +25,9 @@ data class AppConfig(
     val firebaseAuthConfigured: Boolean
         get() = !firebaseProjectId.isNullOrBlank()
 
+    val firebaseMessagingConfigured: Boolean
+        get() = firebaseAuthConfigured
+
     val firebaseStorageConfigured: Boolean
         get() = firebaseAuthConfigured && !firebaseStorageBucket.isNullOrBlank()
 

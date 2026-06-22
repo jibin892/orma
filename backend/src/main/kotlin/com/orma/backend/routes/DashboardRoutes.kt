@@ -20,6 +20,7 @@ import com.orma.backend.models.ProductRequest
 import com.orma.backend.models.StockAdjustmentRequest
 import com.orma.backend.models.SupplierListResponse
 import com.orma.backend.models.SupplierRequest
+import com.orma.backend.notifications.OrderNotificationService
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.request.receive
@@ -32,6 +33,7 @@ import io.ktor.server.routing.put
 fun Route.dashboardRoutes(
     config: AppConfig,
     dashboardRepository: DashboardRepository?,
+    orderNotificationService: OrderNotificationService?,
 ) {
     get("/public/workspaces/{workspaceId}/catalog") {
         val repository = dashboardRepository ?: return@get call.dashboardDatabaseNotConfigured()
@@ -66,7 +68,10 @@ fun Route.dashboardRoutes(
             return@post
         }
         when (val result = repository.createPublicCatalogOrder(workspaceId, request)) {
-            is PublicCatalogOrderSubmitResult.Success -> call.respond(result.response)
+            is PublicCatalogOrderSubmitResult.Success -> {
+                orderNotificationService?.notifyOrderCreated(result.response.order)
+                call.respond(result.response)
+            }
             PublicCatalogOrderSubmitResult.WorkspaceNotFound -> call.publicCatalogNotFound()
             PublicCatalogOrderSubmitResult.ItemsUnavailable -> call.respondValidation(
                 code = "public_items_unavailable",
@@ -238,7 +243,11 @@ fun Route.dashboardRoutes(
             call.respondValidation("order_items_required", "Add at least one item before creating the order.")
             return@post
         }
-        call.respondWorkspaceResult(repository.createOrder(firebaseUser, request))
+        val order = repository.createOrder(firebaseUser, request)
+        if (order != null) {
+            orderNotificationService?.notifyOrderCreated(order)
+        }
+        call.respondWorkspaceResult(order)
     }
 
     get("/orders/{id}") {

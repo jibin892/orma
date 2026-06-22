@@ -230,7 +230,13 @@ fun Route.onboardingRoutes(
         val request = call.receive<NotificationPreferenceRequest>()
         val firebaseUser = call.verifiedFirebaseUser(config) ?: return@post
 
-        val session = repository.updateNotificationPreference(firebaseUser, request.enabled)
+        val session = repository.updateNotificationPreference(
+            firebaseUser = firebaseUser,
+            enabled = request.enabled,
+            deviceToken = request.deviceToken,
+            platform = request.platform,
+            deviceName = request.deviceName,
+        )
         call.respond(session.toMutationResponse(config))
     }
 }

@@ -15,6 +15,7 @@ data class HealthResponse(
     val environment: String,
     val databaseConfigured: Boolean,
     val firebaseAuthConfigured: Boolean,
+    val firebaseMessagingConfigured: Boolean,
     val firebaseStorageConfigured: Boolean,
     val mediaStorageProvider: String,
     val mediaStorageConfigured: Boolean,
@@ -163,6 +164,9 @@ data class TeamInviteListItemResponse(
 @Serializable
 data class NotificationPreferenceRequest(
     val enabled: Boolean,
+    val deviceToken: String? = null,
+    val platform: String? = null,
+    val deviceName: String? = null,
 )
 
 @Serializable

@@ -5,6 +5,7 @@ import com.orma.backend.db.DashboardRepository
 import com.orma.backend.db.GstinRepository
 import com.orma.backend.db.OnboardingRepository
 import com.orma.backend.models.ApiInfoResponse
+import com.orma.backend.notifications.OrderNotificationService
 import com.orma.backend.routes.authRoutes
 import com.orma.backend.routes.dashboardRoutes
 import com.orma.backend.routes.gstinRoutes
@@ -21,6 +22,7 @@ fun Application.configureRouting(
     onboardingRepository: OnboardingRepository?,
     dashboardRepository: DashboardRepository?,
     gstinRepository: GstinRepository?,
+    orderNotificationService: OrderNotificationService?,
 ) {
     routing {
         get("/") {
@@ -35,7 +37,7 @@ fun Application.configureRouting(
         healthRoutes(config)
         authRoutes(config, onboardingRepository)
         onboardingRoutes(config, onboardingRepository)
-        dashboardRoutes(config, dashboardRepository)
+        dashboardRoutes(config, dashboardRepository, orderNotificationService)
         mediaRoutes(config, onboardingRepository)
         gstinRoutes(config, gstinRepository)
     }

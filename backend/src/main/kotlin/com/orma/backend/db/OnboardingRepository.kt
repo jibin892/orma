@@ -321,6 +321,9 @@ class OnboardingRepository(
     suspend fun updateNotificationPreference(
         firebaseUser: VerifiedFirebaseUser,
         enabled: Boolean,
+        deviceToken: String? = null,
+        platform: String? = null,
+        deviceName: String? = null,
     ): OnboardingSessionRecord = withContext(Dispatchers.IO) {
         dataSource.connection.use { connection ->
             val user = connection.upsertUser(
@@ -332,6 +335,17 @@ class OnboardingRepository(
             )
             val updatedUser = connection.updateNotificationPreference(user.id, enabled)
             val workspace = connection.findPrimaryWorkspace(updatedUser.id)
+            if (!enabled) {
+                connection.disableNotificationDeviceTokens(updatedUser.id)
+            } else if (workspace != null) {
+                connection.upsertNotificationDeviceToken(
+                    userId = updatedUser.id,
+                    workspaceId = workspace.id,
+                    token = deviceToken,
+                    platform = platform,
+                    deviceName = deviceName,
+                )
+            }
             updatedUser.toSession(workspace, null)
         }
     }
@@ -982,6 +996,55 @@ class OnboardingRepository(
                 result.next()
                 result.toUserRecord()
             }
+        }
+    }
+
+    private fun Connection.upsertNotificationDeviceToken(
+        userId: String,
+        workspaceId: String,
+        token: String?,
+        platform: String?,
+        deviceName: String?,
+    ) {
+        val cleanToken = token?.trim()?.takeIf { it.isNotBlank() } ?: return
+        val cleanPlatform = platform?.trim()?.lowercase()?.takeIf { it.isNotBlank() } ?: "unknown"
+        val cleanDeviceName = deviceName?.trim()?.takeIf { it.isNotBlank() }?.take(120)
+        prepareStatement(
+            """
+            insert into notification_device_tokens (
+                user_id, workspace_id, token, platform, device_name, enabled,
+                last_seen_at, updated_at
+            )
+            values (?::uuid, ?::uuid, ?, ?, ?, true, now(), now())
+            on conflict (token) do update set
+                user_id = excluded.user_id,
+                workspace_id = excluded.workspace_id,
+                platform = excluded.platform,
+                device_name = excluded.device_name,
+                enabled = true,
+                last_seen_at = now(),
+                updated_at = now()
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setString(1, userId)
+            statement.setString(2, workspaceId)
+            statement.setString(3, cleanToken)
+            statement.setString(4, cleanPlatform)
+            statement.setNullableString(5, cleanDeviceName)
+            statement.executeUpdate()
+        }
+    }
+
+    private fun Connection.disableNotificationDeviceTokens(userId: String) {
+        prepareStatement(
+            """
+            update notification_device_tokens
+            set enabled = false, updated_at = now()
+            where user_id = ?::uuid
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setString(1, userId)
+            statement.executeUpdate()
         }
     }
 

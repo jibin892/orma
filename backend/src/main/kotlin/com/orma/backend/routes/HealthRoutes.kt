@@ -14,6 +14,7 @@ fun Route.healthRoutes(config: AppConfig) {
                 environment = config.environment,
                 databaseConfigured = config.databaseConfigured,
                 firebaseAuthConfigured = config.firebaseAuthConfigured,
+                firebaseMessagingConfigured = config.firebaseMessagingConfigured,
                 firebaseStorageConfigured = config.firebaseStorageConfigured,
                 mediaStorageProvider = config.activeMediaStorageProvider,
                 mediaStorageConfigured = config.mediaStorageConfigured,
