@@ -7,7 +7,6 @@ import com.orma.backend.auth.FirebaseAppProvider
 import com.orma.backend.config.AppConfig
 import com.orma.backend.models.OrderResponse
 import java.sql.Connection
-import java.sql.PreparedStatement
 import java.sql.ResultSet
 import javax.sql.DataSource
 import kotlinx.coroutines.Dispatchers
