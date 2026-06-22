@@ -20,6 +20,7 @@ fun Route.healthRoutes(config: AppConfig) {
                 mediaStorageConfigured = config.mediaStorageConfigured,
                 cloudinaryConfigured = config.cloudinaryConfigured,
                 gstinCheckConfigured = config.gstinCheckConfigured,
+                metaWebhookConfigured = config.metaWebhookConfigured,
             ),
         )
     }

@@ -21,6 +21,7 @@ data class HealthResponse(
     val mediaStorageConfigured: Boolean,
     val cloudinaryConfigured: Boolean,
     val gstinCheckConfigured: Boolean,
+    val metaWebhookConfigured: Boolean = false,
 )
 
 @Serializable
@@ -554,4 +555,62 @@ data class PrinterProfileResponse(
     val status: String,
     val createdAt: String,
     val updatedAt: String,
+)
+
+@Serializable
+data class MetaConnectionRequest(
+    val status: String = "connected",
+    val businessId: String? = null,
+    val whatsappBusinessAccountId: String? = null,
+    val phoneNumberId: String? = null,
+    val catalogId: String? = null,
+    val pageId: String? = null,
+    val instagramBusinessAccountId: String? = null,
+    val scopes: List<String> = emptyList(),
+)
+
+@Serializable
+data class MetaConnectionStatusResponse(
+    val connected: Boolean,
+    val status: String,
+    val businessId: String? = null,
+    val whatsappBusinessAccountId: String? = null,
+    val phoneNumberId: String? = null,
+    val catalogId: String? = null,
+    val pageId: String? = null,
+    val instagramBusinessAccountId: String? = null,
+    val scopes: List<String> = emptyList(),
+    val lastSyncAt: String? = null,
+    val lastError: String? = null,
+    val productsReady: Int = 0,
+    val productsBlocked: Int = 0,
+    val productsSynced: Int = 0,
+    val productReadiness: List<MetaProductReadinessResponse> = emptyList(),
+)
+
+@Serializable
+data class MetaProductReadinessResponse(
+    val productId: String,
+    val productName: String,
+    val ready: Boolean,
+    val status: String,
+    val issues: List<String> = emptyList(),
+    val metaProductId: String? = null,
+    val lastSyncAt: String? = null,
+)
+
+@Serializable
+data class MetaCatalogSyncResponse(
+    val connected: Boolean,
+    val productsReady: Int,
+    val productsBlocked: Int,
+    val productsSynced: Int,
+    val productReadiness: List<MetaProductReadinessResponse> = emptyList(),
+    val message: String,
+)
+
+@Serializable
+data class MetaWebhookEventResponse(
+    val id: String,
+    val status: String,
 )

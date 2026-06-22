@@ -3,6 +3,7 @@ package com.orma.backend.plugins
 import com.orma.backend.config.AppConfig
 import com.orma.backend.db.DashboardRepository
 import com.orma.backend.db.GstinRepository
+import com.orma.backend.db.MetaIntegrationRepository
 import com.orma.backend.db.OnboardingRepository
 import com.orma.backend.models.ApiInfoResponse
 import com.orma.backend.notifications.OrderNotificationService
@@ -11,6 +12,7 @@ import com.orma.backend.routes.dashboardRoutes
 import com.orma.backend.routes.gstinRoutes
 import com.orma.backend.routes.healthRoutes
 import com.orma.backend.routes.mediaRoutes
+import com.orma.backend.routes.metaIntegrationRoutes
 import com.orma.backend.routes.onboardingRoutes
 import io.ktor.server.application.Application
 import io.ktor.server.response.respond
@@ -22,6 +24,7 @@ fun Application.configureRouting(
     onboardingRepository: OnboardingRepository?,
     dashboardRepository: DashboardRepository?,
     gstinRepository: GstinRepository?,
+    metaIntegrationRepository: MetaIntegrationRepository?,
     orderNotificationService: OrderNotificationService?,
 ) {
     routing {
@@ -40,5 +43,6 @@ fun Application.configureRouting(
         dashboardRoutes(config, dashboardRepository, orderNotificationService)
         mediaRoutes(config, onboardingRepository)
         gstinRoutes(config, gstinRepository)
+        metaIntegrationRoutes(config, metaIntegrationRepository)
     }
 }

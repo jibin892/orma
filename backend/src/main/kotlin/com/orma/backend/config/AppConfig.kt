@@ -17,6 +17,7 @@ data class AppConfig(
     val cloudinaryApiSecret: String?,
     val gstinCheckApiKey: String?,
     val gstinCheckBaseUrl: String,
+    val metaWebhookVerifyToken: String?,
     val allowedOrigins: List<String>,
 ) {
     val databaseConfigured: Boolean
@@ -56,6 +57,9 @@ data class AppConfig(
     val gstinCheckConfigured: Boolean
         get() = !gstinCheckApiKey.isNullOrBlank()
 
+    val metaWebhookConfigured: Boolean
+        get() = !metaWebhookVerifyToken.isNullOrBlank()
+
     companion object {
         fun load(env: Map<String, String> = System.getenv()): AppConfig {
             val firebaseProjectId = env["FIREBASE_PROJECT_ID"].orNullIfBlank()
@@ -78,6 +82,7 @@ data class AppConfig(
                 gstinCheckApiKey = env["GSTINCHECK_API_KEY"].orNullIfBlank(),
                 gstinCheckBaseUrl = env["GSTINCHECK_BASE_URL"].orEmpty()
                     .ifBlank { "https://sheet.gstincheck.co.in/check" },
+                metaWebhookVerifyToken = env["META_WEBHOOK_VERIFY_TOKEN"].orNullIfBlank(),
                 allowedOrigins = (
                     env["ALLOWED_ORIGINS"]
                         ?.split(",")
@@ -114,6 +119,7 @@ data class AppConfig(
             cloudinaryApiSecret = null,
             gstinCheckApiKey = null,
             gstinCheckBaseUrl = "https://sheet.gstincheck.co.in/check",
+            metaWebhookVerifyToken = null,
             allowedOrigins = listOf("*"),
         )
     }
