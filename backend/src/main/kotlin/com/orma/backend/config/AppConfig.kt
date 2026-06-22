@@ -75,13 +75,24 @@ data class AppConfig(
                 gstinCheckApiKey = env["GSTINCHECK_API_KEY"].orNullIfBlank(),
                 gstinCheckBaseUrl = env["GSTINCHECK_BASE_URL"].orEmpty()
                     .ifBlank { "https://sheet.gstincheck.co.in/check" },
-                allowedOrigins = env["ALLOWED_ORIGINS"]
-                    ?.split(",")
-                    ?.map { it.trim() }
-                    ?.filter { it.isNotBlank() }
-                    ?: listOf("http://localhost:8080"),
+                allowedOrigins = (
+                    env["ALLOWED_ORIGINS"]
+                        ?.split(",")
+                        ?.map { it.trim() }
+                        ?.filter { it.isNotBlank() }
+                        .orEmpty() + defaultAllowedOrigins
+                    ).distinct(),
             )
         }
+
+        private val defaultAllowedOrigins = listOf(
+            "http://localhost:8080",
+            "http://localhost:8081",
+            "http://localhost:8090",
+            "http://localhost:3000",
+            "https://orma-web-dist-dev-api.vercel.app",
+            "https://orma-web-dun.vercel.app",
+        )
 
         fun test(): AppConfig = AppConfig(
             host = "127.0.0.1",
