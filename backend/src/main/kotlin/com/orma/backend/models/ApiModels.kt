@@ -248,6 +248,64 @@ data class ProductListResponse(
 )
 
 @Serializable
+data class ProductImportTemplateResponse(
+    val fileName: String,
+    val columns: List<String>,
+    val requiredColumns: List<String>,
+    val csv: String,
+)
+
+@Serializable
+data class ProductImportCsvRequest(
+    val csv: String,
+)
+
+@Serializable
+data class ProductImportRequest(
+    val rows: List<ProductImportRowRequest>,
+)
+
+@Serializable
+data class ProductImportRowRequest(
+    val name: String,
+    val sku: String? = null,
+    val barcode: String? = null,
+    val description: String? = null,
+    val unit: String = "pcs",
+    val sellingPrice: String = "0",
+    val costPrice: String = "0",
+    val currency: String? = null,
+    val taxRate: String = "0",
+    val pricesIncludeTax: Boolean = false,
+    val stockQuantity: String = "0",
+    val reorderLevel: String = "0",
+    val trackStock: Boolean = true,
+    val supplierName: String? = null,
+)
+
+@Serializable
+data class ProductImportResponse(
+    val created: Int,
+    val skipped: Int,
+    val errors: List<ProductImportErrorResponse> = emptyList(),
+    val products: List<ProductResponse> = emptyList(),
+)
+
+@Serializable
+data class ProductImportErrorResponse(
+    val row: Int,
+    val message: String,
+)
+
+@Serializable
+data class ProductExportResponse(
+    val fileName: String,
+    val count: Int,
+    val csv: String,
+    val columns: List<String> = emptyList(),
+)
+
+@Serializable
 data class ProductRequest(
     val name: String,
     val sku: String? = null,
@@ -370,4 +428,41 @@ data class OrderItemResponse(
     val lineSubtotal: String,
     val lineTax: String,
     val lineTotal: String,
+)
+
+@Serializable
+data class PrinterProfileListResponse(
+    val printers: List<PrinterProfileResponse>,
+)
+
+@Serializable
+data class PrinterProfileRequest(
+    val name: String,
+    val connectionType: String = "mtp_usb",
+    val address: String? = null,
+    val paperWidthMm: Int = 80,
+    val dpi: Int = 203,
+    val supportsReceipts: Boolean = true,
+    val supportsBarcodes: Boolean = true,
+    val isDefaultReceipt: Boolean = false,
+    val isDefaultBarcode: Boolean = false,
+    val notes: String? = null,
+)
+
+@Serializable
+data class PrinterProfileResponse(
+    val id: String,
+    val name: String,
+    val connectionType: String,
+    val address: String? = null,
+    val paperWidthMm: Int,
+    val dpi: Int,
+    val supportsReceipts: Boolean,
+    val supportsBarcodes: Boolean,
+    val isDefaultReceipt: Boolean,
+    val isDefaultBarcode: Boolean,
+    val notes: String? = null,
+    val status: String,
+    val createdAt: String,
+    val updatedAt: String,
 )

@@ -1,6 +1,7 @@
 package com.orma.backend.routes
 
 import com.orma.backend.config.AppConfig
+import com.orma.backend.db.DashboardQueryFilters
 import com.orma.backend.db.DashboardRepository
 import com.orma.backend.models.CustomerListResponse
 import com.orma.backend.models.CustomerRequest
@@ -8,6 +9,10 @@ import com.orma.backend.models.ErrorResponse
 import com.orma.backend.models.OrderListResponse
 import com.orma.backend.models.OrderRequest
 import com.orma.backend.models.OrderStatusRequest
+import com.orma.backend.models.PrinterProfileListResponse
+import com.orma.backend.models.PrinterProfileRequest
+import com.orma.backend.models.ProductImportCsvRequest
+import com.orma.backend.models.ProductImportRequest
 import com.orma.backend.models.ProductListResponse
 import com.orma.backend.models.ProductRequest
 import com.orma.backend.models.StockAdjustmentRequest
@@ -35,7 +40,7 @@ fun Route.dashboardRoutes(
     get("/customers") {
         val repository = dashboardRepository ?: return@get call.dashboardDatabaseNotConfigured()
         val firebaseUser = call.verifiedFirebaseUser(config) ?: return@get
-        val customers = repository.customers(firebaseUser) ?: return@get call.workspaceNotFound()
+        val customers = repository.customers(firebaseUser, call.dashboardFilters()) ?: return@get call.workspaceNotFound()
         call.respond(CustomerListResponse(customers))
     }
 
@@ -65,7 +70,7 @@ fun Route.dashboardRoutes(
     get("/suppliers") {
         val repository = dashboardRepository ?: return@get call.dashboardDatabaseNotConfigured()
         val firebaseUser = call.verifiedFirebaseUser(config) ?: return@get
-        val suppliers = repository.suppliers(firebaseUser) ?: return@get call.workspaceNotFound()
+        val suppliers = repository.suppliers(firebaseUser, call.dashboardFilters()) ?: return@get call.workspaceNotFound()
         call.respond(SupplierListResponse(suppliers))
     }
 
@@ -95,8 +100,48 @@ fun Route.dashboardRoutes(
     get("/products") {
         val repository = dashboardRepository ?: return@get call.dashboardDatabaseNotConfigured()
         val firebaseUser = call.verifiedFirebaseUser(config) ?: return@get
-        val products = repository.products(firebaseUser) ?: return@get call.workspaceNotFound()
+        val products = repository.products(firebaseUser, call.dashboardFilters()) ?: return@get call.workspaceNotFound()
         call.respond(ProductListResponse(products))
+    }
+
+    get("/products/export") {
+        val repository = dashboardRepository ?: return@get call.dashboardDatabaseNotConfigured()
+        val firebaseUser = call.verifiedFirebaseUser(config) ?: return@get
+        val export = repository.exportProducts(firebaseUser, call.dashboardFilters()) ?: return@get call.workspaceNotFound()
+        call.respond(export)
+    }
+
+    get("/products/import-template") {
+        val repository = dashboardRepository ?: return@get call.dashboardDatabaseNotConfigured()
+        val firebaseUser = call.verifiedFirebaseUser(config) ?: return@get
+        val template = repository.productImportTemplate(firebaseUser) ?: return@get call.workspaceNotFound()
+        call.respond(template)
+    }
+
+    post("/products/import-csv") {
+        val repository = dashboardRepository ?: return@post call.dashboardDatabaseNotConfigured()
+        val firebaseUser = call.verifiedFirebaseUser(config) ?: return@post
+        val request = call.receive<ProductImportCsvRequest>()
+        if (request.csv.isBlank()) {
+            call.respondValidation("product_import_empty", "Paste or upload a product CSV before importing.")
+            return@post
+        }
+        call.respondWorkspaceResult(repository.importProductsCsv(firebaseUser, request.csv))
+    }
+
+    post("/products/import") {
+        val repository = dashboardRepository ?: return@post call.dashboardDatabaseNotConfigured()
+        val firebaseUser = call.verifiedFirebaseUser(config) ?: return@post
+        val request = call.receive<ProductImportRequest>()
+        if (request.rows.isEmpty()) {
+            call.respondValidation("product_import_empty", "Paste at least one product row before importing.")
+            return@post
+        }
+        if (request.rows.size > 500) {
+            call.respondValidation("product_import_limit", "Import up to 500 product rows at a time.")
+            return@post
+        }
+        call.respondWorkspaceResult(repository.importProducts(firebaseUser, request))
     }
 
     post("/products") {
@@ -137,7 +182,7 @@ fun Route.dashboardRoutes(
     get("/orders") {
         val repository = dashboardRepository ?: return@get call.dashboardDatabaseNotConfigured()
         val firebaseUser = call.verifiedFirebaseUser(config) ?: return@get
-        val orders = repository.orders(firebaseUser) ?: return@get call.workspaceNotFound()
+        val orders = repository.orders(firebaseUser, call.dashboardFilters()) ?: return@get call.workspaceNotFound()
         call.respond(OrderListResponse(orders))
     }
 
@@ -182,7 +227,53 @@ fun Route.dashboardRoutes(
         }
         call.respondWorkspaceResult(repository.updateOrderStatus(firebaseUser, orderId, request.status))
     }
+
+    get("/printers") {
+        val repository = dashboardRepository ?: return@get call.dashboardDatabaseNotConfigured()
+        val firebaseUser = call.verifiedFirebaseUser(config) ?: return@get
+        val printers = repository.printers(firebaseUser, call.dashboardFilters()) ?: return@get call.workspaceNotFound()
+        call.respond(PrinterProfileListResponse(printers))
+    }
+
+    post("/printers") {
+        val repository = dashboardRepository ?: return@post call.dashboardDatabaseNotConfigured()
+        val firebaseUser = call.verifiedFirebaseUser(config) ?: return@post
+        val request = call.receive<PrinterProfileRequest>()
+        if (request.name.isBlank()) {
+            call.respondValidation("printer_name_required", "Enter the printer name.")
+            return@post
+        }
+        call.respondWorkspaceResult(repository.createPrinter(firebaseUser, request))
+    }
+
+    put("/printers/{id}") {
+        val repository = dashboardRepository ?: return@put call.dashboardDatabaseNotConfigured()
+        val firebaseUser = call.verifiedFirebaseUser(config) ?: return@put
+        val printerId = call.parameters["id"].orEmpty()
+        val request = call.receive<PrinterProfileRequest>()
+        if (request.name.isBlank()) {
+            call.respondValidation("printer_name_required", "Enter the printer name.")
+            return@put
+        }
+        call.respondWorkspaceResult(repository.updatePrinter(firebaseUser, printerId, request))
+    }
 }
+
+private fun ApplicationCall.dashboardFilters(): DashboardQueryFilters {
+    val query = request.queryParameters
+    return DashboardQueryFilters(
+        query = query["q"],
+        status = query["status"],
+        limit = query["limit"]?.toIntOrNull() ?: 80,
+        lowStockOnly = query["lowStock"].toBooleanQuery(),
+        supplierId = query["supplierId"],
+        barcode = query["barcode"],
+        scheduledOnly = query["scheduledOnly"].toBooleanQuery(),
+    )
+}
+
+private fun String?.toBooleanQuery(): Boolean =
+    this?.trim()?.lowercase() in setOf("true", "1", "yes")
 
 private suspend fun ApplicationCall.respondWorkspaceResult(value: Any?) {
     if (value == null) {
