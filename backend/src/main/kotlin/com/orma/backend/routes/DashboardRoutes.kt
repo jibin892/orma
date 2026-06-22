@@ -12,6 +12,10 @@ import com.orma.backend.models.OrderRequest
 import com.orma.backend.models.OrderStatusRequest
 import com.orma.backend.models.PrinterProfileListResponse
 import com.orma.backend.models.PrinterProfileRequest
+import com.orma.backend.models.ProductCategoryListResponse
+import com.orma.backend.models.ProductCategoryRequest
+import com.orma.backend.models.ProductOfferListResponse
+import com.orma.backend.models.ProductOfferRequest
 import com.orma.backend.models.PublicCatalogOrderRequest
 import com.orma.backend.models.ProductImportCsvRequest
 import com.orma.backend.models.ProductImportRequest
@@ -20,6 +24,8 @@ import com.orma.backend.models.ProductRequest
 import com.orma.backend.models.StockAdjustmentRequest
 import com.orma.backend.models.SupplierListResponse
 import com.orma.backend.models.SupplierRequest
+import com.orma.backend.models.WorkspacePaymentMethodListResponse
+import com.orma.backend.models.WorkspacePaymentMethodRequest
 import com.orma.backend.notifications.OrderNotificationService
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
@@ -151,6 +157,42 @@ fun Route.dashboardRoutes(
         val firebaseUser = call.verifiedFirebaseUser(config) ?: return@get
         val products = repository.products(firebaseUser, call.dashboardFilters()) ?: return@get call.workspaceNotFound()
         call.respond(ProductListResponse(products))
+    }
+
+    get("/product-categories") {
+        val repository = dashboardRepository ?: return@get call.dashboardDatabaseNotConfigured()
+        val firebaseUser = call.verifiedFirebaseUser(config) ?: return@get
+        val categories = repository.productCategories(firebaseUser, call.dashboardFilters()) ?: return@get call.workspaceNotFound()
+        call.respond(ProductCategoryListResponse(categories))
+    }
+
+    post("/product-categories") {
+        val repository = dashboardRepository ?: return@post call.dashboardDatabaseNotConfigured()
+        val firebaseUser = call.verifiedFirebaseUser(config) ?: return@post
+        val request = call.receive<ProductCategoryRequest>()
+        if (request.name.isBlank()) {
+            call.respondValidation("product_category_name_required", "Enter the category name.")
+            return@post
+        }
+        call.respondWorkspaceResult(repository.createProductCategory(firebaseUser, request))
+    }
+
+    get("/offers") {
+        val repository = dashboardRepository ?: return@get call.dashboardDatabaseNotConfigured()
+        val firebaseUser = call.verifiedFirebaseUser(config) ?: return@get
+        val offers = repository.productOffers(firebaseUser, call.dashboardFilters()) ?: return@get call.workspaceNotFound()
+        call.respond(ProductOfferListResponse(offers))
+    }
+
+    post("/offers") {
+        val repository = dashboardRepository ?: return@post call.dashboardDatabaseNotConfigured()
+        val firebaseUser = call.verifiedFirebaseUser(config) ?: return@post
+        val request = call.receive<ProductOfferRequest>()
+        if (request.name.isBlank()) {
+            call.respondValidation("offer_name_required", "Enter the offer name.")
+            return@post
+        }
+        call.respondWorkspaceResult(repository.createProductOffer(firebaseUser, request))
     }
 
     get("/products/export") {
@@ -286,6 +328,28 @@ fun Route.dashboardRoutes(
         val firebaseUser = call.verifiedFirebaseUser(config) ?: return@get
         val printers = repository.printers(firebaseUser, call.dashboardFilters()) ?: return@get call.workspaceNotFound()
         call.respond(PrinterProfileListResponse(printers))
+    }
+
+    get("/payment-methods") {
+        val repository = dashboardRepository ?: return@get call.dashboardDatabaseNotConfigured()
+        val firebaseUser = call.verifiedFirebaseUser(config) ?: return@get
+        val methods = repository.paymentMethods(firebaseUser, call.dashboardFilters()) ?: return@get call.workspaceNotFound()
+        call.respond(WorkspacePaymentMethodListResponse(methods))
+    }
+
+    post("/payment-methods") {
+        val repository = dashboardRepository ?: return@post call.dashboardDatabaseNotConfigured()
+        val firebaseUser = call.verifiedFirebaseUser(config) ?: return@post
+        val request = call.receive<WorkspacePaymentMethodRequest>()
+        if (request.label.isBlank()) {
+            call.respondValidation("payment_label_required", "Enter a payment label.")
+            return@post
+        }
+        if (request.upiId.isBlank()) {
+            call.respondValidation("payment_upi_required", "Enter a UPI ID.")
+            return@post
+        }
+        call.respondWorkspaceResult(repository.createPaymentMethod(firebaseUser, request))
     }
 
     post("/printers") {

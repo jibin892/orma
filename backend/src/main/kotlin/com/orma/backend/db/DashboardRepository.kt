@@ -11,11 +11,18 @@ import com.orma.backend.models.OrderRequest
 import com.orma.backend.models.OrderResponse
 import com.orma.backend.models.PrinterProfileRequest
 import com.orma.backend.models.PrinterProfileResponse
+import com.orma.backend.models.ProductCategoryRequest
+import com.orma.backend.models.ProductCategoryResponse
+import com.orma.backend.models.ProductOfferRequest
+import com.orma.backend.models.ProductOfferResponse
 import com.orma.backend.models.PublicCatalogOrderRequest
 import com.orma.backend.models.PublicCatalogOrderResponse
+import com.orma.backend.models.PublicCatalogPaymentMethodResponse
 import com.orma.backend.models.PublicCatalogProductResponse
 import com.orma.backend.models.PublicCatalogResponse
 import com.orma.backend.models.PublicCatalogWorkspaceResponse
+import com.orma.backend.models.PublicCatalogCategoryResponse
+import com.orma.backend.models.PublicCatalogOfferResponse
 import com.orma.backend.models.ProductExportResponse
 import com.orma.backend.models.ProductImportErrorResponse
 import com.orma.backend.models.ProductImportRequest
@@ -28,6 +35,8 @@ import com.orma.backend.models.StockAdjustmentRequest
 import com.orma.backend.models.StockMovementResponse
 import com.orma.backend.models.SupplierRequest
 import com.orma.backend.models.SupplierResponse
+import com.orma.backend.models.WorkspacePaymentMethodRequest
+import com.orma.backend.models.WorkspacePaymentMethodResponse
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.sql.Connection
@@ -96,6 +105,8 @@ class DashboardRepository(
             val workspace = connection.findPublicCatalogWorkspace(workspaceId) ?: return@withContext null
             PublicCatalogResponse(
                 workspace = workspace,
+                categories = connection.listPublicCatalogCategories(workspace.id),
+                paymentMethods = connection.listPublicCatalogPaymentMethods(workspace.id),
                 products = connection.listPublicCatalogProducts(workspace.id),
             )
         }
@@ -128,25 +139,45 @@ class DashboardRepository(
                         notes = "Created from public catalog.",
                     ),
                 )
-                val publicNote = request.notes.cleanOptional()
-                    ?.let { "Public catalog request. $it" }
-                    ?: "Public catalog request."
+                val fulfillment = request.fulfillmentType.cleanFulfillmentType()
+                val paymentMode = request.paymentMode.cleanPaymentMode()
+                val publicNote = buildList {
+                    add("Public catalog request.")
+                    add("Fulfillment: ${fulfillment.replace('_', ' ')}.")
+                    add("Payment: ${paymentMode.replace('_', ' ')}.")
+                    request.notes.cleanOptional()?.let { add(it) }
+                }.joinToString(" ")
                 val order = connection.insertOrder(
                     access = access,
                     request = OrderRequest(
                         customerId = customer.id,
                         status = "draft",
+                        scheduledAt = request.scheduledAt?.cleanOptional(),
                         paidTotal = "0",
                         currency = access.currency,
                         notes = publicNote,
+                        fulfillmentType = fulfillment,
+                        paymentMode = paymentMode,
+                        source = "public_catalog",
                         items = publicItems,
                     ),
                 )
+                val paymentMethod = if (paymentMode == "upi") {
+                    connection.defaultPublicCatalogPaymentMethod(access.workspaceId)
+                } else {
+                    null
+                }
                 connection.commit()
                 PublicCatalogOrderSubmitResult.Success(
                     PublicCatalogOrderResponse(
                         message = "Request received. The business will review it shortly.",
                         order = order,
+                        paymentLink = paymentMethod?.toUpiPaymentLink(
+                            amount = order.total,
+                            currency = order.currency,
+                            note = "ORMA ${order.orderNumber}",
+                        ),
+                        paymentMethod = paymentMethod,
                     ),
                 )
             } catch (error: Throwable) {
@@ -282,6 +313,79 @@ class DashboardRepository(
         dataSource.connection.use { connection ->
             val access = connection.resolveWorkspaceAccess(firebaseUser) ?: return@withContext null
             connection.updateSupplier(access.workspaceId, supplierId, request)
+        }
+    }
+
+    suspend fun productCategories(
+        firebaseUser: VerifiedFirebaseUser,
+        filters: DashboardQueryFilters = DashboardQueryFilters(),
+    ): List<ProductCategoryResponse>? = withContext(Dispatchers.IO) {
+        dataSource.connection.use { connection ->
+            val access = connection.resolveWorkspaceAccess(firebaseUser) ?: return@withContext null
+            connection.listProductCategories(access.workspaceId, filters)
+        }
+    }
+
+    suspend fun createProductCategory(
+        firebaseUser: VerifiedFirebaseUser,
+        request: ProductCategoryRequest,
+    ): ProductCategoryResponse? = withContext(Dispatchers.IO) {
+        dataSource.connection.use { connection ->
+            val access = connection.resolveWorkspaceAccess(firebaseUser) ?: return@withContext null
+            connection.insertProductCategory(access.workspaceId, request)
+        }
+    }
+
+    suspend fun productOffers(
+        firebaseUser: VerifiedFirebaseUser,
+        filters: DashboardQueryFilters = DashboardQueryFilters(),
+    ): List<ProductOfferResponse>? = withContext(Dispatchers.IO) {
+        dataSource.connection.use { connection ->
+            val access = connection.resolveWorkspaceAccess(firebaseUser) ?: return@withContext null
+            connection.listProductOffers(access.workspaceId, filters)
+        }
+    }
+
+    suspend fun createProductOffer(
+        firebaseUser: VerifiedFirebaseUser,
+        request: ProductOfferRequest,
+    ): ProductOfferResponse? = withContext(Dispatchers.IO) {
+        dataSource.connection.use { connection ->
+            val access = connection.resolveWorkspaceAccess(firebaseUser) ?: return@withContext null
+            connection.insertProductOffer(access.workspaceId, request)
+        }
+    }
+
+    suspend fun paymentMethods(
+        firebaseUser: VerifiedFirebaseUser,
+        filters: DashboardQueryFilters = DashboardQueryFilters(),
+    ): List<WorkspacePaymentMethodResponse>? = withContext(Dispatchers.IO) {
+        dataSource.connection.use { connection ->
+            val access = connection.resolveWorkspaceAccess(firebaseUser) ?: return@withContext null
+            connection.listPaymentMethods(access.workspaceId, filters)
+        }
+    }
+
+    suspend fun createPaymentMethod(
+        firebaseUser: VerifiedFirebaseUser,
+        request: WorkspacePaymentMethodRequest,
+    ): WorkspacePaymentMethodResponse? = withContext(Dispatchers.IO) {
+        dataSource.connection.use { connection ->
+            connection.autoCommit = false
+            try {
+                val access = connection.resolveWorkspaceAccess(firebaseUser) ?: run {
+                    connection.rollback()
+                    return@withContext null
+                }
+                val method = connection.insertPaymentMethod(access.workspaceId, request)
+                connection.commit()
+                method
+            } catch (error: Throwable) {
+                connection.rollback()
+                throw error
+            } finally {
+                connection.autoCommit = true
+            }
         }
     }
 
@@ -723,16 +827,23 @@ class DashboardRepository(
     private fun Connection.listPublicCatalogProducts(workspaceId: String): List<PublicCatalogProductResponse> {
         val sql = """
             select
-                id::text,
-                name,
-                description,
-                unit,
-                selling_price,
-                currency,
-                tax_rate,
-                prices_include_tax,
-                track_stock,
-                stock_quantity,
+                products.id::text,
+                products.category_id::text,
+                pc.name as category_name,
+                products.name,
+                products.description,
+                products.unit,
+                products.selling_price,
+                products.currency,
+                products.tax_rate,
+                products.prices_include_tax,
+                products.track_stock,
+                products.stock_quantity,
+                offer.id::text as offer_id,
+                offer.name as offer_name,
+                offer.description as offer_description,
+                offer.discount_type,
+                offer.discount_value,
                 (
                     select pi.storage_path
                     from product_images pi
@@ -743,10 +854,29 @@ class DashboardRepository(
                     limit 1
                 ) as image_storage_path
             from products
-            where workspace_id = ?::uuid
-              and status = 'active'
-              and (track_stock = false or stock_quantity > 0)
-            order by name asc
+            left join product_categories pc on pc.id = products.category_id and pc.status = 'active'
+            left join lateral (
+                select po.*
+                from product_offers po
+                where po.workspace_id = products.workspace_id
+                  and po.status = 'active'
+                  and (po.starts_at is null or po.starts_at <= now())
+                  and (po.ends_at is null or po.ends_at >= now())
+                  and (
+                    po.applies_to = 'all'
+                    or (po.applies_to = 'category' and po.category_id = products.category_id)
+                    or (po.applies_to = 'product' and po.product_id = products.id)
+                  )
+                order by
+                  case po.applies_to when 'product' then 0 when 'category' then 1 else 2 end,
+                  po.discount_value desc,
+                  po.created_at desc
+                limit 1
+            ) offer on true
+            where products.workspace_id = ?::uuid
+              and products.status = 'active'
+              and (products.track_stock = false or products.stock_quantity > 0)
+            order by coalesce(pc.sort_order, 999), coalesce(pc.name, ''), products.name asc
             limit 200
         """.trimIndent()
         return prepareStatement(sql).use { statement ->
@@ -757,23 +887,68 @@ class DashboardRepository(
                         val trackStock = result.getBoolean("track_stock")
                         val stockQuantity = result.getBigDecimal("stock_quantity") ?: BigDecimal.ZERO
                         add(
-                            PublicCatalogProductResponse(
+                            result.toPublicCatalogProductResponse(trackStock, stockQuantity),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private fun Connection.listPublicCatalogCategories(workspaceId: String): List<PublicCatalogCategoryResponse> {
+        val sql = """
+            select id::text, name, sort_order
+            from product_categories
+            where workspace_id = ?::uuid and status = 'active'
+            order by sort_order asc, name asc
+        """.trimIndent()
+        return prepareStatement(sql).use { statement ->
+            statement.setString(1, workspaceId)
+            statement.executeQuery().use { result ->
+                buildList {
+                    while (result.next()) {
+                        add(
+                            PublicCatalogCategoryResponse(
                                 id = result.getString("id"),
                                 name = result.getString("name"),
-                                description = result.getString("description"),
-                                unit = result.getString("unit"),
-                                sellingPrice = result.getBigDecimal("selling_price").moneyString(),
-                                currency = result.getString("currency") ?: "INR",
-                                taxRate = result.getBigDecimal("tax_rate").decimalString(),
-                                pricesIncludeTax = result.getBoolean("prices_include_tax"),
-                                trackStock = trackStock,
-                                stockQuantity = stockQuantity.decimalString(),
-                                inStock = !trackStock || stockQuantity > BigDecimal.ZERO,
-                                imageUrl = result.getString("image_storage_path").toDashboardMediaUrl(),
+                                sortOrder = result.getInt("sort_order"),
                             ),
                         )
                     }
                 }
+            }
+        }
+    }
+
+    private fun Connection.listPublicCatalogPaymentMethods(workspaceId: String): List<PublicCatalogPaymentMethodResponse> {
+        val sql = """
+            select id::text, type, label, upi_id, payee_name, is_default
+            from workspace_payment_methods
+            where workspace_id = ?::uuid and status = 'active'
+            order by is_default desc, created_at desc
+        """.trimIndent()
+        return prepareStatement(sql).use { statement ->
+            statement.setString(1, workspaceId)
+            statement.executeQuery().use { result ->
+                buildList {
+                    while (result.next()) add(result.toPublicCatalogPaymentMethodResponse())
+                }
+            }
+        }
+    }
+
+    private fun Connection.defaultPublicCatalogPaymentMethod(workspaceId: String): PublicCatalogPaymentMethodResponse? {
+        val sql = """
+            select id::text, type, label, upi_id, payee_name, is_default
+            from workspace_payment_methods
+            where workspace_id = ?::uuid and status = 'active' and type = 'upi'
+            order by is_default desc, created_at desc
+            limit 1
+        """.trimIndent()
+        return prepareStatement(sql).use { statement ->
+            statement.setString(1, workspaceId)
+            statement.executeQuery().use { result ->
+                if (result.next()) result.toPublicCatalogPaymentMethodResponse() else null
             }
         }
     }
@@ -820,7 +995,7 @@ class DashboardRepository(
                     productId = product.id,
                     description = product.name,
                     quantity = quantity.decimalString(),
-                    unitPrice = product.sellingPrice,
+                    unitPrice = product.offer?.finalPrice ?: product.sellingPrice,
                     taxRate = product.taxRate,
                 )
             }
@@ -831,16 +1006,23 @@ class DashboardRepository(
     ): PublicCatalogProductResponse? {
         val sql = """
             select
-                id::text,
-                name,
-                description,
-                unit,
-                selling_price,
-                currency,
-                tax_rate,
-                prices_include_tax,
-                track_stock,
-                stock_quantity,
+                products.id::text,
+                products.category_id::text,
+                pc.name as category_name,
+                products.name,
+                products.description,
+                products.unit,
+                products.selling_price,
+                products.currency,
+                products.tax_rate,
+                products.prices_include_tax,
+                products.track_stock,
+                products.stock_quantity,
+                offer.id::text as offer_id,
+                offer.name as offer_name,
+                offer.description as offer_description,
+                offer.discount_type,
+                offer.discount_value,
                 (
                     select pi.storage_path
                     from product_images pi
@@ -851,9 +1033,28 @@ class DashboardRepository(
                     limit 1
                 ) as image_storage_path
             from products
-            where id = ?::uuid
-              and workspace_id = ?::uuid
-              and status = 'active'
+            left join product_categories pc on pc.id = products.category_id and pc.status = 'active'
+            left join lateral (
+                select po.*
+                from product_offers po
+                where po.workspace_id = products.workspace_id
+                  and po.status = 'active'
+                  and (po.starts_at is null or po.starts_at <= now())
+                  and (po.ends_at is null or po.ends_at >= now())
+                  and (
+                    po.applies_to = 'all'
+                    or (po.applies_to = 'category' and po.category_id = products.category_id)
+                    or (po.applies_to = 'product' and po.product_id = products.id)
+                  )
+                order by
+                  case po.applies_to when 'product' then 0 when 'category' then 1 else 2 end,
+                  po.discount_value desc,
+                  po.created_at desc
+                limit 1
+            ) offer on true
+            where products.id = ?::uuid
+              and products.workspace_id = ?::uuid
+              and products.status = 'active'
             limit 1
         """.trimIndent()
         return prepareStatement(sql).use { statement ->
@@ -865,20 +1066,7 @@ class DashboardRepository(
                 } else {
                     val trackStock = result.getBoolean("track_stock")
                     val stockQuantity = result.getBigDecimal("stock_quantity") ?: BigDecimal.ZERO
-                    PublicCatalogProductResponse(
-                        id = result.getString("id"),
-                        name = result.getString("name"),
-                        description = result.getString("description"),
-                        unit = result.getString("unit"),
-                        sellingPrice = result.getBigDecimal("selling_price").moneyString(),
-                        currency = result.getString("currency") ?: "INR",
-                        taxRate = result.getBigDecimal("tax_rate").decimalString(),
-                        pricesIncludeTax = result.getBoolean("prices_include_tax"),
-                        trackStock = trackStock,
-                        stockQuantity = stockQuantity.decimalString(),
-                        inStock = !trackStock || stockQuantity > BigDecimal.ZERO,
-                        imageUrl = result.getString("image_storage_path").toDashboardMediaUrl(),
-                    )
+                    result.toPublicCatalogProductResponse(trackStock, stockQuantity)
                 }
             }
         }
@@ -1096,6 +1284,212 @@ class DashboardRepository(
         }
     }
 
+    private fun Connection.listProductCategories(
+        workspaceId: String,
+        filters: DashboardQueryFilters = DashboardQueryFilters(),
+    ): List<ProductCategoryResponse> {
+        val params = mutableListOf(workspaceId)
+        val search = filters.query.cleanSearchTerm()
+        val sql = buildString {
+            append(
+                """
+                select id::text, name, sort_order, status, created_at::text, updated_at::text
+                from product_categories
+                where workspace_id = ?::uuid and status = 'active'
+                """.trimIndent(),
+            )
+            if (search != null) {
+                append(" and name ilike ?")
+                params.add(search.ilikePattern())
+            }
+            append(" order by sort_order asc, name asc limit ${filters.limit.sanitizedLimit()}")
+        }
+        return prepareStatement(sql).use { statement ->
+            statement.bindStringParams(params)
+            statement.executeQuery().use { result ->
+                buildList {
+                    while (result.next()) add(result.toProductCategoryResponse())
+                }
+            }
+        }
+    }
+
+    private fun Connection.insertProductCategory(
+        workspaceId: String,
+        request: ProductCategoryRequest,
+    ): ProductCategoryResponse {
+        val sql = """
+            insert into product_categories (workspace_id, name, sort_order, updated_at)
+            values (?::uuid, ?, ?, now())
+            on conflict (workspace_id, name) do update
+            set sort_order = excluded.sort_order, status = 'active', updated_at = now()
+            returning id::text, name, sort_order, status, created_at::text, updated_at::text
+        """.trimIndent()
+        return prepareStatement(sql).use { statement ->
+            statement.setString(1, workspaceId)
+            statement.setString(2, request.name.cleanName())
+            statement.setInt(3, request.sortOrder.coerceIn(0, 999))
+            statement.executeQuery().use { result ->
+                result.next()
+                result.toProductCategoryResponse()
+            }
+        }
+    }
+
+    private fun Connection.listProductOffers(
+        workspaceId: String,
+        filters: DashboardQueryFilters = DashboardQueryFilters(),
+    ): List<ProductOfferResponse> {
+        val params = mutableListOf(workspaceId)
+        val search = filters.query.cleanSearchTerm()
+        val sql = buildString {
+            append(
+                """
+                select
+                    po.id::text,
+                    po.applies_to,
+                    po.product_id::text,
+                    p.name as product_name,
+                    po.category_id::text,
+                    pc.name as category_name,
+                    po.name,
+                    po.description,
+                    po.discount_type,
+                    po.discount_value,
+                    po.starts_at::text,
+                    po.ends_at::text,
+                    po.status,
+                    po.created_at::text,
+                    po.updated_at::text
+                from product_offers po
+                left join products p on p.id = po.product_id
+                left join product_categories pc on pc.id = po.category_id
+                where po.workspace_id = ?::uuid and po.status = 'active'
+                """.trimIndent(),
+            )
+            if (search != null) {
+                append(" and (po.name ilike ? or coalesce(p.name, '') ilike ? or coalesce(pc.name, '') ilike ?)")
+                repeat(3) { params.add(search.ilikePattern()) }
+            }
+            append(" order by po.created_at desc limit ${filters.limit.sanitizedLimit()}")
+        }
+        return prepareStatement(sql).use { statement ->
+            statement.bindStringParams(params)
+            statement.executeQuery().use { result ->
+                buildList {
+                    while (result.next()) add(result.toProductOfferResponse())
+                }
+            }
+        }
+    }
+
+    private fun Connection.insertProductOffer(
+        workspaceId: String,
+        request: ProductOfferRequest,
+    ): ProductOfferResponse {
+        val appliesTo = request.appliesTo.cleanOfferScope()
+        val sql = """
+            insert into product_offers (
+                workspace_id, product_id, category_id, applies_to, name, description,
+                discount_type, discount_value, starts_at, ends_at, updated_at
+            )
+            values (?::uuid, ?::uuid, ?::uuid, ?, ?, ?, ?, ?, ?::timestamptz, ?::timestamptz, now())
+            returning
+                id::text,
+                applies_to,
+                product_id::text,
+                (select name from products where id = product_offers.product_id) as product_name,
+                category_id::text,
+                (select name from product_categories where id = product_offers.category_id) as category_name,
+                name,
+                description,
+                discount_type,
+                discount_value,
+                starts_at::text,
+                ends_at::text,
+                status,
+                created_at::text,
+                updated_at::text
+        """.trimIndent()
+        return prepareStatement(sql).use { statement ->
+            statement.setString(1, workspaceId)
+            statement.setNullableUuid(2, if (appliesTo == "product") request.productId else null)
+            statement.setNullableUuid(3, if (appliesTo == "category") request.categoryId else null)
+            statement.setString(4, appliesTo)
+            statement.setString(5, request.name.cleanName())
+            statement.setNullableString(6, request.description?.cleanOptional())
+            statement.setString(7, request.discountType.cleanDiscountType())
+            statement.setBigDecimal(8, request.discountValue.decimalOrZero().coerceAtLeast(BigDecimal.ZERO))
+            statement.setNullableString(9, request.startsAt?.cleanOptional())
+            statement.setNullableString(10, request.endsAt?.cleanOptional())
+            statement.executeQuery().use { result ->
+                result.next()
+                result.toProductOfferResponse()
+            }
+        }
+    }
+
+    private fun Connection.listPaymentMethods(
+        workspaceId: String,
+        filters: DashboardQueryFilters = DashboardQueryFilters(),
+    ): List<WorkspacePaymentMethodResponse> {
+        val params = mutableListOf(workspaceId)
+        val search = filters.query.cleanSearchTerm()
+        val sql = buildString {
+            append(
+                """
+                select id::text, type, label, upi_id, payee_name, is_default, status, created_at::text, updated_at::text
+                from workspace_payment_methods
+                where workspace_id = ?::uuid and status = 'active'
+                """.trimIndent(),
+            )
+            if (search != null) {
+                append(" and (label ilike ? or coalesce(upi_id, '') ilike ? or coalesce(payee_name, '') ilike ?)")
+                repeat(3) { params.add(search.ilikePattern()) }
+            }
+            append(" order by is_default desc, created_at desc limit ${filters.limit.sanitizedLimit()}")
+        }
+        return prepareStatement(sql).use { statement ->
+            statement.bindStringParams(params)
+            statement.executeQuery().use { result ->
+                buildList {
+                    while (result.next()) add(result.toWorkspacePaymentMethodResponse())
+                }
+            }
+        }
+    }
+
+    private fun Connection.insertPaymentMethod(
+        workspaceId: String,
+        request: WorkspacePaymentMethodRequest,
+    ): WorkspacePaymentMethodResponse {
+        if (request.isDefault) {
+            prepareStatement(
+                "update workspace_payment_methods set is_default = false, updated_at = now() where workspace_id = ?::uuid and status = 'active'",
+            ).use { statement ->
+                statement.setString(1, workspaceId)
+                statement.executeUpdate()
+            }
+        }
+        val sql = """
+            insert into workspace_payment_methods (workspace_id, type, label, upi_id, payee_name, is_default, updated_at)
+            values (?::uuid, ?, ?, ?, ?, ?, now())
+            returning id::text, type, label, upi_id, payee_name, is_default, status, created_at::text, updated_at::text
+        """.trimIndent()
+        return prepareStatement(sql).use { statement ->
+            statement.setString(1, workspaceId)
+            statement.setString(2, request.type.cleanPaymentMethodType())
+            statement.setString(3, request.label.cleanName())
+            statement.setNullableString(4, request.upiId.cleanUpiId())
+            statement.setNullableString(5, request.payeeName?.cleanOptional())
+            statement.setBoolean(6, request.isDefault)
+            statement.executeQuery().use { result ->
+                result.next()
+                result.toWorkspacePaymentMethodResponse()
+            }
+        }
+    }
+
     private fun Connection.listProducts(
         workspaceId: String,
         filters: DashboardQueryFilters = DashboardQueryFilters(),
@@ -1107,7 +1501,7 @@ class DashboardRepository(
         val sql = buildString {
             append(
                 """
-                select p.*, s.name as supplier_name,
+                select p.*, s.name as supplier_name, pc.name as category_name,
                     (
                         select pi.storage_path
                         from product_images pi
@@ -1119,6 +1513,7 @@ class DashboardRepository(
                     ) as image_storage_path
                 from products p
                 left join suppliers s on s.id = p.supplier_id
+                left join product_categories pc on pc.id = p.category_id
                 where p.workspace_id = ?::uuid and p.status = 'active'
                 """.trimIndent(),
             )
@@ -1131,10 +1526,11 @@ class DashboardRepository(
                         or coalesce(p.barcode, '') ilike ?
                         or coalesce(p.description, '') ilike ?
                         or coalesce(s.name, '') ilike ?
+                        or coalesce(pc.name, '') ilike ?
                     )
                     """.trimIndent(),
                 )
-                repeat(5) { params.add(search.ilikePattern()) }
+                repeat(6) { params.add(search.ilikePattern()) }
             }
             if (supplierId != null) {
                 append(" and p.supplier_id = ?::uuid")
@@ -1166,12 +1562,12 @@ class DashboardRepository(
     ): ProductResponse {
         val sql = """
             insert into products (
-                workspace_id, supplier_id, name, sku, barcode, description, unit,
+                workspace_id, supplier_id, category_id, name, sku, barcode, description, unit,
                 selling_price, cost_price, currency, tax_rate, prices_include_tax,
                 stock_quantity, reorder_level, track_stock, updated_at
             )
-            values (?::uuid, ?::uuid, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now())
-            returning *, null::text as supplier_name, null::text as image_storage_path
+            values (?::uuid, ?::uuid, ?::uuid, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now())
+            returning *, null::text as supplier_name, null::text as category_name, null::text as image_storage_path
         """.trimIndent()
         return prepareStatement(sql).use { statement ->
             statement.setString(1, access.workspaceId)
@@ -1245,28 +1641,29 @@ class DashboardRepository(
     ): ProductResponse? {
         val sql = """
             update products
-            set supplier_id = ?::uuid, name = ?, sku = ?, barcode = ?, description = ?,
+            set supplier_id = ?::uuid, category_id = ?::uuid, name = ?, sku = ?, barcode = ?, description = ?,
                 unit = ?, selling_price = ?, cost_price = ?, currency = ?, tax_rate = ?,
                 prices_include_tax = ?, reorder_level = ?, track_stock = ?, updated_at = now()
             where id = ?::uuid and workspace_id = ?::uuid
-            returning *, null::text as supplier_name, null::text as image_storage_path
+            returning *, null::text as supplier_name, null::text as category_name, null::text as image_storage_path
         """.trimIndent()
         return prepareStatement(sql).use { statement ->
             statement.setNullableUuid(1, request.supplierId)
-            statement.setString(2, request.name.cleanName())
-            statement.setNullableString(3, request.sku?.cleanOptionalUpper())
-            statement.setNullableString(4, request.barcode?.cleanOptional())
-            statement.setNullableString(5, request.description?.cleanOptional())
-            statement.setString(6, request.unit.cleanOptional() ?: "pcs")
-            statement.setBigDecimal(7, request.sellingPrice.moneyOrZero())
-            statement.setBigDecimal(8, request.costPrice.moneyOrZero())
-            statement.setString(9, request.currency?.cleanOptionalUpper() ?: access.currency)
-            statement.setBigDecimal(10, request.taxRate.decimalOrZero())
-            statement.setBoolean(11, request.pricesIncludeTax)
-            statement.setBigDecimal(12, request.reorderLevel.decimalOrZero())
-            statement.setBoolean(13, request.trackStock)
-            statement.setString(14, productId)
-            statement.setString(15, access.workspaceId)
+            statement.setNullableUuid(2, request.categoryId)
+            statement.setString(3, request.name.cleanName())
+            statement.setNullableString(4, request.sku?.cleanOptionalUpper())
+            statement.setNullableString(5, request.barcode?.cleanOptional())
+            statement.setNullableString(6, request.description?.cleanOptional())
+            statement.setString(7, request.unit.cleanOptional() ?: "pcs")
+            statement.setBigDecimal(8, request.sellingPrice.moneyOrZero())
+            statement.setBigDecimal(9, request.costPrice.moneyOrZero())
+            statement.setString(10, request.currency?.cleanOptionalUpper() ?: access.currency)
+            statement.setBigDecimal(11, request.taxRate.decimalOrZero())
+            statement.setBoolean(12, request.pricesIncludeTax)
+            statement.setBigDecimal(13, request.reorderLevel.decimalOrZero())
+            statement.setBoolean(14, request.trackStock)
+            statement.setString(15, productId)
+            statement.setString(16, access.workspaceId)
             statement.executeQuery().use { result ->
                 if (result.next()) result.toProductResponse() else null
             }
@@ -1299,7 +1696,7 @@ class DashboardRepository(
             update products
             set stock_quantity = ?, track_stock = true, updated_at = now()
             where id = ?::uuid and workspace_id = ?::uuid
-            returning *, null::text as supplier_name,
+            returning *, null::text as supplier_name, null::text as category_name,
                 (
                     select pi.storage_path
                     from product_images pi
@@ -1536,11 +1933,11 @@ class DashboardRepository(
             insert into orders (
                 workspace_id, customer_id, order_number, status, scheduled_at,
                 subtotal, tax_total, discount_total, paid_total, total, currency,
-                notes, inventory_applied, created_by_user_id, updated_at
+                notes, inventory_applied, created_by_user_id, source, fulfillment_type, payment_mode, updated_at
             )
             values (
                 ?::uuid, ?::uuid, ?, ?, ?::timestamptz,
-                ?, ?, 0, ?, ?, ?, ?, ?, ?::uuid, now()
+                ?, ?, 0, ?, ?, ?, ?, ?, ?::uuid, ?, ?, ?, now()
             )
             returning id::text
         """.trimIndent()
@@ -1558,6 +1955,9 @@ class DashboardRepository(
             statement.setNullableString(11, request.notes?.cleanOptional())
             statement.setBoolean(12, inventoryApplied)
             statement.setString(13, access.userId)
+            statement.setString(14, request.source.cleanOrderSource())
+            statement.setString(15, request.fulfillmentType.cleanFulfillmentType())
+            statement.setString(16, request.paymentMode.cleanPaymentMode())
             statement.executeQuery().use { result ->
                 result.next()
                 result.getString("id")
@@ -1751,6 +2151,9 @@ class DashboardRepository(
             o.total,
             o.currency,
             o.notes,
+            o.fulfillment_type,
+            o.payment_mode,
+            o.source,
             o.created_at::text,
             o.updated_at::text,
             count(oi.id)::int as item_count
@@ -1786,19 +2189,20 @@ class DashboardRepository(
         startIndex: Int,
     ) {
         setNullableUuid(startIndex, request.supplierId)
-        setString(startIndex + 1, request.name.cleanName())
-        setNullableString(startIndex + 2, request.sku?.cleanOptionalUpper())
-        setNullableString(startIndex + 3, request.barcode?.cleanOptional())
-        setNullableString(startIndex + 4, request.description?.cleanOptional())
-        setString(startIndex + 5, request.unit.cleanOptional() ?: "pcs")
-        setBigDecimal(startIndex + 6, request.sellingPrice.moneyOrZero())
-        setBigDecimal(startIndex + 7, request.costPrice.moneyOrZero())
-        setString(startIndex + 8, request.currency?.cleanOptionalUpper() ?: access.currency)
-        setBigDecimal(startIndex + 9, request.taxRate.decimalOrZero())
-        setBoolean(startIndex + 10, request.pricesIncludeTax)
-        setBigDecimal(startIndex + 11, request.stockQuantity.decimalOrZero())
-        setBigDecimal(startIndex + 12, request.reorderLevel.decimalOrZero())
-        setBoolean(startIndex + 13, request.trackStock)
+        setNullableUuid(startIndex + 1, request.categoryId)
+        setString(startIndex + 2, request.name.cleanName())
+        setNullableString(startIndex + 3, request.sku?.cleanOptionalUpper())
+        setNullableString(startIndex + 4, request.barcode?.cleanOptional())
+        setNullableString(startIndex + 5, request.description?.cleanOptional())
+        setString(startIndex + 6, request.unit.cleanOptional() ?: "pcs")
+        setBigDecimal(startIndex + 7, request.sellingPrice.moneyOrZero())
+        setBigDecimal(startIndex + 8, request.costPrice.moneyOrZero())
+        setString(startIndex + 9, request.currency?.cleanOptionalUpper() ?: access.currency)
+        setBigDecimal(startIndex + 10, request.taxRate.decimalOrZero())
+        setBoolean(startIndex + 11, request.pricesIncludeTax)
+        setBigDecimal(startIndex + 12, request.stockQuantity.decimalOrZero())
+        setBigDecimal(startIndex + 13, request.reorderLevel.decimalOrZero())
+        setBoolean(startIndex + 14, request.trackStock)
     }
 
     private fun PreparedStatement.bindPrinterRequest(request: PrinterProfileRequest, startIndex: Int) {
@@ -1812,6 +2216,100 @@ class DashboardRepository(
         setBoolean(startIndex + 7, request.isDefaultReceipt)
         setBoolean(startIndex + 8, request.isDefaultBarcode)
         setNullableString(startIndex + 9, request.notes?.cleanOptional())
+    }
+
+    private fun ResultSet.toProductCategoryResponse(): ProductCategoryResponse =
+        ProductCategoryResponse(
+            id = getString("id"),
+            name = getString("name"),
+            sortOrder = getInt("sort_order"),
+            status = getString("status"),
+            createdAt = getString("created_at"),
+            updatedAt = getString("updated_at"),
+        )
+
+    private fun ResultSet.toProductOfferResponse(): ProductOfferResponse =
+        ProductOfferResponse(
+            id = getString("id"),
+            appliesTo = getString("applies_to"),
+            productId = getString("product_id"),
+            productName = getString("product_name"),
+            categoryId = getString("category_id"),
+            categoryName = getString("category_name"),
+            name = getString("name"),
+            description = getString("description"),
+            discountType = getString("discount_type"),
+            discountValue = getBigDecimal("discount_value").decimalString(),
+            startsAt = getString("starts_at"),
+            endsAt = getString("ends_at"),
+            status = getString("status"),
+            createdAt = getString("created_at"),
+            updatedAt = getString("updated_at"),
+        )
+
+    private fun ResultSet.toWorkspacePaymentMethodResponse(): WorkspacePaymentMethodResponse =
+        WorkspacePaymentMethodResponse(
+            id = getString("id"),
+            type = getString("type"),
+            label = getString("label"),
+            upiId = getString("upi_id"),
+            payeeName = getString("payee_name"),
+            isDefault = getBoolean("is_default"),
+            status = getString("status"),
+            createdAt = getString("created_at"),
+            updatedAt = getString("updated_at"),
+        )
+
+    private fun ResultSet.toPublicCatalogPaymentMethodResponse(): PublicCatalogPaymentMethodResponse =
+        PublicCatalogPaymentMethodResponse(
+            id = getString("id"),
+            type = getString("type"),
+            label = getString("label"),
+            upiId = getString("upi_id"),
+            payeeName = getString("payee_name"),
+            isDefault = getBoolean("is_default"),
+        )
+
+    private fun ResultSet.toPublicCatalogProductResponse(
+        trackStock: Boolean,
+        stockQuantity: BigDecimal,
+    ): PublicCatalogProductResponse {
+        val price = getBigDecimal("selling_price") ?: BigDecimal.ZERO
+        val discountType = getString("discount_type")
+        val discountValue = getBigDecimal("discount_value") ?: BigDecimal.ZERO
+        val discount = if (getString("offer_id") == null) {
+            BigDecimal.ZERO
+        } else {
+            discountAmount(price, discountType, discountValue)
+        }
+        val finalPrice = price.subtract(discount).coerceAtLeast(BigDecimal.ZERO).scaled()
+        return PublicCatalogProductResponse(
+            id = getString("id"),
+            categoryId = getString("category_id"),
+            categoryName = getString("category_name"),
+            name = getString("name"),
+            description = getString("description"),
+            unit = getString("unit"),
+            sellingPrice = price.moneyString(),
+            currency = getString("currency") ?: "INR",
+            taxRate = getBigDecimal("tax_rate").decimalString(),
+            pricesIncludeTax = getBoolean("prices_include_tax"),
+            trackStock = trackStock,
+            stockQuantity = stockQuantity.decimalString(),
+            inStock = !trackStock || stockQuantity > BigDecimal.ZERO,
+            imageUrl = getString("image_storage_path").toDashboardMediaUrl(),
+            offer = getString("offer_id")?.let {
+                PublicCatalogOfferResponse(
+                    id = it,
+                    name = getString("offer_name"),
+                    description = getString("offer_description"),
+                    discountType = discountType ?: "percentage",
+                    discountValue = discountValue.decimalString(),
+                    discountAmount = discount.moneyString(),
+                    finalPrice = finalPrice.moneyString(),
+                )
+            },
+        )
     }
 
     private fun ResultSet.toCustomerResponse(): CustomerResponse =
@@ -1851,6 +2349,8 @@ class DashboardRepository(
         val trackStock = getBoolean("track_stock")
         return ProductResponse(
             id = getString("id"),
+            categoryId = getString("category_id"),
+            categoryName = getString("category_name"),
             supplierId = getString("supplier_id"),
             supplierName = getString("supplier_name"),
             name = getString("name"),
@@ -1918,6 +2418,9 @@ class DashboardRepository(
             total = getBigDecimal("total").moneyString(),
             currency = getString("currency"),
             notes = getString("notes"),
+            fulfillmentType = getString("fulfillment_type") ?: "standard",
+            paymentMode = getString("payment_mode") ?: "pay_on_spot",
+            source = getString("source") ?: "dashboard",
             itemCount = getInt("item_count"),
             items = items,
             createdAt = getString("created_at"),
@@ -2013,6 +2516,90 @@ class DashboardRepository(
         val normalized = trim().lowercase().filter { it.isLetterOrDigit() || it == '_' }
         return if (normalized in AllowedPrinterConnectionTypes) normalized else "mtp_usb"
     }
+
+    private fun String.cleanOfferScope(): String {
+        val normalized = trim().lowercase().replace("-", "_").filter { it.isLetterOrDigit() || it == '_' }
+        return if (normalized in setOf("all", "category", "product")) normalized else "product"
+    }
+
+    private fun String.cleanDiscountType(): String {
+        val normalized = trim().lowercase().replace("-", "_").filter { it.isLetterOrDigit() || it == '_' }
+        return when (normalized) {
+            "fixed", "fixed_amount", "amount" -> "fixed"
+            else -> "percentage"
+        }
+    }
+
+    private fun String.cleanPaymentMethodType(): String =
+        trim().lowercase().takeIf { it == "upi" } ?: "upi"
+
+    private fun String.cleanFulfillmentType(): String {
+        val normalized = trim().lowercase().replace("-", "_").filter { it.isLetterOrDigit() || it == '_' }
+        return if (normalized in setOf("standard", "take_away", "pickup", "delivery", "dine_in", "scheduled", "booking")) {
+            normalized
+        } else {
+            "standard"
+        }
+    }
+
+    private fun String.cleanPaymentMode(): String {
+        val normalized = trim().lowercase().replace("-", "_").filter { it.isLetterOrDigit() || it == '_' }
+        return if (normalized in setOf("pay_on_spot", "upi", "cash", "card", "online", "bank_transfer")) {
+            normalized
+        } else {
+            "pay_on_spot"
+        }
+    }
+
+    private fun String.cleanOrderSource(): String {
+        val normalized = trim().lowercase().replace("-", "_").filter { it.isLetterOrDigit() || it == '_' }
+        return if (normalized in setOf("dashboard", "public_catalog", "api", "import")) normalized else "dashboard"
+    }
+
+    private fun String.cleanUpiId(): String? =
+        trim()
+            .lowercase()
+            .take(120)
+            .takeIf { it.contains("@") && it.substringBefore("@").isNotBlank() && it.substringAfter("@").isNotBlank() }
+
+    private fun PublicCatalogPaymentMethodResponse.toUpiPaymentLink(
+        amount: String,
+        currency: String,
+        note: String,
+    ): String? {
+        if (type.cleanPaymentMethodType() != "upi") return null
+        val upi = upiId?.cleanUpiId() ?: return null
+        val cleanCurrency = currency.cleanOptionalUpper() ?: "INR"
+        val cleanAmount = amount.moneyOrZero().moneyString()
+        val payee = payeeName?.cleanOptional() ?: label
+        return buildString {
+            append("upi://pay")
+            append("?pa=").append(upi.urlEncoded())
+            append("&pn=").append(payee.urlEncoded())
+            append("&am=").append(cleanAmount.urlEncoded())
+            append("&cu=").append(cleanCurrency.urlEncoded())
+            append("&tn=").append(note.cleanOptional().orEmpty().urlEncoded())
+        }
+    }
+
+    private fun discountAmount(
+        price: BigDecimal,
+        discountType: String?,
+        discountValue: BigDecimal,
+    ): BigDecimal {
+        val safeValue = discountValue.coerceAtLeast(BigDecimal.ZERO)
+        return when (discountType?.cleanDiscountType()) {
+            "fixed" -> safeValue.coerceAtMost(price).scaled()
+            else -> price
+                .multiply(safeValue.coerceAtMost(BigDecimal("100")))
+                .divide(BigDecimal("100"), 2, RoundingMode.HALF_UP)
+                .coerceAtMost(price)
+                .scaled()
+        }
+    }
+
+    private fun String.urlEncoded(): String =
+        java.net.URLEncoder.encode(this, Charsets.UTF_8.name()).replace("+", "%20")
 
     private fun String.decimalOrZero(): BigDecimal =
         trim()

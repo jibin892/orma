@@ -285,6 +285,27 @@ data class ProductListResponse(
 )
 
 @Serializable
+data class ProductCategoryListResponse(
+    val categories: List<ProductCategoryResponse>,
+)
+
+@Serializable
+data class ProductCategoryRequest(
+    val name: String,
+    val sortOrder: Int = 0,
+)
+
+@Serializable
+data class ProductCategoryResponse(
+    val id: String,
+    val name: String,
+    val sortOrder: Int,
+    val status: String,
+    val createdAt: String,
+    val updatedAt: String,
+)
+
+@Serializable
 data class ProductImportTemplateResponse(
     val fileName: String,
     val columns: List<String>,
@@ -345,6 +366,7 @@ data class ProductExportResponse(
 @Serializable
 data class ProductRequest(
     val name: String,
+    val categoryId: String? = null,
     val sku: String? = null,
     val barcode: String? = null,
     val description: String? = null,
@@ -363,6 +385,8 @@ data class ProductRequest(
 @Serializable
 data class ProductResponse(
     val id: String,
+    val categoryId: String? = null,
+    val categoryName: String? = null,
     val supplierId: String? = null,
     val supplierName: String? = null,
     val name: String,
@@ -396,8 +420,38 @@ data class PublicCatalogWorkspaceResponse(
 )
 
 @Serializable
+data class PublicCatalogPaymentMethodResponse(
+    val id: String,
+    val type: String,
+    val label: String,
+    val upiId: String? = null,
+    val payeeName: String? = null,
+    val isDefault: Boolean,
+)
+
+@Serializable
+data class PublicCatalogCategoryResponse(
+    val id: String,
+    val name: String,
+    val sortOrder: Int,
+)
+
+@Serializable
+data class PublicCatalogOfferResponse(
+    val id: String,
+    val name: String,
+    val description: String? = null,
+    val discountType: String,
+    val discountValue: String,
+    val discountAmount: String,
+    val finalPrice: String,
+)
+
+@Serializable
 data class PublicCatalogProductResponse(
     val id: String,
+    val categoryId: String? = null,
+    val categoryName: String? = null,
     val name: String,
     val description: String? = null,
     val unit: String,
@@ -409,11 +463,14 @@ data class PublicCatalogProductResponse(
     val stockQuantity: String,
     val inStock: Boolean,
     val imageUrl: String? = null,
+    val offer: PublicCatalogOfferResponse? = null,
 )
 
 @Serializable
 data class PublicCatalogResponse(
     val workspace: PublicCatalogWorkspaceResponse,
+    val categories: List<PublicCatalogCategoryResponse> = emptyList(),
+    val paymentMethods: List<PublicCatalogPaymentMethodResponse> = emptyList(),
     val products: List<PublicCatalogProductResponse>,
 )
 
@@ -422,6 +479,9 @@ data class PublicCatalogOrderRequest(
     val customerName: String,
     val phoneNumber: String,
     val notes: String? = null,
+    val fulfillmentType: String = "take_away",
+    val scheduledAt: String? = null,
+    val paymentMode: String = "pay_on_spot",
     val items: List<PublicCatalogOrderItemRequest>,
 )
 
@@ -435,6 +495,8 @@ data class PublicCatalogOrderItemRequest(
 data class PublicCatalogOrderResponse(
     val message: String,
     val order: OrderResponse,
+    val paymentLink: String? = null,
+    val paymentMethod: PublicCatalogPaymentMethodResponse? = null,
 )
 
 @Serializable
@@ -468,6 +530,9 @@ data class OrderRequest(
     val paidTotal: String = "0",
     val currency: String? = null,
     val notes: String? = null,
+    val fulfillmentType: String = "standard",
+    val paymentMode: String = "pay_on_spot",
+    val source: String = "dashboard",
     val items: List<OrderItemRequest>,
 )
 
@@ -500,8 +565,75 @@ data class OrderResponse(
     val total: String,
     val currency: String,
     val notes: String? = null,
+    val fulfillmentType: String = "standard",
+    val paymentMode: String = "pay_on_spot",
+    val source: String = "dashboard",
     val itemCount: Int,
     val items: List<OrderItemResponse> = emptyList(),
+    val createdAt: String,
+    val updatedAt: String,
+)
+
+@Serializable
+data class ProductOfferListResponse(
+    val offers: List<ProductOfferResponse>,
+)
+
+@Serializable
+data class ProductOfferRequest(
+    val appliesTo: String = "product",
+    val productId: String? = null,
+    val categoryId: String? = null,
+    val name: String,
+    val description: String? = null,
+    val discountType: String = "percentage",
+    val discountValue: String = "0",
+    val startsAt: String? = null,
+    val endsAt: String? = null,
+)
+
+@Serializable
+data class ProductOfferResponse(
+    val id: String,
+    val appliesTo: String,
+    val productId: String? = null,
+    val productName: String? = null,
+    val categoryId: String? = null,
+    val categoryName: String? = null,
+    val name: String,
+    val description: String? = null,
+    val discountType: String,
+    val discountValue: String,
+    val startsAt: String? = null,
+    val endsAt: String? = null,
+    val status: String,
+    val createdAt: String,
+    val updatedAt: String,
+)
+
+@Serializable
+data class WorkspacePaymentMethodListResponse(
+    val paymentMethods: List<WorkspacePaymentMethodResponse>,
+)
+
+@Serializable
+data class WorkspacePaymentMethodRequest(
+    val type: String = "upi",
+    val label: String,
+    val upiId: String,
+    val payeeName: String? = null,
+    val isDefault: Boolean = false,
+)
+
+@Serializable
+data class WorkspacePaymentMethodResponse(
+    val id: String,
+    val type: String,
+    val label: String,
+    val upiId: String? = null,
+    val payeeName: String? = null,
+    val isDefault: Boolean,
+    val status: String,
     val createdAt: String,
     val updatedAt: String,
 )
