@@ -129,6 +129,38 @@ data class TeamInviteResponse(
 )
 
 @Serializable
+data class TeamOverviewResponse(
+    val workspace: WorkspaceResponse,
+    val canInviteMembers: Boolean,
+    val members: List<TeamMemberResponse>,
+    val pendingInvites: List<TeamInviteListItemResponse>,
+)
+
+@Serializable
+data class TeamMemberResponse(
+    val id: String,
+    val userId: String,
+    val displayName: String? = null,
+    val email: String? = null,
+    val phoneNumber: String? = null,
+    val role: String,
+    val status: String,
+    val joinedAt: String,
+)
+
+@Serializable
+data class TeamInviteListItemResponse(
+    val code: String,
+    val inviteeName: String,
+    val inviteeEmail: String? = null,
+    val inviteePhoneNumber: String? = null,
+    val role: String,
+    val status: String,
+    val createdAt: String,
+    val expiresAt: String? = null,
+)
+
+@Serializable
 data class NotificationPreferenceRequest(
     val enabled: Boolean,
 )
@@ -343,6 +375,7 @@ data class ProductResponse(
     val trackStock: Boolean,
     val lowStock: Boolean,
     val status: String,
+    val imageUrl: String? = null,
     val createdAt: String,
     val updatedAt: String,
 )
@@ -370,6 +403,7 @@ data class PublicCatalogProductResponse(
     val trackStock: Boolean,
     val stockQuantity: String,
     val inStock: Boolean,
+    val imageUrl: String? = null,
 )
 
 @Serializable

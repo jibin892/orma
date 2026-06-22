@@ -31,7 +31,7 @@ fun Application.module(config: AppConfig = AppConfig.load()) {
     closeOnStop(dataSource)
 
     val onboardingRepository = dataSource?.let { OnboardingRepository(it) }
-    val dashboardRepository = dataSource?.let { DashboardRepository(it) }
+    val dashboardRepository = dataSource?.let { DashboardRepository(it, config) }
     val gstinRepository = dataSource?.let { GstinRepository(it) }
 
     configureSerialization()

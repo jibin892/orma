@@ -1,6 +1,7 @@
 package com.orma.backend.db
 
 import com.orma.backend.auth.VerifiedFirebaseUser
+import com.orma.backend.config.AppConfig
 import com.orma.backend.models.CustomerRequest
 import com.orma.backend.models.CustomerResponse
 import com.orma.backend.models.DashboardSummaryResponse
@@ -86,6 +87,7 @@ private val RequiredProductCsvColumns = listOf("name")
 
 class DashboardRepository(
     private val dataSource: DataSource,
+    private val config: AppConfig,
 ) {
     suspend fun publicCatalog(
         workspaceId: String,
@@ -730,7 +732,16 @@ class DashboardRepository(
                 tax_rate,
                 prices_include_tax,
                 track_stock,
-                stock_quantity
+                stock_quantity,
+                (
+                    select pi.storage_path
+                    from product_images pi
+                    where pi.workspace_id = products.workspace_id
+                      and pi.product_id = products.id::text
+                      and pi.status = 'active'
+                    order by pi.sort_order asc, pi.created_at desc
+                    limit 1
+                ) as image_storage_path
             from products
             where workspace_id = ?::uuid
               and status = 'active'
@@ -758,6 +769,7 @@ class DashboardRepository(
                                 trackStock = trackStock,
                                 stockQuantity = stockQuantity.decimalString(),
                                 inStock = !trackStock || stockQuantity > BigDecimal.ZERO,
+                                imageUrl = result.getString("image_storage_path").toDashboardMediaUrl(),
                             ),
                         )
                     }
@@ -828,7 +840,16 @@ class DashboardRepository(
                 tax_rate,
                 prices_include_tax,
                 track_stock,
-                stock_quantity
+                stock_quantity,
+                (
+                    select pi.storage_path
+                    from product_images pi
+                    where pi.workspace_id = products.workspace_id
+                      and pi.product_id = products.id::text
+                      and pi.status = 'active'
+                    order by pi.sort_order asc, pi.created_at desc
+                    limit 1
+                ) as image_storage_path
             from products
             where id = ?::uuid
               and workspace_id = ?::uuid
@@ -856,6 +877,7 @@ class DashboardRepository(
                         trackStock = trackStock,
                         stockQuantity = stockQuantity.decimalString(),
                         inStock = !trackStock || stockQuantity > BigDecimal.ZERO,
+                        imageUrl = result.getString("image_storage_path").toDashboardMediaUrl(),
                     )
                 }
             }
@@ -1085,7 +1107,16 @@ class DashboardRepository(
         val sql = buildString {
             append(
                 """
-                select p.*, s.name as supplier_name
+                select p.*, s.name as supplier_name,
+                    (
+                        select pi.storage_path
+                        from product_images pi
+                        where pi.workspace_id = p.workspace_id
+                          and pi.product_id = p.id::text
+                          and pi.status = 'active'
+                        order by pi.sort_order asc, pi.created_at desc
+                        limit 1
+                    ) as image_storage_path
                 from products p
                 left join suppliers s on s.id = p.supplier_id
                 where p.workspace_id = ?::uuid and p.status = 'active'
@@ -1140,7 +1171,7 @@ class DashboardRepository(
                 stock_quantity, reorder_level, track_stock, updated_at
             )
             values (?::uuid, ?::uuid, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now())
-            returning *, null::text as supplier_name
+            returning *, null::text as supplier_name, null::text as image_storage_path
         """.trimIndent()
         return prepareStatement(sql).use { statement ->
             statement.setString(1, access.workspaceId)
@@ -1218,7 +1249,7 @@ class DashboardRepository(
                 unit = ?, selling_price = ?, cost_price = ?, currency = ?, tax_rate = ?,
                 prices_include_tax = ?, reorder_level = ?, track_stock = ?, updated_at = now()
             where id = ?::uuid and workspace_id = ?::uuid
-            returning *, null::text as supplier_name
+            returning *, null::text as supplier_name, null::text as image_storage_path
         """.trimIndent()
         return prepareStatement(sql).use { statement ->
             statement.setNullableUuid(1, request.supplierId)
@@ -1268,7 +1299,16 @@ class DashboardRepository(
             update products
             set stock_quantity = ?, track_stock = true, updated_at = now()
             where id = ?::uuid and workspace_id = ?::uuid
-            returning *, null::text as supplier_name
+            returning *, null::text as supplier_name,
+                (
+                    select pi.storage_path
+                    from product_images pi
+                    where pi.workspace_id = products.workspace_id
+                      and pi.product_id = products.id::text
+                      and pi.status = 'active'
+                    order by pi.sort_order asc, pi.created_at desc
+                    limit 1
+                ) as image_storage_path
             """.trimIndent(),
         ).use { statement ->
             statement.setBigDecimal(1, next)
@@ -1828,6 +1868,7 @@ class DashboardRepository(
             trackStock = trackStock,
             lowStock = trackStock && stockQuantity <= reorderLevel,
             status = getString("status"),
+            imageUrl = getString("image_storage_path").toDashboardMediaUrl(),
             createdAt = getString("created_at"),
             updatedAt = getString("updated_at"),
         )
@@ -2178,6 +2219,22 @@ class DashboardRepository(
         } else {
             this
         }
+
+    private fun String?.toDashboardMediaUrl(): String? {
+        val value = this?.trim()?.takeIf { it.isNotBlank() } ?: return null
+        if (value.startsWith("https://") || value.startsWith("http://")) return value
+        if (config.activeMediaStorageProvider != "cloudinary") return null
+        val cloudName = config.cloudinaryCloudName?.trim()?.takeIf { it.isNotBlank() } ?: return null
+        return "https://res.cloudinary.com/$cloudName/image/upload/${value.cloudinaryPathEncoded()}"
+    }
+
+    private fun String.cloudinaryPathEncoded(): String =
+        split("/")
+            .filter { it.isNotBlank() }
+            .joinToString("/") { segment ->
+                java.net.URLEncoder.encode(segment, Charsets.UTF_8)
+                    .replace("+", "%20")
+            }
 
     private data class PreparedOrderItem(
         val productId: String?,

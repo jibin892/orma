@@ -3,16 +3,21 @@ package com.orma.backend.routes
 import com.orma.backend.config.AppConfig
 import com.orma.backend.db.OnboardingRepository
 import com.orma.backend.db.OwnerTeamInviteResult
+import com.orma.backend.db.TeamInviteListRecord
 import com.orma.backend.db.TeamInviteCreateResult
 import com.orma.backend.db.TeamInviteJoinResult
+import com.orma.backend.db.TeamMemberRecord
 import com.orma.backend.models.BusinessSetupRequest
 import com.orma.backend.models.ErrorResponse
 import com.orma.backend.models.NotificationPreferenceRequest
 import com.orma.backend.models.OnboardingMutationResponse
 import com.orma.backend.models.TeamInviteCreateRequest
 import com.orma.backend.models.TeamInviteJoinRequest
+import com.orma.backend.models.TeamInviteListItemResponse
 import com.orma.backend.models.TeamInviteLookupRequest
 import com.orma.backend.models.TeamInviteResponse
+import com.orma.backend.models.TeamMemberResponse
+import com.orma.backend.models.TeamOverviewResponse
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.request.receive
@@ -95,6 +100,30 @@ fun Route.onboardingRoutes(
                 )
             }
         }
+    }
+
+    get("/onboarding/team") {
+        val repository = onboardingRepository ?: return@get call.databaseNotConfigured()
+        val firebaseUser = call.verifiedFirebaseUser(config) ?: return@get
+        val overview = repository.listWorkspaceTeam(firebaseUser)
+        if (overview == null) {
+            call.respond(
+                HttpStatusCode.NotFound,
+                ErrorResponse(
+                    code = "workspace_not_found",
+                    message = "Complete business setup before viewing team access.",
+                ),
+            )
+            return@get
+        }
+        call.respond(
+            TeamOverviewResponse(
+                workspace = overview.workspace.toResponse(config),
+                canInviteMembers = overview.canInviteMembers,
+                members = overview.members.map { it.toResponse() },
+                pendingInvites = overview.pendingInvites.map { it.toResponse() },
+            ),
+        )
     }
 
     post("/onboarding/team-invites") {
@@ -223,4 +252,28 @@ private fun com.orma.backend.db.OnboardingSessionRecord.toMutationResponse(confi
         onboardingStatus = onboardingStatus,
         requiredStep = requiredStep,
         accessPath = accessPath,
+    )
+
+private fun TeamMemberRecord.toResponse(): TeamMemberResponse =
+    TeamMemberResponse(
+        id = id,
+        userId = userId,
+        displayName = displayName,
+        email = email,
+        phoneNumber = phoneNumber,
+        role = role,
+        status = status,
+        joinedAt = joinedAt,
+    )
+
+private fun TeamInviteListRecord.toResponse(): TeamInviteListItemResponse =
+    TeamInviteListItemResponse(
+        code = code,
+        inviteeName = inviteeName,
+        inviteeEmail = inviteeEmail,
+        inviteePhoneNumber = inviteePhoneNumber,
+        role = role,
+        status = status,
+        createdAt = createdAt,
+        expiresAt = expiresAt,
     )

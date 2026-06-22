@@ -55,6 +55,35 @@ data class TeamInviteRecord(
     val role: String,
 )
 
+data class TeamMemberRecord(
+    val id: String,
+    val userId: String,
+    val displayName: String?,
+    val email: String?,
+    val phoneNumber: String?,
+    val role: String,
+    val status: String,
+    val joinedAt: String,
+)
+
+data class TeamInviteListRecord(
+    val code: String,
+    val inviteeName: String,
+    val inviteeEmail: String?,
+    val inviteePhoneNumber: String?,
+    val role: String,
+    val status: String,
+    val createdAt: String,
+    val expiresAt: String?,
+)
+
+data class TeamOverviewRecord(
+    val workspace: WorkspaceRecord,
+    val canInviteMembers: Boolean,
+    val members: List<TeamMemberRecord>,
+    val pendingInvites: List<TeamInviteListRecord>,
+)
+
 sealed interface TeamInviteCreateResult {
     data class Success(val invite: TeamInviteRecord) : TeamInviteCreateResult
     data object WorkspaceNotFound : TeamInviteCreateResult
@@ -143,6 +172,32 @@ class OnboardingRepository(
     suspend fun lookupInviteRecord(code: String): TeamInviteRecord? = withContext(Dispatchers.IO) {
         dataSource.connection.use { connection ->
             connection.findInviteRecord(code.normalizedInviteCode())
+        }
+    }
+
+    suspend fun listWorkspaceTeam(
+        firebaseUser: VerifiedFirebaseUser,
+    ): TeamOverviewRecord? = withContext(Dispatchers.IO) {
+        dataSource.connection.use { connection ->
+            val user = connection.upsertUser(
+                firebaseUser = firebaseUser,
+                providerFallback = null,
+                emailFallback = null,
+                phoneNumberFallback = null,
+                displayNameFallback = null,
+            )
+            val workspace = connection.findPrimaryWorkspace(user.id) ?: return@withContext null
+            val canInviteMembers = workspace.role == RoleBusinessOwner
+            TeamOverviewRecord(
+                workspace = workspace,
+                canInviteMembers = canInviteMembers,
+                members = connection.listWorkspaceMembers(workspace.id),
+                pendingInvites = if (canInviteMembers) {
+                    connection.listWorkspacePendingInvites(workspace.id)
+                } else {
+                    emptyList()
+                },
+            )
         }
     }
 
@@ -559,6 +614,69 @@ class OnboardingRepository(
             statement.setString(2, userId)
             statement.setString(3, role.normalizedTeamRole())
             statement.executeUpdate()
+        }
+    }
+
+    private fun Connection.listWorkspaceMembers(workspaceId: String): List<TeamMemberRecord> {
+        val sql = """
+            select
+                wm.id::text as member_id,
+                wm.user_id::text as user_id,
+                au.display_name,
+                au.email,
+                au.phone_number,
+                wm.role,
+                wm.status,
+                wm.created_at::text as joined_at
+            from workspace_members wm
+            join app_users au on au.id = wm.user_id
+            where wm.workspace_id = ?::uuid
+              and wm.status = 'active'
+            order by
+                case when wm.role = 'business_owner' then 0 else 1 end,
+                coalesce(nullif(au.display_name, ''), au.email, au.phone_number, wm.created_at::text)
+        """.trimIndent()
+
+        return prepareStatement(sql).use { statement ->
+            statement.setString(1, workspaceId)
+            statement.executeQuery().use { result ->
+                buildList {
+                    while (result.next()) add(result.toTeamMemberRecord())
+                }
+            }
+        }
+    }
+
+    private fun Connection.listWorkspacePendingInvites(workspaceId: String): List<TeamInviteListRecord> {
+        val sql = """
+            select
+                code,
+                invitee_name,
+                invitee_email,
+                invitee_phone_number,
+                role,
+                status,
+                created_at::text as created_at,
+                expires_at::text as expires_at
+            from team_invites
+            where workspace_id = ?::uuid
+              and status = 'active'
+              and (expires_at is null or expires_at > now())
+              and (
+                    nullif(invitee_name, '') is not null
+                 or nullif(invitee_email, '') is not null
+                 or nullif(invitee_phone_number, '') is not null
+              )
+            order by created_at desc
+        """.trimIndent()
+
+        return prepareStatement(sql).use { statement ->
+            statement.setString(1, workspaceId)
+            statement.executeQuery().use { result ->
+                buildList {
+                    while (result.next()) add(result.toTeamInviteListRecord())
+                }
+            }
         }
     }
 
@@ -1026,6 +1144,30 @@ class OnboardingRepository(
             role = getString("role").normalizedTeamRole(),
         )
     }
+
+    private fun ResultSet.toTeamMemberRecord(): TeamMemberRecord =
+        TeamMemberRecord(
+            id = getString("member_id"),
+            userId = getString("user_id"),
+            displayName = getString("display_name"),
+            email = getString("email"),
+            phoneNumber = getString("phone_number"),
+            role = getString("role").normalizedTeamRole(),
+            status = getString("status"),
+            joinedAt = getString("joined_at"),
+        )
+
+    private fun ResultSet.toTeamInviteListRecord(): TeamInviteListRecord =
+        TeamInviteListRecord(
+            code = getString("code"),
+            inviteeName = getString("invitee_name") ?: "",
+            inviteeEmail = getString("invitee_email"),
+            inviteePhoneNumber = getString("invitee_phone_number"),
+            role = getString("role").normalizedTeamRole(),
+            status = getString("status"),
+            createdAt = getString("created_at"),
+            expiresAt = getString("expires_at"),
+        )
 
     private fun ResultSet.toProductImageRecord(): ProductImageRecord =
         ProductImageRecord(
