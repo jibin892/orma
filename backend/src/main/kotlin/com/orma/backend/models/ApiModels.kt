@@ -222,6 +222,68 @@ data class DashboardSummaryResponse(
     val lowStockProducts: Int,
     val recentOrders: List<OrderResponse> = emptyList(),
     val lowStockItems: List<ProductResponse> = emptyList(),
+    val revenueSeries: List<DashboardRevenuePointResponse> = emptyList(),
+    val orderStatusBreakdown: List<DashboardBreakdownResponse> = emptyList(),
+    val orderTypeBreakdown: List<DashboardBreakdownResponse> = emptyList(),
+    val topItems: List<DashboardTopItemResponse> = emptyList(),
+    val recentActivity: List<DashboardActivityResponse> = emptyList(),
+    val dashboardTasks: List<DashboardTaskResponse> = emptyList(),
+    val notificationPreview: List<DashboardNotificationPreviewResponse> = emptyList(),
+)
+
+@Serializable
+data class DashboardRevenuePointResponse(
+    val date: String,
+    val amount: String,
+    val ordersCount: Int,
+)
+
+@Serializable
+data class DashboardBreakdownResponse(
+    val key: String,
+    val label: String,
+    val count: Int,
+    val amount: String = "0.00",
+)
+
+@Serializable
+data class DashboardTopItemResponse(
+    val productId: String? = null,
+    val name: String,
+    val itemType: String,
+    val quantity: String,
+    val amount: String,
+    val imageUrl: String? = null,
+)
+
+@Serializable
+data class DashboardActivityResponse(
+    val id: String,
+    val type: String,
+    val title: String,
+    val body: String,
+    val occurredAt: String,
+    val tone: String = "info",
+)
+
+@Serializable
+data class DashboardTaskResponse(
+    val id: String,
+    val title: String,
+    val body: String,
+    val action: String,
+    val priority: String = "normal",
+    val tone: String = "info",
+    val count: Int = 0,
+)
+
+@Serializable
+data class DashboardNotificationPreviewResponse(
+    val id: String,
+    val title: String,
+    val body: String,
+    val createdAt: String,
+    val tone: String = "info",
 )
 
 @Serializable

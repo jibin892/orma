@@ -4,7 +4,13 @@ import com.orma.backend.auth.VerifiedFirebaseUser
 import com.orma.backend.config.AppConfig
 import com.orma.backend.models.CustomerRequest
 import com.orma.backend.models.CustomerResponse
+import com.orma.backend.models.DashboardActivityResponse
+import com.orma.backend.models.DashboardBreakdownResponse
+import com.orma.backend.models.DashboardNotificationPreviewResponse
 import com.orma.backend.models.DashboardSummaryResponse
+import com.orma.backend.models.DashboardRevenuePointResponse
+import com.orma.backend.models.DashboardTaskResponse
+import com.orma.backend.models.DashboardTopItemResponse
 import com.orma.backend.models.OrderItemRequest
 import com.orma.backend.models.OrderItemResponse
 import com.orma.backend.models.OrderRequest
@@ -293,6 +299,13 @@ class DashboardRepository(
                     workspaceId = access.workspaceId,
                     filters = DashboardQueryFilters(limit = 5, lowStockOnly = true),
                 ),
+                revenueSeries = connection.listDashboardRevenueSeries(access.workspaceId),
+                orderStatusBreakdown = connection.listOrderStatusBreakdown(access.workspaceId),
+                orderTypeBreakdown = connection.listOrderTypeBreakdown(access.workspaceId),
+                topItems = connection.listDashboardTopItems(access.workspaceId),
+                recentActivity = connection.listDashboardActivity(access.workspaceId),
+                dashboardTasks = connection.listDashboardTasks(access.workspaceId),
+                notificationPreview = connection.listDashboardNotificationPreview(access.workspaceId),
             )
         }
     }
@@ -1172,6 +1185,273 @@ class DashboardRepository(
                 result.getBigDecimal(1) ?: BigDecimal.ZERO
             }
         }
+
+    private fun Connection.listDashboardRevenueSeries(workspaceId: String): List<DashboardRevenuePointResponse> {
+        val sql = """
+            select
+                date_trunc('day', created_at)::date::text as date,
+                coalesce(sum(total), 0) as amount,
+                count(*)::int as orders_count
+            from orders
+            where workspace_id = ?::uuid
+              and status <> 'cancelled'
+              and created_at >= now() - interval '13 days'
+            group by 1
+            order by 1 asc
+        """.trimIndent()
+        return prepareStatement(sql).use { statement ->
+            statement.setString(1, workspaceId)
+            statement.executeQuery().use { result ->
+                buildList {
+                    while (result.next()) {
+                        add(
+                            DashboardRevenuePointResponse(
+                                date = result.getString("date"),
+                                amount = result.getBigDecimal("amount").moneyString(),
+                                ordersCount = result.getInt("orders_count"),
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private fun Connection.listOrderStatusBreakdown(workspaceId: String): List<DashboardBreakdownResponse> =
+        listDashboardBreakdown(
+            workspaceId = workspaceId,
+            sql = """
+                select
+                    status as key,
+                    count(*)::int as item_count,
+                    coalesce(sum(total), 0) as amount
+                from orders
+                where workspace_id = ?::uuid
+                group by status
+                order by item_count desc, status asc
+            """.trimIndent(),
+        )
+
+    private fun Connection.listOrderTypeBreakdown(workspaceId: String): List<DashboardBreakdownResponse> =
+        listDashboardBreakdown(
+            workspaceId = workspaceId,
+            sql = """
+                select
+                    order_type as key,
+                    count(*)::int as item_count,
+                    coalesce(sum(total), 0) as amount
+                from orders
+                where workspace_id = ?::uuid
+                  and status <> 'cancelled'
+                group by order_type
+                order by item_count desc, order_type asc
+            """.trimIndent(),
+        )
+
+    private fun Connection.listDashboardBreakdown(
+        workspaceId: String,
+        sql: String,
+    ): List<DashboardBreakdownResponse> =
+        prepareStatement(sql).use { statement ->
+            statement.setString(1, workspaceId)
+            statement.executeQuery().use { result ->
+                buildList {
+                    while (result.next()) {
+                        val key = result.getString("key") ?: "unknown"
+                        add(
+                            DashboardBreakdownResponse(
+                                key = key,
+                                label = key.dashboardLabel(),
+                                count = result.getInt("item_count"),
+                                amount = result.getBigDecimal("amount").moneyString(),
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+
+    private fun Connection.listDashboardTopItems(workspaceId: String): List<DashboardTopItemResponse> {
+        val sql = """
+            select
+                oi.product_id::text,
+                coalesce(p.name, oi.description) as name,
+                coalesce(p.item_type, 'product') as item_type,
+                coalesce(sum(oi.quantity), 0) as quantity,
+                coalesce(sum(oi.line_total), 0) as amount,
+                (
+                    select pi.storage_path
+                    from product_images pi
+                    where pi.workspace_id = o.workspace_id
+                      and pi.product_id = oi.product_id::text
+                      and pi.status = 'active'
+                    order by pi.sort_order asc, pi.created_at desc
+                    limit 1
+                ) as image_storage_path
+            from order_items oi
+            join orders o on o.id = oi.order_id
+            left join products p on p.id = oi.product_id
+            where o.workspace_id = ?::uuid
+              and o.status <> 'cancelled'
+            group by oi.product_id, coalesce(p.name, oi.description), coalesce(p.item_type, 'product'), image_storage_path
+            order by coalesce(sum(oi.line_total), 0) desc, coalesce(sum(oi.quantity), 0) desc
+            limit 5
+        """.trimIndent()
+        return prepareStatement(sql).use { statement ->
+            statement.setString(1, workspaceId)
+            statement.executeQuery().use { result ->
+                buildList {
+                    while (result.next()) {
+                        add(
+                            DashboardTopItemResponse(
+                                productId = result.getString("product_id"),
+                                name = result.getString("name") ?: "Item",
+                                itemType = result.getString("item_type") ?: "product",
+                                quantity = result.getBigDecimal("quantity").decimalString(),
+                                amount = result.getBigDecimal("amount").moneyString(),
+                                imageUrl = result.getString("image_storage_path").toDashboardMediaUrl(),
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private fun Connection.listDashboardActivity(workspaceId: String): List<DashboardActivityResponse> {
+        val sql = """
+            select
+                o.id::text,
+                o.order_type,
+                o.order_number,
+                o.status,
+                o.total,
+                o.currency,
+                coalesce(c.name, 'Walk-in customer') as customer_name,
+                o.created_at::text as occurred_at
+            from orders o
+            left join customers c on c.id = o.customer_id
+            where o.workspace_id = ?::uuid
+            order by o.created_at desc
+            limit 8
+        """.trimIndent()
+        return prepareStatement(sql).use { statement ->
+            statement.setString(1, workspaceId)
+            statement.executeQuery().use { result ->
+                buildList {
+                    while (result.next()) {
+                        val orderType = result.getString("order_type") ?: "sale"
+                        val status = result.getString("status") ?: "draft"
+                        add(
+                            DashboardActivityResponse(
+                                id = result.getString("id"),
+                                type = orderType,
+                                title = "${orderType.dashboardLabel()} ${result.getString("order_number")}",
+                                body = "${result.getString("customer_name")} · ${status.dashboardLabel()} · ${result.getString("currency")} ${result.getBigDecimal("total").moneyString()}",
+                                occurredAt = result.getString("occurred_at"),
+                                tone = status.dashboardTone(),
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private fun Connection.listDashboardTasks(workspaceId: String): List<DashboardTaskResponse> = buildList {
+        val lowStockCount = scalarInt(
+            """
+            select count(*)
+            from products
+            where workspace_id = ?::uuid
+              and status = 'active'
+              and item_type = 'product'
+              and track_stock = true
+              and stock_quantity <= reorder_level
+            """.trimIndent(),
+            workspaceId,
+        )
+        if (lowStockCount > 0) {
+            add(
+                DashboardTaskResponse(
+                    id = "low_stock",
+                    title = "Review low stock",
+                    body = "$lowStockCount stocked items are at or below reorder level.",
+                    action = "products.low_stock",
+                    priority = "high",
+                    tone = "warning",
+                    count = lowStockCount,
+                ),
+            )
+        }
+
+        val draftOrders = scalarInt(
+            "select count(*) from orders where workspace_id = ?::uuid and status = 'draft'",
+            workspaceId,
+        )
+        if (draftOrders > 0) {
+            add(
+                DashboardTaskResponse(
+                    id = "draft_orders",
+                    title = "Confirm draft orders",
+                    body = "$draftOrders orders are waiting for review.",
+                    action = "orders.draft",
+                    priority = "normal",
+                    tone = "info",
+                    count = draftOrders,
+                ),
+            )
+        }
+
+        val failedNotifications = scalarInt(
+            "select count(*) from notification_events where workspace_id = ?::uuid and failure_count > 0",
+            workspaceId,
+        )
+        if (failedNotifications > 0) {
+            add(
+                DashboardTaskResponse(
+                    id = "notification_failures",
+                    title = "Check notifications",
+                    body = "$failedNotifications notifications reported delivery failures.",
+                    action = "notifications.review",
+                    priority = "normal",
+                    tone = "warning",
+                    count = failedNotifications,
+                ),
+            )
+        }
+    }
+
+    private fun Connection.listDashboardNotificationPreview(
+        workspaceId: String,
+    ): List<DashboardNotificationPreviewResponse> {
+        val sql = """
+            select id::text, title, body, status, created_at::text
+            from notification_events
+            where workspace_id = ?::uuid
+            order by created_at desc
+            limit 5
+        """.trimIndent()
+        return prepareStatement(sql).use { statement ->
+            statement.setString(1, workspaceId)
+            statement.executeQuery().use { result ->
+                buildList {
+                    while (result.next()) {
+                        val status = result.getString("status") ?: "queued"
+                        add(
+                            DashboardNotificationPreviewResponse(
+                                id = result.getString("id"),
+                                title = result.getString("title"),
+                                body = result.getString("body"),
+                                createdAt = result.getString("created_at"),
+                                tone = status.dashboardTone(),
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+    }
 
     private fun Connection.listCustomers(
         workspaceId: String,
@@ -2627,6 +2907,20 @@ class DashboardRepository(
             else -> "sale"
         }
     }
+
+    private fun String.dashboardLabel(): String =
+        split("_")
+            .filter { it.isNotBlank() }
+            .joinToString(" ") { word -> word.replaceFirstChar { it.uppercase() } }
+            .ifBlank { "Unknown" }
+
+    private fun String.dashboardTone(): String =
+        when (trim().lowercase()) {
+            "cancelled", "failed", "send_failed" -> "danger"
+            "draft", "queued", "part_paid" -> "warning"
+            "paid", "completed", "sent", "ready", "synced" -> "success"
+            else -> "info"
+        }
 
     private fun String.cleanPrinterConnectionType(): String {
         val normalized = trim().lowercase().filter { it.isLetterOrDigit() || it == '_' }
