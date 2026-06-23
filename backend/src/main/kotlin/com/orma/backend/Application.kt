@@ -35,7 +35,7 @@ fun Application.module(config: AppConfig = AppConfig.load()) {
     val onboardingRepository = dataSource?.let { OnboardingRepository(it) }
     val dashboardRepository = dataSource?.let { DashboardRepository(it, config) }
     val gstinRepository = dataSource?.let { GstinRepository(it) }
-    val metaIntegrationRepository = dataSource?.let { MetaIntegrationRepository(it) }
+    val metaIntegrationRepository = dataSource?.let { MetaIntegrationRepository(it, config) }
     val orderNotificationService = dataSource?.let { OrderNotificationService(it, config) }
 
     configureSerialization()

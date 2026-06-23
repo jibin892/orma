@@ -22,6 +22,10 @@ data class HealthResponse(
     val cloudinaryConfigured: Boolean,
     val gstinCheckConfigured: Boolean,
     val metaWebhookConfigured: Boolean = false,
+    val metaBackendConfigured: Boolean = false,
+    val metaOAuthConfigured: Boolean = false,
+    val metaTokenStorageConfigured: Boolean = false,
+    val metaSystemUserTokenConfigured: Boolean = false,
 )
 
 @Serializable
@@ -691,8 +695,11 @@ data class PrinterProfileResponse(
 
 @Serializable
 data class MetaConnectionRequest(
-    val status: String = "connected",
+    val status: String = "credentials_pending",
+    val connectionMode: String = "manual_setup",
+    val businessDisplayName: String? = null,
     val businessId: String? = null,
+    val whatsappDisplayNumber: String? = null,
     val whatsappBusinessAccountId: String? = null,
     val phoneNumberId: String? = null,
     val catalogId: String? = null,
@@ -705,13 +712,20 @@ data class MetaConnectionRequest(
 data class MetaConnectionStatusResponse(
     val connected: Boolean,
     val status: String,
+    val connectionMode: String = "manual_setup",
+    val businessDisplayName: String? = null,
     val businessId: String? = null,
+    val whatsappDisplayNumber: String? = null,
     val whatsappBusinessAccountId: String? = null,
     val phoneNumberId: String? = null,
     val catalogId: String? = null,
     val pageId: String? = null,
     val instagramBusinessAccountId: String? = null,
     val scopes: List<String> = emptyList(),
+    val accessTokenStatus: String = "not_configured",
+    val tokenExpiresAt: String? = null,
+    val webhookSubscribedAt: String? = null,
+    val messagingStatus: String = "not_configured",
     val lastSyncAt: String? = null,
     val lastError: String? = null,
     val productsReady: Int = 0,
@@ -745,4 +759,45 @@ data class MetaCatalogSyncResponse(
 data class MetaWebhookEventResponse(
     val id: String,
     val status: String,
+)
+
+@Serializable
+data class MetaConnectStartResponse(
+    val ready: Boolean,
+    val authorizationUrl: String? = null,
+    val state: String? = null,
+    val expiresAt: String? = null,
+    val scopes: List<String> = emptyList(),
+    val message: String,
+)
+
+@Serializable
+data class MetaConnectCompleteResponse(
+    val success: Boolean,
+    val status: String,
+    val message: String,
+)
+
+@Serializable
+data class MetaSystemUserConnectResponse(
+    val connected: Boolean,
+    val status: String,
+    val message: String,
+    val connection: MetaConnectionStatusResponse? = null,
+)
+
+@Serializable
+data class MetaOrderUpdateRequest(
+    val orderId: String,
+    val templateName: String? = null,
+    val languageCode: String? = null,
+    val recipientPhoneNumber: String? = null,
+)
+
+@Serializable
+data class MetaOrderUpdateResponse(
+    val sent: Boolean,
+    val status: String,
+    val message: String,
+    val messageId: String? = null,
 )

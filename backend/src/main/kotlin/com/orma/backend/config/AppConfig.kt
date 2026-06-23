@@ -18,6 +18,16 @@ data class AppConfig(
     val gstinCheckApiKey: String?,
     val gstinCheckBaseUrl: String,
     val metaWebhookVerifyToken: String?,
+    val metaAppId: String?,
+    val metaAppSecret: String?,
+    val metaRedirectUri: String?,
+    val metaGraphApiVersion: String,
+    val metaTokenEncryptionSecret: String?,
+    val metaSystemUserAccessToken: String?,
+    val metaOAuthSuccessRedirectUrl: String?,
+    val metaDefaultOrderTemplate: String,
+    val metaDefaultLanguageCode: String,
+    val metaOAuthScopes: List<String>,
     val allowedOrigins: List<String>,
 ) {
     val databaseConfigured: Boolean
@@ -60,6 +70,20 @@ data class AppConfig(
     val metaWebhookConfigured: Boolean
         get() = !metaWebhookVerifyToken.isNullOrBlank()
 
+    val metaOAuthConfigured: Boolean
+        get() = !metaAppId.isNullOrBlank() &&
+            !metaAppSecret.isNullOrBlank() &&
+            !metaRedirectUri.isNullOrBlank()
+
+    val metaTokenStorageConfigured: Boolean
+        get() = !metaTokenEncryptionSecret.isNullOrBlank()
+
+    val metaSystemUserTokenConfigured: Boolean
+        get() = !metaSystemUserAccessToken.isNullOrBlank()
+
+    val metaBackendConfigured: Boolean
+        get() = metaOAuthConfigured || metaSystemUserTokenConfigured
+
     companion object {
         fun load(env: Map<String, String> = System.getenv()): AppConfig {
             val firebaseProjectId = env["FIREBASE_PROJECT_ID"].orNullIfBlank()
@@ -83,6 +107,22 @@ data class AppConfig(
                 gstinCheckBaseUrl = env["GSTINCHECK_BASE_URL"].orEmpty()
                     .ifBlank { "https://sheet.gstincheck.co.in/check" },
                 metaWebhookVerifyToken = env["META_WEBHOOK_VERIFY_TOKEN"].orNullIfBlank(),
+                metaAppId = env["META_APP_ID"].orNullIfBlank(),
+                metaAppSecret = env["META_APP_SECRET"].orNullIfBlank(),
+                metaRedirectUri = env["META_REDIRECT_URI"].orNullIfBlank(),
+                metaGraphApiVersion = env["META_GRAPH_API_VERSION"].orEmpty().ifBlank { "v20.0" },
+                metaTokenEncryptionSecret = env["META_TOKEN_ENCRYPTION_SECRET"].orNullIfBlank(),
+                metaSystemUserAccessToken = env["META_SYSTEM_USER_ACCESS_TOKEN"].orNullIfBlank(),
+                metaOAuthSuccessRedirectUrl = env["META_OAUTH_SUCCESS_REDIRECT_URL"].orNullIfBlank(),
+                metaDefaultOrderTemplate = env["META_DEFAULT_ORDER_TEMPLATE"].orEmpty().ifBlank { "orma_order_update" },
+                metaDefaultLanguageCode = env["META_DEFAULT_LANGUAGE_CODE"].orEmpty().ifBlank { "en_US" },
+                metaOAuthScopes = env["META_OAUTH_SCOPES"]
+                    ?.split(",")
+                    ?.map { it.trim() }
+                    ?.filter { it.isNotBlank() }
+                    ?.distinct()
+                    ?.takeIf { it.isNotEmpty() }
+                    ?: defaultMetaOAuthScopes,
                 allowedOrigins = (
                     env["ALLOWED_ORIGINS"]
                         ?.split(",")
@@ -100,6 +140,13 @@ data class AppConfig(
             "http://localhost:3000",
             "https://orma-web-dist-dev-api.vercel.app",
             "https://orma-web-dun.vercel.app",
+        )
+
+        private val defaultMetaOAuthScopes = listOf(
+            "business_management",
+            "catalog_management",
+            "whatsapp_business_management",
+            "whatsapp_business_messaging",
         )
 
         fun test(): AppConfig = AppConfig(
@@ -120,6 +167,16 @@ data class AppConfig(
             gstinCheckApiKey = null,
             gstinCheckBaseUrl = "https://sheet.gstincheck.co.in/check",
             metaWebhookVerifyToken = null,
+            metaAppId = null,
+            metaAppSecret = null,
+            metaRedirectUri = null,
+            metaGraphApiVersion = "v20.0",
+            metaTokenEncryptionSecret = null,
+            metaSystemUserAccessToken = null,
+            metaOAuthSuccessRedirectUrl = null,
+            metaDefaultOrderTemplate = "orma_order_update",
+            metaDefaultLanguageCode = "en_US",
+            metaOAuthScopes = defaultMetaOAuthScopes,
             allowedOrigins = listOf("*"),
         )
     }

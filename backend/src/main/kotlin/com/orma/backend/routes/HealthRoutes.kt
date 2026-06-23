@@ -21,6 +21,10 @@ fun Route.healthRoutes(config: AppConfig) {
                 cloudinaryConfigured = config.cloudinaryConfigured,
                 gstinCheckConfigured = config.gstinCheckConfigured,
                 metaWebhookConfigured = config.metaWebhookConfigured,
+                metaBackendConfigured = config.metaBackendConfigured,
+                metaOAuthConfigured = config.metaOAuthConfigured,
+                metaTokenStorageConfigured = config.metaTokenStorageConfigured,
+                metaSystemUserTokenConfigured = config.metaSystemUserTokenConfigured,
             ),
         )
     }

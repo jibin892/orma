@@ -4,6 +4,7 @@ import com.orma.backend.config.AppConfig
 import com.orma.backend.db.MetaIntegrationRepository
 import com.orma.backend.models.ErrorResponse
 import com.orma.backend.models.MetaConnectionRequest
+import com.orma.backend.models.MetaOrderUpdateRequest
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.request.receive
@@ -32,11 +33,61 @@ fun Route.metaIntegrationRoutes(
         call.respond(status)
     }
 
+    post("/integrations/meta/connect/start") {
+        val repository = metaIntegrationRepository ?: return@post call.metaDatabaseNotConfigured()
+        val firebaseUser = call.verifiedFirebaseUser(config) ?: return@post
+        val response = repository.startOAuth(firebaseUser) ?: return@post call.metaWorkspaceNotFound()
+        call.respond(response)
+    }
+
+    get("/integrations/meta/connect/callback") {
+        val repository = metaIntegrationRepository ?: return@get call.metaDatabaseNotConfigured()
+        val code = call.request.queryParameters["code"]
+        val state = call.request.queryParameters["state"]
+        if (code.isNullOrBlank() || state.isNullOrBlank()) {
+            call.respond(
+                HttpStatusCode.BadRequest,
+                ErrorResponse(
+                    code = "meta_callback_invalid",
+                    message = "Meta connection callback is missing required details.",
+                ),
+            )
+            return@get
+        }
+        val response = repository.completeOAuth(state = state, code = code)
+        call.respond(if (response.success) HttpStatusCode.OK else HttpStatusCode.BadRequest, response)
+    }
+
+    post("/integrations/meta/connect/system-user") {
+        val repository = metaIntegrationRepository ?: return@post call.metaDatabaseNotConfigured()
+        val firebaseUser = call.verifiedFirebaseUser(config) ?: return@post
+        val response = repository.connectSystemUser(firebaseUser) ?: return@post call.metaWorkspaceNotFound()
+        call.respond(response)
+    }
+
     post("/integrations/meta/catalog/sync") {
         val repository = metaIntegrationRepository ?: return@post call.metaDatabaseNotConfigured()
         val firebaseUser = call.verifiedFirebaseUser(config) ?: return@post
         val sync = repository.syncCatalog(firebaseUser) ?: return@post call.metaWorkspaceNotFound()
         call.respond(sync)
+    }
+
+    post("/integrations/meta/whatsapp/send-order-update") {
+        val repository = metaIntegrationRepository ?: return@post call.metaDatabaseNotConfigured()
+        val firebaseUser = call.verifiedFirebaseUser(config) ?: return@post
+        val request = call.receive<MetaOrderUpdateRequest>()
+        if (request.orderId.isBlank()) {
+            call.respond(
+                HttpStatusCode.BadRequest,
+                ErrorResponse(
+                    code = "order_id_required",
+                    message = "Choose an order before sending a WhatsApp update.",
+                ),
+            )
+            return@post
+        }
+        val response = repository.sendOrderUpdate(firebaseUser, request) ?: return@post call.metaWorkspaceNotFound()
+        call.respond(if (response.sent) HttpStatusCode.OK else HttpStatusCode.Conflict, response)
     }
 
     get("/webhooks/meta") {
