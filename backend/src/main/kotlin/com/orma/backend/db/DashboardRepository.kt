@@ -70,6 +70,8 @@ data class DashboardQueryFilters(
     val status: String? = null,
     val itemType: String? = null,
     val orderType: String? = null,
+    val dateFrom: String? = null,
+    val dateTo: String? = null,
     val page: Int = 1,
     val limit: Int = 80,
     val lowStockOnly: Boolean = false,
@@ -223,9 +225,15 @@ class DashboardRepository(
         }
     }
 
-    suspend fun summary(firebaseUser: VerifiedFirebaseUser): DashboardSummaryResponse? = withContext(Dispatchers.IO) {
+    suspend fun summary(
+        firebaseUser: VerifiedFirebaseUser,
+        filters: DashboardQueryFilters = DashboardQueryFilters(),
+    ): DashboardSummaryResponse? = withContext(Dispatchers.IO) {
         dataSource.connection.use { connection ->
             val access = connection.resolveWorkspaceAccess(firebaseUser) ?: return@withContext null
+            fun orderParams(): Array<String> =
+                filters.withOrderDateParams(access.workspaceId).toTypedArray()
+
             DashboardSummaryResponse(
                 currency = access.currency,
                 businessMode = access.businessMode,
@@ -238,34 +246,63 @@ class DashboardRepository(
                     select coalesce(sum(${effectivePaidTotalSql("o")}), 0)
                     from orders o
                     where o.workspace_id = ?::uuid and o.status <> 'cancelled'
+                    ${filters.orderDateWhereSql("o")}
                     """.trimIndent(),
-                    access.workspaceId,
+                    *orderParams(),
                 ).moneyString(),
                 ordersCount = connection.scalarInt(
-                    "select count(*) from orders where workspace_id = ?::uuid and status <> 'cancelled'",
-                    access.workspaceId,
+                    """
+                    select count(*)
+                    from orders o
+                    where o.workspace_id = ?::uuid
+                      and o.status <> 'cancelled'
+                      ${filters.orderDateWhereSql("o")}
+                    """.trimIndent(),
+                    *orderParams(),
                 ),
                 bookingsCount = connection.scalarInt(
                     """
                     select count(*)
-                    from orders
-                    where workspace_id = ?::uuid
+                    from orders o
+                    where o.workspace_id = ?::uuid
                       and status <> 'cancelled'
                       and (order_type = 'appointment' or scheduled_at is not null)
+                      ${filters.orderDateWhereSql("o")}
                     """.trimIndent(),
-                    access.workspaceId,
+                    *orderParams(),
                 ),
                 salesCount = connection.scalarInt(
-                    "select count(*) from orders where workspace_id = ?::uuid and status <> 'cancelled' and order_type = 'sale'",
-                    access.workspaceId,
+                    """
+                    select count(*)
+                    from orders o
+                    where o.workspace_id = ?::uuid
+                      and o.status <> 'cancelled'
+                      and o.order_type = 'sale'
+                      ${filters.orderDateWhereSql("o")}
+                    """.trimIndent(),
+                    *orderParams(),
                 ),
                 serviceOrdersCount = connection.scalarInt(
-                    "select count(*) from orders where workspace_id = ?::uuid and status <> 'cancelled' and order_type = 'service'",
-                    access.workspaceId,
+                    """
+                    select count(*)
+                    from orders o
+                    where o.workspace_id = ?::uuid
+                      and o.status <> 'cancelled'
+                      and o.order_type = 'service'
+                      ${filters.orderDateWhereSql("o")}
+                    """.trimIndent(),
+                    *orderParams(),
                 ),
                 appointmentsCount = connection.scalarInt(
-                    "select count(*) from orders where workspace_id = ?::uuid and status <> 'cancelled' and order_type = 'appointment'",
-                    access.workspaceId,
+                    """
+                    select count(*)
+                    from orders o
+                    where o.workspace_id = ?::uuid
+                      and o.status <> 'cancelled'
+                      and o.order_type = 'appointment'
+                      ${filters.orderDateWhereSql("o")}
+                    """.trimIndent(),
+                    *orderParams(),
                 ),
                 todayAppointmentsCount = connection.scalarInt(
                     """
@@ -304,18 +341,18 @@ class DashboardRepository(
                 ),
                 recentOrders = connection.listOrders(
                     workspaceId = access.workspaceId,
-                    filters = DashboardQueryFilters(limit = 5),
+                    filters = filters.copy(limit = 5, page = 1),
                     includeItems = false,
                 ).items,
                 lowStockItems = connection.listProducts(
                     workspaceId = access.workspaceId,
                     filters = DashboardQueryFilters(limit = 5, lowStockOnly = true),
                 ).items,
-                revenueSeries = connection.listDashboardRevenueSeries(access.workspaceId),
-                orderStatusBreakdown = connection.listOrderStatusBreakdown(access.workspaceId),
-                orderTypeBreakdown = connection.listOrderTypeBreakdown(access.workspaceId),
-                topItems = connection.listDashboardTopItems(access.workspaceId),
-                recentActivity = connection.listDashboardActivity(access.workspaceId),
+                revenueSeries = connection.listDashboardRevenueSeries(access.workspaceId, filters),
+                orderStatusBreakdown = connection.listOrderStatusBreakdown(access.workspaceId, filters),
+                orderTypeBreakdown = connection.listOrderTypeBreakdown(access.workspaceId, filters),
+                topItems = connection.listDashboardTopItems(access.workspaceId, filters),
+                recentActivity = connection.listDashboardActivity(access.workspaceId, filters),
                 dashboardTasks = connection.listDashboardTasks(access.workspaceId),
                 notificationPreview = connection.listDashboardNotificationPreview(access.workspaceId),
             )
@@ -834,6 +871,30 @@ class DashboardRepository(
         }
     }
 
+    suspend fun updateOrder(
+        firebaseUser: VerifiedFirebaseUser,
+        orderId: String,
+        request: OrderRequest,
+    ): OrderResponse? = withContext(Dispatchers.IO) {
+        dataSource.connection.use { connection ->
+            connection.autoCommit = false
+            try {
+                val access = connection.resolveWorkspaceAccess(firebaseUser) ?: run {
+                    connection.rollback()
+                    return@withContext null
+                }
+                val updated = connection.updateOrder(access, orderId, request)
+                connection.commit()
+                updated
+            } catch (error: Throwable) {
+                connection.rollback()
+                throw error
+            } finally {
+                connection.autoCommit = true
+            }
+        }
+    }
+
     suspend fun updateOrderStatus(
         firebaseUser: VerifiedFirebaseUser,
         orderId: String,
@@ -862,16 +923,18 @@ class DashboardRepository(
         val cleanWorkspaceId = workspaceId.cleanUuidOrNull() ?: return null
         val sql = """
             select
-                id::text,
-                business_name,
-                industry,
-                city,
-                currency,
-                logo_file_name,
-                cover_file_name
-            from business_workspaces
-            where id = ?::uuid
-              and onboarding_completed_at is not null
+                bw.id::text,
+                bw.business_name,
+                bw.industry,
+                bw.city,
+                bw.currency,
+                mc.whatsapp_display_number,
+                bw.logo_file_name,
+                bw.cover_file_name
+            from business_workspaces bw
+            left join meta_connections mc on mc.workspace_id = bw.id
+            where bw.id = ?::uuid
+              and bw.onboarding_completed_at is not null
             limit 1
         """.trimIndent()
         return prepareStatement(sql).use { statement ->
@@ -886,6 +949,7 @@ class DashboardRepository(
                         industry = result.getString("industry"),
                         city = result.getString("city"),
                         currency = result.getString("currency") ?: "INR",
+                        whatsappDisplayNumber = result.getString("whatsapp_display_number"),
                         logoUrl = result.getString("logo_file_name").toDashboardMediaUrl(),
                         coverUrl = result.getString("cover_file_name").toDashboardMediaUrl(),
                     )
@@ -1216,45 +1280,53 @@ class DashboardRepository(
         }
     }
 
-    private fun Connection.scalarInt(sql: String, workspaceId: String): Int =
+    private fun Connection.scalarInt(sql: String, vararg params: String): Int =
         prepareStatement(sql).use { statement ->
-            statement.setString(1, workspaceId)
+            statement.bindStringParams(params.toList())
             statement.executeQuery().use { result ->
                 result.next()
                 result.getInt(1)
             }
         }
 
-    private fun Connection.scalarDecimal(sql: String, workspaceId: String): BigDecimal =
+    private fun Connection.scalarDecimal(sql: String, vararg params: String): BigDecimal =
         prepareStatement(sql).use { statement ->
-            statement.setString(1, workspaceId)
+            statement.bindStringParams(params.toList())
             statement.executeQuery().use { result ->
                 result.next()
                 result.getBigDecimal(1) ?: BigDecimal.ZERO
             }
         }
 
-    private fun Connection.listDashboardRevenueSeries(workspaceId: String): List<DashboardRevenuePointResponse> {
+    private fun Connection.listDashboardRevenueSeries(
+        workspaceId: String,
+        filters: DashboardQueryFilters,
+    ): List<DashboardRevenuePointResponse> {
+        val dateTo = filters.cleanDateToOrNull()?.let(LocalDate::parse) ?: LocalDate.now()
+        val dateFrom = filters.cleanDateFromOrNull()?.let(LocalDate::parse) ?: dateTo.minusDays(6)
+        val startDate = if (dateFrom.isAfter(dateTo)) dateTo else dateFrom
         val sql = """
             select
                 to_char(days.day, 'YYYY-MM-DD') as date,
                 coalesce(sum(${effectivePaidTotalSql("o")}), 0) as amount,
                 count(o.id)::int as orders_count
             from generate_series(
-                date_trunc('day', now()) - interval '6 days',
-                date_trunc('day', now()),
+                ?::date,
+                ?::date,
                 interval '1 day'
             ) as days(day)
             left join orders o
               on o.workspace_id = ?::uuid
              and o.status <> 'cancelled'
-             and o.created_at >= days.day
-             and o.created_at < days.day + interval '1 day'
+             and coalesce(o.scheduled_at, o.created_at) >= days.day
+             and coalesce(o.scheduled_at, o.created_at) < days.day + interval '1 day'
             group by days.day
             order by days.day asc
         """.trimIndent()
         return prepareStatement(sql).use { statement ->
-            statement.setString(1, workspaceId)
+            statement.setString(1, startDate.toString())
+            statement.setString(2, dateTo.toString())
+            statement.setString(3, workspaceId)
             statement.executeQuery().use { result ->
                 buildList {
                     while (result.next()) {
@@ -1271,44 +1343,52 @@ class DashboardRepository(
         }
     }
 
-    private fun Connection.listOrderStatusBreakdown(workspaceId: String): List<DashboardBreakdownResponse> =
-        listDashboardBreakdown(
-            workspaceId = workspaceId,
-            sql = """
+    private fun Connection.listOrderStatusBreakdown(
+        workspaceId: String,
+        filters: DashboardQueryFilters,
+    ): List<DashboardBreakdownResponse> {
+        val params = filters.withOrderDateParams(workspaceId)
+        val sql = """
                 select
-                    status as key,
+                    o.status as key,
                     count(*)::int as item_count,
-                    coalesce(sum(total), 0) as amount
-                from orders
-                where workspace_id = ?::uuid
-                  and status <> 'cancelled'
-                group by status
-                order by item_count desc, status asc
-            """.trimIndent(),
-        )
+                    coalesce(sum(o.total), 0) as amount
+                from orders o
+                where o.workspace_id = ?::uuid
+                  and o.status <> 'cancelled'
+                  ${filters.orderDateWhereSql("o")}
+                group by o.status
+                order by item_count desc, o.status asc
+            """.trimIndent()
+        return listDashboardBreakdown(params, sql)
+    }
 
-    private fun Connection.listOrderTypeBreakdown(workspaceId: String): List<DashboardBreakdownResponse> =
-        listDashboardBreakdown(
-            workspaceId = workspaceId,
-            sql = """
+    private fun Connection.listOrderTypeBreakdown(
+        workspaceId: String,
+        filters: DashboardQueryFilters,
+    ): List<DashboardBreakdownResponse> {
+        val params = filters.withOrderDateParams(workspaceId)
+        val sql = """
                 select
-                    order_type as key,
+                    o.order_type as key,
                     count(*)::int as item_count,
-                    coalesce(sum(total), 0) as amount
-                from orders
-                where workspace_id = ?::uuid
-                  and status <> 'cancelled'
-                group by order_type
-                order by item_count desc, order_type asc
-            """.trimIndent(),
-        )
+                    coalesce(sum(o.total), 0) as amount
+                from orders o
+                where o.workspace_id = ?::uuid
+                  and o.status <> 'cancelled'
+                  ${filters.orderDateWhereSql("o")}
+                group by o.order_type
+                order by item_count desc, o.order_type asc
+            """.trimIndent()
+        return listDashboardBreakdown(params, sql)
+    }
 
     private fun Connection.listDashboardBreakdown(
-        workspaceId: String,
+        params: List<String>,
         sql: String,
     ): List<DashboardBreakdownResponse> =
         prepareStatement(sql).use { statement ->
-            statement.setString(1, workspaceId)
+            statement.bindStringParams(params)
             statement.executeQuery().use { result ->
                 buildList {
                     while (result.next()) {
@@ -1326,7 +1406,11 @@ class DashboardRepository(
             }
         }
 
-    private fun Connection.listDashboardTopItems(workspaceId: String): List<DashboardTopItemResponse> {
+    private fun Connection.listDashboardTopItems(
+        workspaceId: String,
+        filters: DashboardQueryFilters,
+    ): List<DashboardTopItemResponse> {
+        val params = filters.withOrderDateParams(workspaceId)
         val sql = """
             select
                 oi.product_id::text,
@@ -1348,12 +1432,13 @@ class DashboardRepository(
             left join products p on p.id = oi.product_id
             where o.workspace_id = ?::uuid
               and o.status <> 'cancelled'
+              ${filters.orderDateWhereSql("o")}
             group by oi.product_id, coalesce(p.name, oi.description), coalesce(p.item_type, 'product'), image_storage_path
             order by coalesce(sum(oi.line_total), 0) desc, coalesce(sum(oi.quantity), 0) desc
             limit 5
         """.trimIndent()
         return prepareStatement(sql).use { statement ->
-            statement.setString(1, workspaceId)
+            statement.bindStringParams(params)
             statement.executeQuery().use { result ->
                 buildList {
                     while (result.next()) {
@@ -1373,7 +1458,11 @@ class DashboardRepository(
         }
     }
 
-    private fun Connection.listDashboardActivity(workspaceId: String): List<DashboardActivityResponse> {
+    private fun Connection.listDashboardActivity(
+        workspaceId: String,
+        filters: DashboardQueryFilters,
+    ): List<DashboardActivityResponse> {
+        val params = filters.withOrderDateParams(workspaceId)
         val sql = """
             select
                 o.id::text,
@@ -1387,11 +1476,12 @@ class DashboardRepository(
             from orders o
             left join customers c on c.id = o.customer_id
             where o.workspace_id = ?::uuid
+              ${filters.orderDateWhereSql("o")}
             order by o.created_at desc
             limit 8
         """.trimIndent()
         return prepareStatement(sql).use { statement ->
-            statement.setString(1, workspaceId)
+            statement.bindStringParams(params)
             statement.executeQuery().use { result ->
                 buildList {
                     while (result.next()) {
@@ -1582,12 +1672,13 @@ class DashboardRepository(
                         name ilike ?
                         or coalesce(phone_number, '') ilike ?
                         or coalesce(email, '') ilike ?
+                        or coalesce(tax_number, '') ilike ?
                         or coalesce(city, '') ilike ?
                         or coalesce(notes, '') ilike ?
                     )
                     """.trimIndent(),
                 )
-                repeat(5) { params.add(search.ilikePattern()) }
+                repeat(6) { params.add(search.ilikePattern()) }
             }
             append(" order by created_at desc")
             append(" limit ${filters.limit.sanitizedLimit()}")
@@ -1611,10 +1702,10 @@ class DashboardRepository(
     private fun Connection.insertCustomer(workspaceId: String, request: CustomerRequest): CustomerResponse {
         val sql = """
             insert into customers (
-                workspace_id, name, phone_number, email, address_line, city, region,
+                workspace_id, name, phone_number, email, tax_number, address_line, city, region,
                 country, postal_code, notes, updated_at
             )
-            values (?::uuid, ?, ?, ?, ?, ?, ?, ?, ?, ?, now())
+            values (?::uuid, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now())
             returning *
         """.trimIndent()
         return prepareStatement(sql).use { statement ->
@@ -1634,18 +1725,54 @@ class DashboardRepository(
     ): CustomerResponse? {
         val sql = """
             update customers
-            set name = ?, phone_number = ?, email = ?, address_line = ?, city = ?,
+            set name = ?, phone_number = ?, email = ?, tax_number = ?, address_line = ?, city = ?,
                 region = ?, country = ?, postal_code = ?, notes = ?, updated_at = now()
             where id = ?::uuid and workspace_id = ?::uuid
             returning *
         """.trimIndent()
         return prepareStatement(sql).use { statement ->
             statement.bindCustomerRequest(request, startIndex = 1)
-            statement.setString(10, customerId)
-            statement.setString(11, workspaceId)
+            statement.setString(11, customerId)
+            statement.setString(12, workspaceId)
             statement.executeQuery().use { result ->
                 if (result.next()) result.toCustomerResponse() else null
             }
+        }
+    }
+
+    private fun Connection.updateCustomerBillingDetails(
+        workspaceId: String,
+        customerId: String,
+        request: OrderRequest,
+    ) {
+        if (!request.hasCustomerBillingDetails()) return
+        val sql = """
+            update customers
+            set name = coalesce(?, name),
+                phone_number = coalesce(?, phone_number),
+                email = coalesce(?, email),
+                tax_number = coalesce(?, tax_number),
+                address_line = coalesce(?, address_line),
+                city = coalesce(?, city),
+                region = coalesce(?, region),
+                country = coalesce(?, country),
+                postal_code = coalesce(?, postal_code),
+                updated_at = now()
+            where id = ?::uuid and workspace_id = ?::uuid
+        """.trimIndent()
+        prepareStatement(sql).use { statement ->
+            statement.setNullableString(1, request.customerName?.cleanOptional())
+            statement.setNullableString(2, request.customerPhoneNumber?.cleanOptional())
+            statement.setNullableString(3, request.customerEmail?.cleanOptional()?.lowercase())
+            statement.setNullableString(4, request.customerTaxNumber?.cleanOptionalUpper())
+            statement.setNullableString(5, request.customerAddressLine?.cleanOptional())
+            statement.setNullableString(6, request.customerCity?.cleanOptional())
+            statement.setNullableString(7, request.customerRegion?.cleanOptional())
+            statement.setNullableString(8, request.customerCountry?.cleanOptional())
+            statement.setNullableString(9, request.customerPostalCode?.cleanOptional())
+            statement.setString(10, customerId)
+            statement.setString(11, workspaceId)
+            statement.executeUpdate()
         }
     }
 
@@ -2222,6 +2349,7 @@ class DashboardRepository(
                 append(" and o.order_type = ?")
                 params.add(orderType)
             }
+            appendOrderDateWhere(filters, params, alias = "o")
             if (search != null) {
                 append(
                     """
@@ -2261,17 +2389,45 @@ class DashboardRepository(
         filters: DashboardQueryFilters = DashboardQueryFilters(),
         includeItems: Boolean,
     ): PagedResult<OrderResponse> {
-        val sql = """
-            ${orderSelectSql()}
-            where o.workspace_id = ?::uuid and o.customer_id = ?::uuid
-            group by o.id, c.name
-            order by o.created_at desc
-            limit ${filters.limit.sanitizedLimit()}
-            offset ${filters.offset()}
-        """.trimIndent()
+        val params = mutableListOf(workspaceId, customerId)
+        val search = filters.query.cleanSearchTerm()
+        val status = filters.status.cleanOrderStatusFilter()
+        val orderType = filters.orderType.cleanOrderTypeFilter()
+        val sql = buildString {
+            append(orderSelectSql())
+            append(" where o.workspace_id = ?::uuid and o.customer_id = ?::uuid")
+            if (status != null) {
+                append(" and o.status = ?")
+                params.add(status)
+            } else {
+                append(" and o.status <> 'cancelled'")
+            }
+            if (filters.scheduledOnly) {
+                append(" and o.scheduled_at is not null")
+            }
+            if (orderType != null) {
+                append(" and o.order_type = ?")
+                params.add(orderType)
+            }
+            appendOrderDateWhere(filters, params, alias = "o")
+            if (search != null) {
+                append(
+                    """
+                     and (
+                        o.order_number ilike ?
+                        or coalesce(o.notes, '') ilike ?
+                    )
+                    """.trimIndent(),
+                )
+                repeat(2) { params.add(search.ilikePattern()) }
+            }
+            append(" group by o.id, c.name")
+            append(" order by o.created_at desc")
+            append(" limit ${filters.limit.sanitizedLimit()}")
+            append(" offset ${filters.offset()}")
+        }
         return prepareStatement(sql).use { statement ->
-            statement.setString(1, workspaceId)
-            statement.setString(2, customerId)
+            statement.bindStringParams(params)
             statement.executeQuery().use { result ->
                 var totalItems = 0
                 val items = buildList {
@@ -2434,10 +2590,18 @@ class DashboardRepository(
         }
         val currency = request.currency?.cleanOptionalUpper() ?: access.currency
         val customerId = request.customerId.cleanUuidOrNull()
+        if (customerId != null) {
+            updateCustomerBillingDetails(
+                workspaceId = access.workspaceId,
+                customerId = customerId,
+                request = request,
+            )
+        }
+        val effectiveCustomerId = customerId
             ?: request.customerName?.cleanOptional()?.let { name ->
                 insertCustomer(
                     workspaceId = access.workspaceId,
-                    request = CustomerRequest(name = name),
+                    request = request.toCustomerRequest(name),
                 ).id
             }
         val preparedItems = request.items.map { it.toPreparedOrderItem() }
@@ -2468,7 +2632,7 @@ class DashboardRepository(
         """.trimIndent()
         orderId = prepareStatement(insertOrderSql).use { statement ->
             statement.setString(1, access.workspaceId)
-            statement.setNullableUuid(2, customerId)
+            statement.setNullableUuid(2, effectiveCustomerId)
             statement.setString(3, orderNumber)
             statement.setString(4, orderType)
             statement.setString(5, status)
@@ -2498,6 +2662,127 @@ class DashboardRepository(
         }
 
         return getOrder(access.workspaceId, orderId, includeItems = true) ?: error("Created order was not found.")
+    }
+
+    private fun Connection.updateOrder(
+        access: DashboardWorkspaceAccess,
+        orderId: String,
+        request: OrderRequest,
+    ): OrderResponse? {
+        val cleanOrderId = orderId.cleanUuidOrNull() ?: return null
+        val status = request.status.normalizedOrderStatus()
+        val orderType = request.orderType.cleanOrderType()
+        require(orderType != "appointment" || request.scheduledAt.cleanOptional() != null) {
+            "Appointment orders require a preferred date/time."
+        }
+        val currentSql = """
+            select order_number, inventory_applied
+            from orders
+            where id = ?::uuid and workspace_id = ?::uuid
+            for update
+        """.trimIndent()
+        val current = prepareStatement(currentSql).use { statement ->
+            statement.setString(1, cleanOrderId)
+            statement.setString(2, access.workspaceId)
+            statement.executeQuery().use { result ->
+                if (!result.next()) return null
+                result.getString("order_number") to result.getBoolean("inventory_applied")
+            }
+        }
+        val orderNumber = current.first
+        val inventoryWasApplied = current.second
+        val oldItems = listOrderItems(cleanOrderId)
+        val currency = request.currency?.cleanOptionalUpper() ?: access.currency
+        val customerId = request.customerId.cleanUuidOrNull()
+        if (customerId != null) {
+            updateCustomerBillingDetails(
+                workspaceId = access.workspaceId,
+                customerId = customerId,
+                request = request,
+            )
+        }
+        val effectiveCustomerId = customerId
+            ?: request.customerName?.cleanOptional()?.let { name ->
+                insertCustomer(
+                    workspaceId = access.workspaceId,
+                    request = request.toCustomerRequest(name),
+                ).id
+            }
+        val preparedItems = request.items.map { it.toPreparedOrderItem() }
+        val subtotal = preparedItems.fold(BigDecimal.ZERO) { total, item -> total.add(item.lineSubtotal) }.scaled()
+        val taxTotal = preparedItems.fold(BigDecimal.ZERO) { total, item -> total.add(item.lineTax) }.scaled()
+        val total = preparedItems.fold(BigDecimal.ZERO) { sum, item -> sum.add(item.lineTotal) }.scaled()
+        val requestedPaidTotal = request.paidTotal.moneyOrZero().coerceAtMost(total)
+        val paidTotal = if (status.impliesFullPayment() && requestedPaidTotal <= BigDecimal.ZERO) {
+            total
+        } else {
+            requestedPaidTotal
+        }
+        val inventoryShouldBeApplied = status.appliesInventory()
+
+        if (inventoryWasApplied) {
+            oldItems.forEach { item ->
+                item.productId?.let { productId ->
+                    applyOrderStockMovement(access, productId, item.quantity.decimalOrZero(), "Order $orderNumber edited")
+                }
+            }
+        }
+
+        prepareStatement("delete from order_items where order_id = ?::uuid").use { statement ->
+            statement.setString(1, cleanOrderId)
+            statement.executeUpdate()
+        }
+
+        prepareStatement(
+            """
+            update orders
+            set
+                customer_id = ?::uuid,
+                order_type = ?,
+                status = ?,
+                scheduled_at = ?::timestamptz,
+                subtotal = ?,
+                tax_total = ?,
+                discount_total = 0,
+                paid_total = ?,
+                total = ?,
+                currency = ?,
+                notes = ?,
+                inventory_applied = ?,
+                source = ?,
+                fulfillment_type = ?,
+                payment_mode = ?,
+                updated_at = now()
+            where id = ?::uuid and workspace_id = ?::uuid
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setNullableUuid(1, effectiveCustomerId)
+            statement.setString(2, orderType)
+            statement.setString(3, status)
+            statement.setNullableString(4, request.scheduledAt?.cleanOptional())
+            statement.setBigDecimal(5, subtotal)
+            statement.setBigDecimal(6, taxTotal)
+            statement.setBigDecimal(7, paidTotal)
+            statement.setBigDecimal(8, total)
+            statement.setString(9, currency)
+            statement.setNullableString(10, request.notes?.cleanOptional())
+            statement.setBoolean(11, inventoryShouldBeApplied)
+            statement.setString(12, request.source.cleanOrderSource())
+            statement.setString(13, request.fulfillmentType.cleanFulfillmentType())
+            statement.setString(14, request.paymentMode.cleanPaymentMode())
+            statement.setString(15, cleanOrderId)
+            statement.setString(16, access.workspaceId)
+            statement.executeUpdate()
+        }
+
+        preparedItems.forEach { item ->
+            insertOrderItem(cleanOrderId, item)
+            if (inventoryShouldBeApplied && item.productId != null) {
+                applyOrderStockMovement(access, item.productId, item.quantity.negate(), "Order $orderNumber edited")
+            }
+        }
+
+        return getOrder(access.workspaceId, cleanOrderId, includeItems = true)
     }
 
     private fun Connection.updateOrderStatus(
@@ -2678,6 +2963,7 @@ class DashboardRepository(
             max(c.name) as customer_name,
             max(c.phone_number) as customer_phone_number,
             max(c.email) as customer_email,
+            max(c.tax_number) as customer_tax_number,
             max(c.address_line) as customer_address_line,
             max(c.city) as customer_city,
             max(c.region) as customer_region,
@@ -2709,12 +2995,13 @@ class DashboardRepository(
         setString(startIndex, request.name.cleanName())
         setNullableString(startIndex + 1, request.phoneNumber?.cleanOptional())
         setNullableString(startIndex + 2, request.email?.cleanOptional()?.lowercase())
-        setNullableString(startIndex + 3, request.addressLine?.cleanOptional())
-        setNullableString(startIndex + 4, request.city?.cleanOptional())
-        setNullableString(startIndex + 5, request.region?.cleanOptional())
-        setNullableString(startIndex + 6, request.country?.cleanOptional())
-        setNullableString(startIndex + 7, request.postalCode?.cleanOptional())
-        setNullableString(startIndex + 8, request.notes?.cleanOptional())
+        setNullableString(startIndex + 3, request.taxNumber?.cleanOptionalUpper())
+        setNullableString(startIndex + 4, request.addressLine?.cleanOptional())
+        setNullableString(startIndex + 5, request.city?.cleanOptional())
+        setNullableString(startIndex + 6, request.region?.cleanOptional())
+        setNullableString(startIndex + 7, request.country?.cleanOptional())
+        setNullableString(startIndex + 8, request.postalCode?.cleanOptional())
+        setNullableString(startIndex + 9, request.notes?.cleanOptional())
     }
 
     private fun PreparedStatement.bindSupplierRequest(request: SupplierRequest, startIndex: Int) {
@@ -2877,6 +3164,7 @@ class DashboardRepository(
             name = getString("name"),
             phoneNumber = getString("phone_number"),
             email = getString("email"),
+            taxNumber = getString("tax_number"),
             addressLine = getString("address_line"),
             city = getString("city"),
             region = getString("region"),
@@ -2981,6 +3269,7 @@ class DashboardRepository(
             customerName = getString("customer_name"),
             customerPhoneNumber = getString("customer_phone_number"),
             customerEmail = getString("customer_email"),
+            customerTaxNumber = getString("customer_tax_number"),
             customerAddressLine = getString("customer_address_line"),
             customerCity = getString("customer_city"),
             customerRegion = getString("customer_region"),
@@ -3043,6 +3332,33 @@ class DashboardRepository(
         )
     }
 
+    private fun OrderRequest.toCustomerRequest(name: String): CustomerRequest =
+        CustomerRequest(
+            name = name,
+            phoneNumber = customerPhoneNumber,
+            email = customerEmail,
+            taxNumber = customerTaxNumber,
+            addressLine = customerAddressLine,
+            city = customerCity,
+            region = customerRegion,
+            country = customerCountry,
+            postalCode = customerPostalCode,
+            notes = "Created from invoice/order.",
+        )
+
+    private fun OrderRequest.hasCustomerBillingDetails(): Boolean =
+        listOf(
+            customerName,
+            customerPhoneNumber,
+            customerEmail,
+            customerTaxNumber,
+            customerAddressLine,
+            customerCity,
+            customerRegion,
+            customerCountry,
+            customerPostalCode,
+        ).any { it.cleanOptional() != null }
+
     private fun PreparedStatement.setNullableString(index: Int, value: String?) {
         if (value.isNullOrBlank()) {
             setNull(index, Types.VARCHAR)
@@ -3069,6 +3385,44 @@ class DashboardRepository(
         this?.trim()?.takeIf { it.isNotBlank() }?.let { value ->
             runCatching { UUID.fromString(value).toString() }.getOrNull()
         }
+
+    private fun DashboardQueryFilters.cleanDateFromOrNull(): String? =
+        dateFrom.cleanIsoDateOrNull()
+
+    private fun DashboardQueryFilters.cleanDateToOrNull(): String? =
+        dateTo.cleanIsoDateOrNull()
+
+    private fun DashboardQueryFilters.withOrderDateParams(workspaceId: String): List<String> =
+        buildList {
+            add(workspaceId)
+            cleanDateFromOrNull()?.let { add(it) }
+            cleanDateToOrNull()?.let { add(it) }
+        }
+
+    private fun DashboardQueryFilters.orderDateWhereSql(alias: String = "o"): String =
+        buildString {
+            cleanDateFromOrNull()?.let {
+                append(" and coalesce($alias.scheduled_at, $alias.created_at) >= ?::date")
+            }
+            cleanDateToOrNull()?.let {
+                append(" and coalesce($alias.scheduled_at, $alias.created_at) < (?::date + interval '1 day')")
+            }
+        }
+
+    private fun StringBuilder.appendOrderDateWhere(
+        filters: DashboardQueryFilters,
+        params: MutableList<String>,
+        alias: String = "o",
+    ) {
+        filters.cleanDateFromOrNull()?.let {
+            append(" and coalesce($alias.scheduled_at, $alias.created_at) >= ?::date")
+            params.add(it)
+        }
+        filters.cleanDateToOrNull()?.let {
+            append(" and coalesce($alias.scheduled_at, $alias.created_at) < (?::date + interval '1 day')")
+            params.add(it)
+        }
+    }
 
     private fun String.cleanName(): String =
         trim().take(180).ifBlank { "Untitled" }

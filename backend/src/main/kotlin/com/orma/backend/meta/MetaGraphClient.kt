@@ -12,6 +12,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -141,6 +142,53 @@ class MetaGraphClient(
         return MetaGraphMessageResult(messageId = messageId)
     }
 
+    fun createWhatsAppTemplate(
+        accessToken: String,
+        whatsappBusinessAccountId: String,
+        template: MetaGraphWhatsAppTemplateRequest,
+    ): MetaGraphTemplateResult {
+        val payload = buildJsonObject {
+            put("name", template.name)
+            put("category", template.category)
+            put("language", template.languageCode)
+            put(
+                "components",
+                buildJsonArray {
+                    add(
+                        buildJsonObject {
+                            put("type", "BODY")
+                            put("text", template.bodyText)
+                            if (template.sampleParameters.isNotEmpty()) {
+                                put(
+                                    "example",
+                                    buildJsonObject {
+                                        put(
+                                            "body_text",
+                                            buildJsonArray {
+                                                add(
+                                                    buildJsonArray {
+                                                        template.sampleParameters.forEach { value ->
+                                                            add(JsonPrimitive(value))
+                                                        }
+                                                    },
+                                                )
+                                            },
+                                        )
+                                    },
+                                )
+                            }
+                        },
+                    )
+                },
+            )
+        }
+        val response = graphPostJson("$whatsappBusinessAccountId/message_templates", accessToken, payload).parseJsonObject()
+        return MetaGraphTemplateResult(
+            id = response["id"]?.jsonPrimitive?.contentOrNull,
+            status = response["status"]?.jsonPrimitive?.contentOrNull,
+        )
+    }
+
     private fun graphGet(pathWithQuery: String): String {
         val request = HttpRequest.newBuilder()
             .uri(URI.create("${graphBaseUrl()}/$pathWithQuery"))
@@ -193,6 +241,19 @@ data class MetaGraphCatalogProductRequest(
 
 data class MetaGraphProductResult(
     val metaProductId: String?,
+)
+
+data class MetaGraphWhatsAppTemplateRequest(
+    val name: String,
+    val category: String,
+    val languageCode: String,
+    val bodyText: String,
+    val sampleParameters: List<String>,
+)
+
+data class MetaGraphTemplateResult(
+    val id: String?,
+    val status: String?,
 )
 
 data class MetaGraphMessageResult(

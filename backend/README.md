@@ -55,10 +55,11 @@ Important variables:
 - `META_APP_ID`: Meta app ID for OAuth / embedded signup
 - `META_APP_SECRET`: Meta app secret for OAuth code exchange
 - `META_REDIRECT_URI`: backend callback URL, for example `https://orma-backend.onrender.com/integrations/meta/connect/callback`
+- `META_OAUTH_SUCCESS_REDIRECT_URL`: optional app URL to send users to after Meta OAuth succeeds
 - `META_TOKEN_ENCRYPTION_SECRET`: backend-only secret used to encrypt per-workspace Meta access tokens
 - `META_SYSTEM_USER_ACCESS_TOKEN`: optional pilot token stored only in Render env; use OAuth/embedded signup for per-business production
-- `META_GRAPH_API_VERSION`: optional Graph API version, defaults to `v20.0`
-- `META_DEFAULT_ORDER_TEMPLATE`: WhatsApp template used for order updates, defaults to `orma_order_update`
+- `META_GRAPH_API_VERSION`: optional Graph API version, defaults to `v25.0`
+- `META_DEFAULT_ORDER_TEMPLATE`: WhatsApp template used for order updates, defaults to `orma_product_order_confirmed`
 - `META_DEFAULT_LANGUAGE_CODE`: WhatsApp template language, defaults to `en_US`
 - `META_OAUTH_SCOPES`: optional comma-separated scopes; defaults to business, catalog, and WhatsApp scopes
 - `FIREBASE_STORAGE_BUCKET`: optional Firebase Storage bucket if `MEDIA_STORAGE_PROVIDER=firebase`

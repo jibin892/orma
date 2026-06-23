@@ -94,7 +94,7 @@ fun Route.dashboardRoutes(
     get("/dashboard/summary") {
         val repository = dashboardRepository ?: return@get call.dashboardDatabaseNotConfigured()
         val firebaseUser = call.verifiedFirebaseUser(config) ?: return@get
-        call.respondWorkspaceResult(repository.summary(firebaseUser))
+        call.respondWorkspaceResult(repository.summary(firebaseUser, call.dashboardFilters()))
     }
 
     get("/customers") {
@@ -337,6 +337,22 @@ fun Route.dashboardRoutes(
         call.respondWorkspaceResult(repository.order(firebaseUser, orderId))
     }
 
+    put("/orders/{id}") {
+        val repository = dashboardRepository ?: return@put call.dashboardDatabaseNotConfigured()
+        val firebaseUser = call.verifiedFirebaseUser(config) ?: return@put
+        val orderId = call.parameters["id"].orEmpty()
+        val request = call.receive<OrderRequest>()
+        if (request.items.isEmpty()) {
+            call.respondValidation("order_items_required", "Add at least one item before saving the booking.")
+            return@put
+        }
+        if (request.orderType.normalizedDashboardOrderType() == "appointment" && request.scheduledAt.isNullOrBlank()) {
+            call.respondValidation("appointment_time_required", "Choose a preferred date and time for this appointment.")
+            return@put
+        }
+        call.respondWorkspaceResult(repository.updateOrder(firebaseUser, orderId, request))
+    }
+
     put("/orders/{id}/status") {
         val repository = dashboardRepository ?: return@put call.dashboardDatabaseNotConfigured()
         val firebaseUser = call.verifiedFirebaseUser(config) ?: return@put
@@ -421,6 +437,8 @@ private fun ApplicationCall.dashboardFilters(): DashboardQueryFilters {
         status = query["status"],
         itemType = query["itemType"],
         orderType = query["orderType"],
+        dateFrom = query["dateFrom"],
+        dateTo = query["dateTo"],
         page = query["page"]?.toIntOrNull() ?: 1,
         limit = query["limit"]?.toIntOrNull() ?: 80,
         lowStockOnly = query["lowStock"].toBooleanQuery(),
