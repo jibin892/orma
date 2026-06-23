@@ -235,9 +235,9 @@ class DashboardRepository(
                 ),
                 totalPaidAmount = connection.scalarDecimal(
                     """
-                    select coalesce(sum(paid_total), 0)
-                    from orders
-                    where workspace_id = ?::uuid and status <> 'cancelled'
+                    select coalesce(sum(${effectivePaidTotalSql("o")}), 0)
+                    from orders o
+                    where o.workspace_id = ?::uuid and o.status <> 'cancelled'
                     """.trimIndent(),
                     access.workspaceId,
                 ).moneyString(),
@@ -740,7 +740,7 @@ class DashboardRepository(
     ): PagedResult<OrderResponse>? = withContext(Dispatchers.IO) {
         dataSource.connection.use { connection ->
             val access = connection.resolveWorkspaceAccess(firebaseUser) ?: return@withContext null
-            connection.listOrders(access.workspaceId, filters = filters, includeItems = false)
+            connection.listOrders(access.workspaceId, filters = filters, includeItems = true)
         }
     }
 
@@ -1238,7 +1238,7 @@ class DashboardRepository(
         val sql = """
             select
                 to_char(days.day, 'YYYY-MM-DD') as date,
-                coalesce(sum(o.paid_total), 0) as amount,
+                coalesce(sum(${effectivePaidTotalSql("o")}), 0) as amount,
                 count(o.id)::int as orders_count
             from generate_series(
                 date_trunc('day', now()) - interval '6 days',
@@ -2444,7 +2444,12 @@ class DashboardRepository(
         val subtotal = preparedItems.fold(BigDecimal.ZERO) { total, item -> total.add(item.lineSubtotal) }.scaled()
         val taxTotal = preparedItems.fold(BigDecimal.ZERO) { total, item -> total.add(item.lineTax) }.scaled()
         val total = preparedItems.fold(BigDecimal.ZERO) { sum, item -> sum.add(item.lineTotal) }.scaled()
-        val paidTotal = request.paidTotal.moneyOrZero().coerceAtMost(total)
+        val requestedPaidTotal = request.paidTotal.moneyOrZero().coerceAtMost(total)
+        val paidTotal = if (status.impliesFullPayment() && requestedPaidTotal <= BigDecimal.ZERO) {
+            total
+        } else {
+            requestedPaidTotal
+        }
         val inventoryApplied = status.appliesInventory()
         val orderId: String
         val orderNumber = "ORD-${UUID.randomUUID().toString().replace("-", "").take(8).uppercase()}"
@@ -2519,14 +2524,22 @@ class DashboardRepository(
         prepareStatement(
             """
             update orders
-            set status = ?, inventory_applied = inventory_applied or ?, updated_at = now()
+            set
+                status = ?,
+                inventory_applied = inventory_applied or ?,
+                paid_total = case
+                    when ? and coalesce(paid_total, 0) <= 0 then total
+                    else paid_total
+                end,
+                updated_at = now()
             where id = ?::uuid and workspace_id = ?::uuid
             """.trimIndent(),
         ).use { statement ->
             statement.setString(1, status)
             statement.setBoolean(2, shouldApplyInventory)
-            statement.setString(3, orderId)
-            statement.setString(4, access.workspaceId)
+            statement.setBoolean(3, status.impliesFullPayment())
+            statement.setString(4, orderId)
+            statement.setString(5, access.workspaceId)
             statement.executeUpdate()
         }
         if (shouldApplyInventory) {
@@ -2662,7 +2675,14 @@ class DashboardRepository(
             o.id::text,
             o.order_number,
             o.customer_id::text,
-            c.name as customer_name,
+            max(c.name) as customer_name,
+            max(c.phone_number) as customer_phone_number,
+            max(c.email) as customer_email,
+            max(c.address_line) as customer_address_line,
+            max(c.city) as customer_city,
+            max(c.region) as customer_region,
+            max(c.country) as customer_country,
+            max(c.postal_code) as customer_postal_code,
             o.order_type,
             o.status,
             o.scheduled_at::text,
@@ -2946,20 +2966,34 @@ class DashboardRepository(
             updatedAt = getString("updated_at"),
         )
 
-    private fun ResultSet.toOrderResponse(items: List<OrderItemResponse>): OrderResponse =
-        OrderResponse(
+    private fun ResultSet.toOrderResponse(items: List<OrderItemResponse>): OrderResponse {
+        val status = getString("status")
+        val total = getBigDecimal("total")
+        val paidTotal = effectivePaidTotal(
+            status = status,
+            paidTotal = getBigDecimal("paid_total"),
+            total = total,
+        )
+        return OrderResponse(
             id = getString("id"),
             orderNumber = getString("order_number"),
             customerId = getString("customer_id"),
             customerName = getString("customer_name"),
+            customerPhoneNumber = getString("customer_phone_number"),
+            customerEmail = getString("customer_email"),
+            customerAddressLine = getString("customer_address_line"),
+            customerCity = getString("customer_city"),
+            customerRegion = getString("customer_region"),
+            customerCountry = getString("customer_country"),
+            customerPostalCode = getString("customer_postal_code"),
             orderType = getString("order_type") ?: "sale",
-            status = getString("status"),
+            status = status,
             scheduledAt = getString("scheduled_at"),
             subtotal = getBigDecimal("subtotal").moneyString(),
             taxTotal = getBigDecimal("tax_total").moneyString(),
             discountTotal = getBigDecimal("discount_total").moneyString(),
-            paidTotal = getBigDecimal("paid_total").moneyString(),
-            total = getBigDecimal("total").moneyString(),
+            paidTotal = paidTotal.moneyString(),
+            total = total.moneyString(),
             currency = getString("currency"),
             notes = getString("notes"),
             fulfillmentType = getString("fulfillment_type") ?: "standard",
@@ -2970,6 +3004,7 @@ class DashboardRepository(
             createdAt = getString("created_at"),
             updatedAt = getString("updated_at"),
         )
+    }
 
     private fun ResultSet.toOrderItemResponse(): OrderItemResponse =
         OrderItemResponse(
@@ -3254,6 +3289,30 @@ class DashboardRepository(
     private fun BigDecimal.coerceAtMost(maximum: BigDecimal): BigDecimal =
         if (this > maximum) maximum else this
 
+    private fun effectivePaidTotalSql(orderAlias: String): String =
+        """
+        case
+            when $orderAlias.status in ('paid', 'completed')
+             and coalesce($orderAlias.paid_total, 0) <= 0
+                then coalesce($orderAlias.total, 0)
+            else coalesce($orderAlias.paid_total, 0)
+        end
+        """.trimIndent()
+
+    private fun effectivePaidTotal(
+        status: String,
+        paidTotal: BigDecimal?,
+        total: BigDecimal?,
+    ): BigDecimal {
+        val cleanPaidTotal = paidTotal ?: BigDecimal.ZERO
+        val cleanTotal = total ?: BigDecimal.ZERO
+        return if (status.impliesFullPayment() && cleanPaidTotal <= BigDecimal.ZERO) {
+            cleanTotal
+        } else {
+            cleanPaidTotal
+        }
+    }
+
     private fun String.normalizedOrderStatus(): String {
         val normalized = trim().lowercase().filter { it.isLetterOrDigit() || it == '_' }
         return if (normalized in AllowedOrderStatuses) normalized else "confirmed"
@@ -3261,6 +3320,9 @@ class DashboardRepository(
 
     private fun String.appliesInventory(): Boolean =
         this in InventoryApplyingStatuses
+
+    private fun String.impliesFullPayment(): Boolean =
+        this in FullPaymentStatuses
 
     private fun List<PublicCatalogPreparedItem>.derivedOrderType(): String =
         when {
@@ -3506,6 +3568,7 @@ class DashboardRepository(
     private companion object {
         val AllowedOrderStatuses = setOf("draft", "confirmed", "paid", "part_paid", "completed", "cancelled")
         val InventoryApplyingStatuses = setOf("confirmed", "paid", "part_paid", "completed")
+        val FullPaymentStatuses = setOf("paid", "completed")
         val AllowedItemTypes = setOf("product", "service", "appointment")
         val AllowedOrderTypes = setOf("sale", "service", "appointment")
         val AllowedPrinterConnectionTypes = setOf(
