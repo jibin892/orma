@@ -86,6 +86,7 @@ data class BusinessSetupRequest(
     val businessName: String,
     val legalName: String,
     val industry: String,
+    val businessMode: String = "product_selling",
     val website: String = "",
     val isTaxRegistered: Boolean,
     val taxNumber: String = "",
@@ -213,6 +214,10 @@ data class DashboardSummaryResponse(
     val totalPaidAmount: String,
     val ordersCount: Int,
     val bookingsCount: Int,
+    val salesCount: Int = 0,
+    val serviceOrdersCount: Int = 0,
+    val appointmentsCount: Int = 0,
+    val todayAppointmentsCount: Int = 0,
     val productsInStock: Int,
     val lowStockProducts: Int,
     val recentOrders: List<OrderResponse> = emptyList(),
@@ -330,6 +335,7 @@ data class ProductImportRequest(
 @Serializable
 data class ProductImportRowRequest(
     val name: String,
+    val itemType: String = "product",
     val sku: String? = null,
     val barcode: String? = null,
     val description: String? = null,
@@ -342,6 +348,8 @@ data class ProductImportRowRequest(
     val stockQuantity: String = "0",
     val reorderLevel: String = "0",
     val trackStock: Boolean = true,
+    val durationMinutes: Int? = null,
+    val bookingRequired: Boolean = false,
     val supplierName: String? = null,
 )
 
@@ -370,6 +378,7 @@ data class ProductExportResponse(
 @Serializable
 data class ProductRequest(
     val name: String,
+    val itemType: String = "product",
     val categoryId: String? = null,
     val sku: String? = null,
     val barcode: String? = null,
@@ -383,6 +392,8 @@ data class ProductRequest(
     val stockQuantity: String = "0",
     val reorderLevel: String = "0",
     val trackStock: Boolean = true,
+    val durationMinutes: Int? = null,
+    val bookingRequired: Boolean = false,
     val supplierId: String? = null,
 )
 
@@ -394,6 +405,7 @@ data class ProductResponse(
     val supplierId: String? = null,
     val supplierName: String? = null,
     val name: String,
+    val itemType: String = "product",
     val sku: String? = null,
     val barcode: String? = null,
     val description: String? = null,
@@ -406,6 +418,8 @@ data class ProductResponse(
     val stockQuantity: String,
     val reorderLevel: String,
     val trackStock: Boolean,
+    val durationMinutes: Int? = null,
+    val bookingRequired: Boolean = false,
     val lowStock: Boolean,
     val status: String,
     val imageUrl: String? = null,
@@ -457,6 +471,7 @@ data class PublicCatalogProductResponse(
     val categoryId: String? = null,
     val categoryName: String? = null,
     val name: String,
+    val itemType: String = "product",
     val description: String? = null,
     val unit: String,
     val sellingPrice: String,
@@ -466,6 +481,8 @@ data class PublicCatalogProductResponse(
     val trackStock: Boolean,
     val stockQuantity: String,
     val inStock: Boolean,
+    val durationMinutes: Int? = null,
+    val bookingRequired: Boolean = false,
     val imageUrl: String? = null,
     val offer: PublicCatalogOfferResponse? = null,
 )
@@ -529,6 +546,7 @@ data class OrderListResponse(
 data class OrderRequest(
     val customerId: String? = null,
     val customerName: String? = null,
+    val orderType: String = "sale",
     val status: String = "confirmed",
     val scheduledAt: String? = null,
     val paidTotal: String = "0",
@@ -560,6 +578,7 @@ data class OrderResponse(
     val orderNumber: String,
     val customerId: String? = null,
     val customerName: String? = null,
+    val orderType: String = "sale",
     val status: String,
     val scheduledAt: String? = null,
     val subtotal: String,

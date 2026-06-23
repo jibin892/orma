@@ -83,6 +83,10 @@ fun Route.dashboardRoutes(
                 code = "public_items_unavailable",
                 message = "Selected items are unavailable. Refresh the catalog and try again.",
             )
+            PublicCatalogOrderSubmitResult.AppointmentTimeRequired -> call.respondValidation(
+                code = "public_appointment_time_required",
+                message = "Choose a preferred date and time before booking.",
+            )
         }
     }
 
@@ -298,6 +302,10 @@ fun Route.dashboardRoutes(
             call.respondValidation("order_items_required", "Add at least one item before creating the order.")
             return@post
         }
+        if (request.orderType.normalizedDashboardOrderType() == "appointment" && request.scheduledAt.isNullOrBlank()) {
+            call.respondValidation("appointment_time_required", "Choose a preferred date and time for this appointment.")
+            return@post
+        }
         val order = repository.createOrder(firebaseUser, request)
         if (order != null) {
             orderNotificationService?.notifyOrderCreated(order)
@@ -394,6 +402,8 @@ private fun ApplicationCall.dashboardFilters(): DashboardQueryFilters {
     return DashboardQueryFilters(
         query = query["q"],
         status = query["status"],
+        itemType = query["itemType"],
+        orderType = query["orderType"],
         limit = query["limit"]?.toIntOrNull() ?: 80,
         lowStockOnly = query["lowStock"].toBooleanQuery(),
         supplierId = query["supplierId"],
@@ -404,6 +414,15 @@ private fun ApplicationCall.dashboardFilters(): DashboardQueryFilters {
 
 private fun String?.toBooleanQuery(): Boolean =
     this?.trim()?.lowercase() in setOf("true", "1", "yes")
+
+private fun String.normalizedDashboardOrderType(): String {
+    val normalized = trim().lowercase().replace("-", "_").filter { it.isLetterOrDigit() || it == '_' }
+    return when (normalized) {
+        "service", "services" -> "service"
+        "appointment", "booking" -> "appointment"
+        else -> "sale"
+    }
+}
 
 private fun String.normalizedOfferScope(): String {
     val normalized = trim().lowercase().replace("-", "_").filter { it.isLetterOrDigit() || it == '_' }

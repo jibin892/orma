@@ -58,6 +58,8 @@ data class DashboardWorkspaceAccess(
 data class DashboardQueryFilters(
     val query: String? = null,
     val status: String? = null,
+    val itemType: String? = null,
+    val orderType: String? = null,
     val limit: Int = 80,
     val lowStockOnly: Boolean = false,
     val supplierId: String? = null,
@@ -73,10 +75,13 @@ sealed interface PublicCatalogOrderSubmitResult {
     data object WorkspaceNotFound : PublicCatalogOrderSubmitResult
 
     data object ItemsUnavailable : PublicCatalogOrderSubmitResult
+
+    data object AppointmentTimeRequired : PublicCatalogOrderSubmitResult
 }
 
 private val ProductCsvColumns = listOf(
     "name",
+    "itemType",
     "sku",
     "barcode",
     "description",
@@ -89,6 +94,8 @@ private val ProductCsvColumns = listOf(
     "stockQuantity",
     "reorderLevel",
     "trackStock",
+    "durationMinutes",
+    "bookingRequired",
     "supplierName",
 )
 
@@ -128,6 +135,11 @@ class DashboardRepository(
                     connection.rollback()
                     return@withContext PublicCatalogOrderSubmitResult.ItemsUnavailable
                 }
+                val orderType = publicItems.derivedOrderType()
+                if (orderType == "appointment" && request.scheduledAt.cleanOptional() == null) {
+                    connection.rollback()
+                    return@withContext PublicCatalogOrderSubmitResult.AppointmentTimeRequired
+                }
                 val customer = connection.findCustomerByPhone(
                     workspaceId = access.workspaceId,
                     phoneNumber = request.phoneNumber,
@@ -139,7 +151,11 @@ class DashboardRepository(
                         notes = "Created from public catalog.",
                     ),
                 )
-                val fulfillment = request.fulfillmentType.cleanFulfillmentType()
+                val fulfillment = when (orderType) {
+                    "appointment" -> "booking"
+                    "service" -> if (request.scheduledAt.cleanOptional() != null) "scheduled" else "standard"
+                    else -> request.fulfillmentType.cleanFulfillmentType()
+                }
                 val paymentMode = request.paymentMode.cleanPaymentMode()
                 val publicNote = buildList {
                     add("Public catalog request.")
@@ -151,6 +167,7 @@ class DashboardRepository(
                     access = access,
                     request = OrderRequest(
                         customerId = customer.id,
+                        orderType = orderType,
                         status = "draft",
                         scheduledAt = request.scheduledAt?.cleanOptional(),
                         paidTotal = "0",
@@ -159,7 +176,7 @@ class DashboardRepository(
                         fulfillmentType = fulfillment,
                         paymentMode = paymentMode,
                         source = "public_catalog",
-                        items = publicItems,
+                        items = publicItems.map { it.orderItem },
                     ),
                 )
                 val paymentMethod = if (paymentMode == "upi") {
@@ -216,7 +233,32 @@ class DashboardRepository(
                     from orders
                     where workspace_id = ?::uuid
                       and status <> 'cancelled'
+                      and (order_type = 'appointment' or scheduled_at is not null)
+                    """.trimIndent(),
+                    access.workspaceId,
+                ),
+                salesCount = connection.scalarInt(
+                    "select count(*) from orders where workspace_id = ?::uuid and status <> 'cancelled' and order_type = 'sale'",
+                    access.workspaceId,
+                ),
+                serviceOrdersCount = connection.scalarInt(
+                    "select count(*) from orders where workspace_id = ?::uuid and status <> 'cancelled' and order_type = 'service'",
+                    access.workspaceId,
+                ),
+                appointmentsCount = connection.scalarInt(
+                    "select count(*) from orders where workspace_id = ?::uuid and status <> 'cancelled' and order_type = 'appointment'",
+                    access.workspaceId,
+                ),
+                todayAppointmentsCount = connection.scalarInt(
+                    """
+                    select count(*)
+                    from orders
+                    where workspace_id = ?::uuid
+                      and status <> 'cancelled'
+                      and order_type = 'appointment'
                       and scheduled_at is not null
+                      and scheduled_at >= date_trunc('day', now())
+                      and scheduled_at < date_trunc('day', now()) + interval '1 day'
                     """.trimIndent(),
                     access.workspaceId,
                 ),
@@ -226,6 +268,7 @@ class DashboardRepository(
                     from products
                     where workspace_id = ?::uuid
                       and status = 'active'
+                      and item_type = 'product'
                       and (track_stock = false or stock_quantity > 0)
                     """.trimIndent(),
                     access.workspaceId,
@@ -831,6 +874,7 @@ class DashboardRepository(
                 products.category_id::text,
                 pc.name as category_name,
                 products.name,
+                products.item_type,
                 products.description,
                 products.unit,
                 products.selling_price,
@@ -839,6 +883,8 @@ class DashboardRepository(
                 products.prices_include_tax,
                 products.track_stock,
                 products.stock_quantity,
+                products.duration_minutes,
+                products.booking_required,
                 offer.id::text as offer_id,
                 offer.name as offer_name,
                 offer.description as offer_description,
@@ -979,7 +1025,7 @@ class DashboardRepository(
     private fun Connection.publicOrderItems(
         workspaceId: String,
         request: PublicCatalogOrderRequest,
-    ): List<OrderItemRequest> =
+    ): List<PublicCatalogPreparedItem> =
         request.items
             .take(50)
             .mapNotNull { requestedItem ->
@@ -991,12 +1037,15 @@ class DashboardRepository(
                 if (product.trackStock && product.stockQuantity.decimalOrZero() <= BigDecimal.ZERO) {
                     return@mapNotNull null
                 }
-                OrderItemRequest(
-                    productId = product.id,
-                    description = product.name,
-                    quantity = quantity.decimalString(),
-                    unitPrice = product.offer?.finalPrice ?: product.sellingPrice,
-                    taxRate = product.taxRate,
+                PublicCatalogPreparedItem(
+                    itemType = product.itemType.cleanItemType(),
+                    orderItem = OrderItemRequest(
+                        productId = product.id,
+                        description = product.name,
+                        quantity = quantity.decimalString(),
+                        unitPrice = product.offer?.finalPrice ?: product.sellingPrice,
+                        taxRate = product.taxRate,
+                    ),
                 )
             }
 
@@ -1010,6 +1059,7 @@ class DashboardRepository(
                 products.category_id::text,
                 pc.name as category_name,
                 products.name,
+                products.item_type,
                 products.description,
                 products.unit,
                 products.selling_price,
@@ -1018,6 +1068,8 @@ class DashboardRepository(
                 products.prices_include_tax,
                 products.track_stock,
                 products.stock_quantity,
+                products.duration_minutes,
+                products.booking_required,
                 offer.id::text as offer_id,
                 offer.name as offer_name,
                 offer.description as offer_description,
@@ -1498,6 +1550,7 @@ class DashboardRepository(
         val search = filters.query.cleanSearchTerm()
         val supplierId = filters.supplierId.cleanUuidOrNull()
         val barcode = filters.barcode.cleanSearchTerm()
+        val itemType = filters.itemType.cleanItemTypeFilter()
         val sql = buildString {
             append(
                 """
@@ -1536,6 +1589,10 @@ class DashboardRepository(
                 append(" and p.supplier_id = ?::uuid")
                 params.add(supplierId)
             }
+            if (itemType != null) {
+                append(" and p.item_type = ?")
+                params.add(itemType)
+            }
             if (barcode != null) {
                 append(" and coalesce(p.barcode, '') ilike ?")
                 params.add(barcode.ilikePattern())
@@ -1562,11 +1619,11 @@ class DashboardRepository(
     ): ProductResponse {
         val sql = """
             insert into products (
-                workspace_id, supplier_id, category_id, name, sku, barcode, description, unit,
+                workspace_id, supplier_id, category_id, name, item_type, sku, barcode, description, unit,
                 selling_price, cost_price, currency, tax_rate, prices_include_tax,
-                stock_quantity, reorder_level, track_stock, updated_at
+                stock_quantity, reorder_level, track_stock, duration_minutes, booking_required, updated_at
             )
-            values (?::uuid, ?::uuid, ?::uuid, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now())
+            values (?::uuid, ?::uuid, ?::uuid, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now())
             returning *, null::text as supplier_name, null::text as category_name, null::text as image_storage_path
         """.trimIndent()
         return prepareStatement(sql).use { statement ->
@@ -1641,29 +1698,17 @@ class DashboardRepository(
     ): ProductResponse? {
         val sql = """
             update products
-            set supplier_id = ?::uuid, category_id = ?::uuid, name = ?, sku = ?, barcode = ?, description = ?,
+            set supplier_id = ?::uuid, category_id = ?::uuid, name = ?, item_type = ?, sku = ?, barcode = ?, description = ?,
                 unit = ?, selling_price = ?, cost_price = ?, currency = ?, tax_rate = ?,
-                prices_include_tax = ?, reorder_level = ?, track_stock = ?, updated_at = now()
+                prices_include_tax = ?, stock_quantity = ?, reorder_level = ?, track_stock = ?,
+                duration_minutes = ?, booking_required = ?, updated_at = now()
             where id = ?::uuid and workspace_id = ?::uuid
             returning *, null::text as supplier_name, null::text as category_name, null::text as image_storage_path
         """.trimIndent()
         return prepareStatement(sql).use { statement ->
-            statement.setNullableUuid(1, request.supplierId)
-            statement.setNullableUuid(2, request.categoryId)
-            statement.setString(3, request.name.cleanName())
-            statement.setNullableString(4, request.sku?.cleanOptionalUpper())
-            statement.setNullableString(5, request.barcode?.cleanOptional())
-            statement.setNullableString(6, request.description?.cleanOptional())
-            statement.setString(7, request.unit.cleanOptional() ?: "pcs")
-            statement.setBigDecimal(8, request.sellingPrice.moneyOrZero())
-            statement.setBigDecimal(9, request.costPrice.moneyOrZero())
-            statement.setString(10, request.currency?.cleanOptionalUpper() ?: access.currency)
-            statement.setBigDecimal(11, request.taxRate.decimalOrZero())
-            statement.setBoolean(12, request.pricesIncludeTax)
-            statement.setBigDecimal(13, request.reorderLevel.decimalOrZero())
-            statement.setBoolean(14, request.trackStock)
-            statement.setString(15, productId)
-            statement.setString(16, access.workspaceId)
+            statement.bindProductRequest(access, request, startIndex = 1)
+            statement.setString(19, productId)
+            statement.setString(20, access.workspaceId)
             statement.executeQuery().use { result ->
                 if (result.next()) result.toProductResponse() else null
             }
@@ -1680,7 +1725,7 @@ class DashboardRepository(
             """
             select stock_quantity
             from products
-            where id = ?::uuid and workspace_id = ?::uuid and status = 'active'
+            where id = ?::uuid and workspace_id = ?::uuid and status = 'active' and item_type = 'product'
             for update
             """.trimIndent(),
         ).use { statement ->
@@ -1735,6 +1780,7 @@ class DashboardRepository(
         val params = mutableListOf(workspaceId)
         val search = filters.query.cleanSearchTerm()
         val status = filters.status.cleanOrderStatusFilter()
+        val orderType = filters.orderType.cleanOrderTypeFilter()
         val sql = buildString {
             append(orderSelectSql())
             append(" where o.workspace_id = ?::uuid")
@@ -1746,6 +1792,10 @@ class DashboardRepository(
             }
             if (filters.scheduledOnly) {
                 append(" and o.scheduled_at is not null")
+            }
+            if (orderType != null) {
+                append(" and o.order_type = ?")
+                params.add(orderType)
             }
             if (search != null) {
                 append(
@@ -1912,6 +1962,10 @@ class DashboardRepository(
         request: OrderRequest,
     ): OrderResponse {
         val status = request.status.normalizedOrderStatus()
+        val orderType = request.orderType.cleanOrderType()
+        require(orderType != "appointment" || request.scheduledAt.cleanOptional() != null) {
+            "Appointment orders require a preferred date/time."
+        }
         val currency = request.currency?.cleanOptionalUpper() ?: access.currency
         val customerId = request.customerId.cleanUuidOrNull()
             ?: request.customerName?.cleanOptional()?.let { name ->
@@ -1931,12 +1985,12 @@ class DashboardRepository(
 
         val insertOrderSql = """
             insert into orders (
-                workspace_id, customer_id, order_number, status, scheduled_at,
+                workspace_id, customer_id, order_number, order_type, status, scheduled_at,
                 subtotal, tax_total, discount_total, paid_total, total, currency,
                 notes, inventory_applied, created_by_user_id, source, fulfillment_type, payment_mode, updated_at
             )
             values (
-                ?::uuid, ?::uuid, ?, ?, ?::timestamptz,
+                ?::uuid, ?::uuid, ?, ?, ?, ?::timestamptz,
                 ?, ?, 0, ?, ?, ?, ?, ?, ?::uuid, ?, ?, ?, now()
             )
             returning id::text
@@ -1945,19 +1999,20 @@ class DashboardRepository(
             statement.setString(1, access.workspaceId)
             statement.setNullableUuid(2, customerId)
             statement.setString(3, orderNumber)
-            statement.setString(4, status)
-            statement.setNullableString(5, request.scheduledAt?.cleanOptional())
-            statement.setBigDecimal(6, subtotal)
-            statement.setBigDecimal(7, taxTotal)
-            statement.setBigDecimal(8, paidTotal)
-            statement.setBigDecimal(9, total)
-            statement.setString(10, currency)
-            statement.setNullableString(11, request.notes?.cleanOptional())
-            statement.setBoolean(12, inventoryApplied)
-            statement.setString(13, access.userId)
-            statement.setString(14, request.source.cleanOrderSource())
-            statement.setString(15, request.fulfillmentType.cleanFulfillmentType())
-            statement.setString(16, request.paymentMode.cleanPaymentMode())
+            statement.setString(4, orderType)
+            statement.setString(5, status)
+            statement.setNullableString(6, request.scheduledAt?.cleanOptional())
+            statement.setBigDecimal(7, subtotal)
+            statement.setBigDecimal(8, taxTotal)
+            statement.setBigDecimal(9, paidTotal)
+            statement.setBigDecimal(10, total)
+            statement.setString(11, currency)
+            statement.setNullableString(12, request.notes?.cleanOptional())
+            statement.setBoolean(13, inventoryApplied)
+            statement.setString(14, access.userId)
+            statement.setString(15, request.source.cleanOrderSource())
+            statement.setString(16, request.fulfillmentType.cleanFulfillmentType())
+            statement.setString(17, request.paymentMode.cleanPaymentMode())
             statement.executeQuery().use { result ->
                 result.next()
                 result.getString("id")
@@ -2078,7 +2133,7 @@ class DashboardRepository(
             """
             select stock_quantity
             from products
-            where id = ?::uuid and workspace_id = ?::uuid and track_stock = true and status = 'active'
+            where id = ?::uuid and workspace_id = ?::uuid and item_type = 'product' and track_stock = true and status = 'active'
             for update
             """.trimIndent(),
         ).use { statement ->
@@ -2142,6 +2197,7 @@ class DashboardRepository(
             o.order_number,
             o.customer_id::text,
             c.name as customer_name,
+            o.order_type,
             o.status,
             o.scheduled_at::text,
             o.subtotal,
@@ -2188,21 +2244,33 @@ class DashboardRepository(
         request: ProductRequest,
         startIndex: Int,
     ) {
+        val itemType = request.itemType.cleanItemType()
+        val trackStock = itemType == "product" && request.trackStock
+        val stockQuantity = if (trackStock) request.stockQuantity.decimalOrZero() else BigDecimal.ZERO
+        val reorderLevel = if (trackStock) request.reorderLevel.decimalOrZero() else BigDecimal.ZERO
+        val duration = request.durationMinutes?.takeIf { it > 0 }?.coerceAtMost(1440)
         setNullableUuid(startIndex, request.supplierId)
         setNullableUuid(startIndex + 1, request.categoryId)
         setString(startIndex + 2, request.name.cleanName())
-        setNullableString(startIndex + 3, request.sku?.cleanOptionalUpper())
-        setNullableString(startIndex + 4, request.barcode?.cleanOptional())
-        setNullableString(startIndex + 5, request.description?.cleanOptional())
-        setString(startIndex + 6, request.unit.cleanOptional() ?: "pcs")
-        setBigDecimal(startIndex + 7, request.sellingPrice.moneyOrZero())
-        setBigDecimal(startIndex + 8, request.costPrice.moneyOrZero())
-        setString(startIndex + 9, request.currency?.cleanOptionalUpper() ?: access.currency)
-        setBigDecimal(startIndex + 10, request.taxRate.decimalOrZero())
-        setBoolean(startIndex + 11, request.pricesIncludeTax)
-        setBigDecimal(startIndex + 12, request.stockQuantity.decimalOrZero())
-        setBigDecimal(startIndex + 13, request.reorderLevel.decimalOrZero())
-        setBoolean(startIndex + 14, request.trackStock)
+        setString(startIndex + 3, itemType)
+        setNullableString(startIndex + 4, request.sku?.cleanOptionalUpper())
+        setNullableString(startIndex + 5, request.barcode?.cleanOptional())
+        setNullableString(startIndex + 6, request.description?.cleanOptional())
+        setString(startIndex + 7, request.unit.cleanOptional() ?: if (itemType == "product") "pcs" else "service")
+        setBigDecimal(startIndex + 8, request.sellingPrice.moneyOrZero())
+        setBigDecimal(startIndex + 9, request.costPrice.moneyOrZero())
+        setString(startIndex + 10, request.currency?.cleanOptionalUpper() ?: access.currency)
+        setBigDecimal(startIndex + 11, request.taxRate.decimalOrZero())
+        setBoolean(startIndex + 12, request.pricesIncludeTax)
+        setBigDecimal(startIndex + 13, stockQuantity)
+        setBigDecimal(startIndex + 14, reorderLevel)
+        setBoolean(startIndex + 15, trackStock)
+        if (duration == null) {
+            setNull(startIndex + 16, Types.INTEGER)
+        } else {
+            setInt(startIndex + 16, duration)
+        }
+        setBoolean(startIndex + 17, itemType == "appointment" || request.bookingRequired)
     }
 
     private fun PreparedStatement.bindPrinterRequest(request: PrinterProfileRequest, startIndex: Int) {
@@ -2288,6 +2356,7 @@ class DashboardRepository(
             categoryId = getString("category_id"),
             categoryName = getString("category_name"),
             name = getString("name"),
+            itemType = getString("item_type") ?: "product",
             description = getString("description"),
             unit = getString("unit"),
             sellingPrice = price.moneyString(),
@@ -2297,6 +2366,8 @@ class DashboardRepository(
             trackStock = trackStock,
             stockQuantity = stockQuantity.decimalString(),
             inStock = !trackStock || stockQuantity > BigDecimal.ZERO,
+            durationMinutes = getNullableInt("duration_minutes"),
+            bookingRequired = getBoolean("booking_required"),
             imageUrl = getString("image_storage_path").toDashboardMediaUrl(),
             offer = getString("offer_id")?.let {
                 PublicCatalogOfferResponse(
@@ -2354,6 +2425,7 @@ class DashboardRepository(
             supplierId = getString("supplier_id"),
             supplierName = getString("supplier_name"),
             name = getString("name"),
+            itemType = getString("item_type") ?: "product",
             sku = getString("sku"),
             barcode = getString("barcode"),
             description = getString("description"),
@@ -2366,6 +2438,8 @@ class DashboardRepository(
             stockQuantity = stockQuantity.decimalString(),
             reorderLevel = reorderLevel.decimalString(),
             trackStock = trackStock,
+            durationMinutes = getNullableInt("duration_minutes"),
+            bookingRequired = getBoolean("booking_required"),
             lowStock = trackStock && stockQuantity <= reorderLevel,
             status = getString("status"),
             imageUrl = getString("image_storage_path").toDashboardMediaUrl(),
@@ -2409,6 +2483,7 @@ class DashboardRepository(
             orderNumber = getString("order_number"),
             customerId = getString("customer_id"),
             customerName = getString("customer_name"),
+            orderType = getString("order_type") ?: "sale",
             status = getString("status"),
             scheduledAt = getString("scheduled_at"),
             subtotal = getBigDecimal("subtotal").moneyString(),
@@ -2440,6 +2515,11 @@ class DashboardRepository(
             lineTax = getBigDecimal("line_tax").moneyString(),
             lineTotal = getBigDecimal("line_total").moneyString(),
         )
+
+    private fun ResultSet.getNullableInt(column: String): Int? {
+        val value = getInt(column)
+        return if (wasNull()) null else value
+    }
 
     private fun OrderItemRequest.toPreparedOrderItem(): PreparedOrderItem {
         val quantity = quantity.decimalOrZero().takeIf { it > BigDecimal.ZERO } ?: BigDecimal.ONE
@@ -2511,6 +2591,42 @@ class DashboardRepository(
             ?.takeIf { it.isNotBlank() && it != "all" }
             ?.filter { it.isLetterOrDigit() || it == '_' }
             ?.takeIf { it in AllowedOrderStatuses }
+
+    private fun String?.cleanItemTypeFilter(): String? =
+        this
+            ?.trim()
+            ?.lowercase()
+            ?.replace("-", "_")
+            ?.takeIf { it.isNotBlank() && it != "all" }
+            ?.filter { it.isLetterOrDigit() || it == '_' }
+            ?.takeIf { it in AllowedItemTypes }
+
+    private fun String?.cleanOrderTypeFilter(): String? =
+        this
+            ?.trim()
+            ?.lowercase()
+            ?.replace("-", "_")
+            ?.takeIf { it.isNotBlank() && it != "all" }
+            ?.filter { it.isLetterOrDigit() || it == '_' }
+            ?.takeIf { it in AllowedOrderTypes }
+
+    private fun String.cleanItemType(): String {
+        val normalized = trim().lowercase().replace("-", "_").filter { it.isLetterOrDigit() || it == '_' }
+        return when (normalized) {
+            "service", "services" -> "service"
+            "appointment", "booking", "booking_required" -> "appointment"
+            else -> "product"
+        }
+    }
+
+    private fun String.cleanOrderType(): String {
+        val normalized = trim().lowercase().replace("-", "_").filter { it.isLetterOrDigit() || it == '_' }
+        return when (normalized) {
+            "service", "services" -> "service"
+            "appointment", "booking" -> "appointment"
+            else -> "sale"
+        }
+    }
 
     private fun String.cleanPrinterConnectionType(): String {
         val normalized = trim().lowercase().filter { it.isLetterOrDigit() || it == '_' }
@@ -2634,6 +2750,13 @@ class DashboardRepository(
     private fun String.appliesInventory(): Boolean =
         this in InventoryApplyingStatuses
 
+    private fun List<PublicCatalogPreparedItem>.derivedOrderType(): String =
+        when {
+            any { it.itemType == "appointment" } -> "appointment"
+            any { it.itemType == "service" } && none { it.itemType == "product" } -> "service"
+            else -> "sale"
+        }
+
     private class ProductCsvParseException(
         val row: Int,
         val publicMessage: String,
@@ -2669,6 +2792,7 @@ class DashboardRepository(
                 if (row.all { it.isBlank() }) return@mapNotNull null
                 ProductImportRowRequest(
                     name = row.value("name", "productName", "itemName", "item"),
+                    itemType = row.value("itemType", "item type", "type", "sellableType").ifBlank { "product" },
                     sku = row.value("sku"),
                     barcode = row.value("barcode", "barCode", "ean", "upc"),
                     description = row.value("description", "details"),
@@ -2685,6 +2809,10 @@ class DashboardRepository(
                         .ifBlank { "0" },
                     trackStock = row.value("trackStock", "track stock", "inventory")
                         .csvBoolean(defaultValue = true),
+                    durationMinutes = row.value("durationMinutes", "duration minutes", "duration", "minutes")
+                        .toIntOrNull(),
+                    bookingRequired = row.value("bookingRequired", "booking required", "requiresBooking")
+                        .csvBoolean(defaultValue = false),
                     supplierName = row.value("supplierName", "supplier name", "supplier"),
                 )
             },
@@ -2742,11 +2870,15 @@ class DashboardRepository(
         }
 
     private fun ProductImportRowRequest.productImportValidationErrors(): List<String> = buildList {
+        if (itemType.cleanItemType() !in AllowedItemTypes) add("Item type must be product, service, or appointment.")
         if (!sellingPrice.isValidNonNegativeDecimal()) add("Selling price must be a valid number.")
         if (!costPrice.isValidNonNegativeDecimal()) add("Cost price must be a valid number.")
         if (!taxRate.isValidNonNegativeDecimal()) add("Tax rate must be a valid number.")
         if (!stockQuantity.isValidNonNegativeDecimal()) add("Stock quantity must be zero or higher.")
         if (!reorderLevel.isValidNonNegativeDecimal()) add("Reorder level must be zero or higher.")
+        if (itemType.cleanItemType() == "appointment" && (durationMinutes ?: 0) <= 0) {
+            add("Appointment items need a duration in minutes.")
+        }
     }
 
     private fun String.isValidNonNegativeDecimal(): Boolean {
@@ -2762,6 +2894,7 @@ class DashboardRepository(
     ): ProductRequest =
         ProductRequest(
             name = productName,
+            itemType = itemType,
             sku = sku,
             barcode = barcode,
             description = description,
@@ -2774,6 +2907,8 @@ class DashboardRepository(
             stockQuantity = stockQuantity,
             reorderLevel = reorderLevel,
             trackStock = trackStock,
+            durationMinutes = durationMinutes,
+            bookingRequired = bookingRequired,
             supplierId = supplierId,
         )
 
@@ -2781,6 +2916,7 @@ class DashboardRepository(
         val rows = map { product ->
             listOf(
                 product.name,
+                product.itemType,
                 product.sku.orEmpty(),
                 product.barcode.orEmpty(),
                 product.description.orEmpty(),
@@ -2793,6 +2929,8 @@ class DashboardRepository(
                 product.stockQuantity,
                 product.reorderLevel,
                 product.trackStock.toString(),
+                product.durationMinutes?.toString().orEmpty(),
+                product.bookingRequired.toString(),
                 product.supplierName.orEmpty(),
             )
         }
@@ -2834,9 +2972,16 @@ class DashboardRepository(
         val lineTotal: BigDecimal,
     )
 
+    private data class PublicCatalogPreparedItem(
+        val orderItem: OrderItemRequest,
+        val itemType: String,
+    )
+
     private companion object {
         val AllowedOrderStatuses = setOf("draft", "confirmed", "paid", "part_paid", "completed", "cancelled")
         val InventoryApplyingStatuses = setOf("confirmed", "paid", "part_paid", "completed")
+        val AllowedItemTypes = setOf("product", "service", "appointment")
+        val AllowedOrderTypes = setOf("sale", "service", "appointment")
         val AllowedPrinterConnectionTypes = setOf(
             "mtp_usb",
             "usb",

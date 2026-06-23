@@ -503,6 +503,7 @@ class OnboardingRepository(
                 business_name,
                 legal_name,
                 industry,
+                business_mode,
                 website,
                 is_tax_registered,
                 tax_number,
@@ -524,7 +525,7 @@ class OnboardingRepository(
                 updated_at
             )
             values (
-                ?::uuid, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now(), now()
+                ?::uuid, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now(), now()
             )
             returning
                 id::text,
@@ -555,6 +556,7 @@ class OnboardingRepository(
                 business_name = ?,
                 legal_name = ?,
                 industry = ?,
+                business_mode = ?,
                 website = ?,
                 is_tax_registered = ?,
                 tax_number = ?,
@@ -1117,6 +1119,34 @@ class OnboardingRepository(
         setString(2, request.businessName.trim())
         setString(3, request.legalName.trim())
         setString(4, request.industry.trim())
+        setString(5, request.businessMode.cleanBusinessMode(request.industry))
+        setNullableString(6, request.website.trim().ifBlank { null })
+        setBoolean(7, request.isTaxRegistered)
+        setNullableString(8, request.taxNumber.trim().ifBlank { null })
+        setString(9, request.taxLabel.trim())
+        setString(10, request.addressLine.trim())
+        setString(11, request.city.trim())
+        setNullableString(12, request.region.trim().ifBlank { null })
+        setString(13, request.country.trim())
+        setNullableString(14, request.postalCode.trim().ifBlank { null })
+        setNullableString(15, request.logoFileName.trim().ifBlank { null })
+        setString(16, request.invoicePrefix.trim().uppercase())
+        setString(17, request.nextInvoiceNumber.trim())
+        setString(18, request.paymentTerms.trim())
+        setString(19, request.invoiceFooter.trim())
+        setString(20, request.currency.trim().uppercase())
+        setString(21, request.taxMode.trim())
+        setBoolean(22, request.pricesIncludeTax)
+    }
+
+    private fun PreparedStatement.bindBusinessSetupUpdate(
+        workspaceId: String,
+        request: BusinessSetupRequest,
+    ) {
+        setString(1, request.businessName.trim())
+        setString(2, request.legalName.trim())
+        setString(3, request.industry.trim())
+        setString(4, request.businessMode.cleanBusinessMode(request.industry))
         setNullableString(5, request.website.trim().ifBlank { null })
         setBoolean(6, request.isTaxRegistered)
         setNullableString(7, request.taxNumber.trim().ifBlank { null })
@@ -1134,33 +1164,7 @@ class OnboardingRepository(
         setString(19, request.currency.trim().uppercase())
         setString(20, request.taxMode.trim())
         setBoolean(21, request.pricesIncludeTax)
-    }
-
-    private fun PreparedStatement.bindBusinessSetupUpdate(
-        workspaceId: String,
-        request: BusinessSetupRequest,
-    ) {
-        setString(1, request.businessName.trim())
-        setString(2, request.legalName.trim())
-        setString(3, request.industry.trim())
-        setNullableString(4, request.website.trim().ifBlank { null })
-        setBoolean(5, request.isTaxRegistered)
-        setNullableString(6, request.taxNumber.trim().ifBlank { null })
-        setString(7, request.taxLabel.trim())
-        setString(8, request.addressLine.trim())
-        setString(9, request.city.trim())
-        setNullableString(10, request.region.trim().ifBlank { null })
-        setString(11, request.country.trim())
-        setNullableString(12, request.postalCode.trim().ifBlank { null })
-        setNullableString(13, request.logoFileName.trim().ifBlank { null })
-        setString(14, request.invoicePrefix.trim().uppercase())
-        setString(15, request.nextInvoiceNumber.trim())
-        setString(16, request.paymentTerms.trim())
-        setString(17, request.invoiceFooter.trim())
-        setString(18, request.currency.trim().uppercase())
-        setString(19, request.taxMode.trim())
-        setBoolean(20, request.pricesIncludeTax)
-        setString(21, workspaceId)
+        setString(22, workspaceId)
     }
 
     private fun ResultSet.toUserRecord(): AppUserRecord =
@@ -1320,6 +1324,17 @@ class OnboardingRepository(
         return if (normalized in AllowedTeamRoles) normalized else RoleTeamMember
     }
 
+    private fun String.cleanBusinessMode(industry: String): String {
+        val normalized = trim().lowercase().replace("-", "_").filter { it.isLetterOrDigit() || it == '_' }
+        if (normalized in AllowedBusinessModes) return normalized
+        return when (industry.trim().lowercase()) {
+            "services", "service", "repair", "professional services", "professional service" -> "service_selling"
+            "salon", "healthcare", "clinic", "fitness", "education" -> "appointment"
+            "b2b" -> "mixed"
+            else -> "product_selling"
+        }
+    }
+
     private companion object {
         const val RoleBusinessOwner = "business_owner"
         const val RoleTeamMember = "team_member"
@@ -1331,5 +1346,6 @@ class OnboardingRepository(
             "inventory_manager",
             "sales_staff",
         )
+        val AllowedBusinessModes = setOf("product_selling", "service_selling", "appointment", "mixed")
     }
 }
