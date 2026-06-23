@@ -35,6 +35,7 @@ import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.put
+import java.time.LocalDate
 
 fun Route.dashboardRoutes(
     config: AppConfig,
@@ -124,6 +125,14 @@ fun Route.dashboardRoutes(
             return@put
         }
         call.respondWorkspaceResult(repository.updateCustomer(firebaseUser, customerId, request))
+    }
+
+    get("/customers/{id}/orders") {
+        val repository = dashboardRepository ?: return@get call.dashboardDatabaseNotConfigured()
+        val firebaseUser = call.verifiedFirebaseUser(config) ?: return@get
+        val customerId = call.parameters["id"].orEmpty()
+        val orders = repository.customerOrders(firebaseUser, customerId) ?: return@get call.workspaceNotFound()
+        call.respond(OrderListResponse(orders))
     }
 
     get("/suppliers") {
@@ -260,6 +269,10 @@ fun Route.dashboardRoutes(
             call.respondValidation("product_name_required", "Enter the product name.")
             return@post
         }
+        if (!request.expiryDate.isNullOrBlank() && !request.expiryDate.isValidIsoDateOnly()) {
+            call.respondValidation("product_expiry_invalid", "Choose a valid expiry date.")
+            return@post
+        }
         call.respondWorkspaceResult(repository.createProduct(firebaseUser, request))
     }
 
@@ -270,6 +283,10 @@ fun Route.dashboardRoutes(
         val request = call.receive<ProductRequest>()
         if (request.name.isBlank()) {
             call.respondValidation("product_name_required", "Enter the product name.")
+            return@put
+        }
+        if (!request.expiryDate.isNullOrBlank() && !request.expiryDate.isValidIsoDateOnly()) {
+            call.respondValidation("product_expiry_invalid", "Choose a valid expiry date.")
             return@put
         }
         call.respondWorkspaceResult(repository.updateProduct(firebaseUser, productId, request))
@@ -428,6 +445,9 @@ private fun String.normalizedOfferScope(): String {
     val normalized = trim().lowercase().replace("-", "_").filter { it.isLetterOrDigit() || it == '_' }
     return if (normalized in setOf("all", "category", "product")) normalized else "product"
 }
+
+private fun String.isValidIsoDateOnly(): Boolean =
+    runCatching { LocalDate.parse(trim()) }.isSuccess
 
 private suspend fun ApplicationCall.respondWorkspaceResult(value: Any?) {
     if (value == null) {

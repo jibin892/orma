@@ -64,7 +64,6 @@ fun OnboardingSessionRecord.toSessionResponse(uid: String): SessionResponse =
         displayName = user.displayName,
         user = user.toResponse(),
         workspace = workspace?.toResponse(),
-        pendingInvite = pendingInvite?.toTeamInviteResponse(),
         onboardingStatus = onboardingStatus,
         requiredStep = requiredStep,
         accessPath = accessPath,
@@ -73,7 +72,6 @@ fun OnboardingSessionRecord.toSessionResponse(uid: String): SessionResponse =
 fun OnboardingSessionRecord.toSessionResponse(uid: String, config: AppConfig): SessionResponse =
     toSessionResponse(uid).copy(
         workspace = workspace?.toResponse(config),
-        pendingInvite = pendingInvite?.toTeamInviteResponse(config),
     )
 
 fun com.orma.backend.db.AppUserRecord.toResponse(): UserResponse =
@@ -96,7 +94,6 @@ fun com.orma.backend.db.WorkspaceRecord.toResponse(): WorkspaceResponse =
         onboardingComplete = onboardingComplete,
         logoFileName = logoFileName,
         coverFileName = coverFileName,
-        inviteCode = inviteCode,
     )
 
 fun com.orma.backend.db.WorkspaceRecord.toResponse(config: AppConfig): WorkspaceResponse =
@@ -104,19 +101,6 @@ fun com.orma.backend.db.WorkspaceRecord.toResponse(config: AppConfig): Workspace
         logoUrl = logoFileName.toMediaUrl(config),
         coverUrl = coverFileName.toMediaUrl(config),
     )
-
-fun com.orma.backend.db.TeamInviteRecord.toTeamInviteResponse(): com.orma.backend.models.TeamInviteResponse =
-    com.orma.backend.models.TeamInviteResponse(
-        code = code,
-        workspace = workspace.toResponse(),
-        inviteeName = inviteeName,
-        inviteeEmail = inviteeEmail,
-        inviteePhoneNumber = inviteePhoneNumber,
-        role = role,
-    )
-
-fun com.orma.backend.db.TeamInviteRecord.toTeamInviteResponse(config: AppConfig): com.orma.backend.models.TeamInviteResponse =
-    toTeamInviteResponse().copy(workspace = workspace.toResponse(config))
 
 fun String?.toMediaUrl(config: AppConfig): String? {
     val value = this?.trim()?.takeIf { it.isNotBlank() } ?: return null

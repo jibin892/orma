@@ -10,6 +10,7 @@ import io.ktor.server.application.ApplicationCall
 import io.ktor.server.request.receive
 import io.ktor.server.request.receiveText
 import io.ktor.server.response.respond
+import io.ktor.server.response.respondText
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
@@ -95,7 +96,7 @@ fun Route.metaIntegrationRoutes(
         val token = call.request.queryParameters["hub.verify_token"]
         val challenge = call.request.queryParameters["hub.challenge"]
         if (mode == "subscribe" && token == config.metaWebhookVerifyToken && !challenge.isNullOrBlank()) {
-            call.respond(HttpStatusCode.OK, challenge)
+            call.respondText(challenge, status = HttpStatusCode.OK)
         } else {
             call.respond(
                 HttpStatusCode.Forbidden,

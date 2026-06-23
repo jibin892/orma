@@ -71,9 +71,7 @@ GET  /
 GET  /health
 POST /auth/session
 POST /onboarding/business
-GET  /onboarding/team-invites/active
-POST /onboarding/team-invites/lookup
-POST /onboarding/team-invites/join
+GET  /onboarding/team
 POST /onboarding/notifications
 POST /media/business-logo
 POST /media/product-images

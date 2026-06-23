@@ -45,9 +45,11 @@ import com.orma.backend.models.WorkspacePaymentMethodRequest
 import com.orma.backend.models.WorkspacePaymentMethodResponse
 import java.math.BigDecimal
 import java.math.RoundingMode
+import java.time.LocalDate
 import java.sql.Connection
 import java.sql.PreparedStatement
 import java.sql.ResultSet
+import java.sql.SQLException
 import java.sql.Types
 import java.util.UUID
 import javax.sql.DataSource
@@ -103,6 +105,7 @@ private val ProductCsvColumns = listOf(
     "trackStock",
     "durationMinutes",
     "bookingRequired",
+    "expiryDate",
     "supplierName",
 )
 
@@ -319,6 +322,20 @@ class DashboardRepository(
         dataSource.connection.use { connection ->
             val access = connection.resolveWorkspaceAccess(firebaseUser) ?: return@withContext null
             connection.listCustomers(access.workspaceId, filters)
+        }
+    }
+
+    suspend fun customerOrders(
+        firebaseUser: VerifiedFirebaseUser,
+        customerId: String,
+    ): List<OrderResponse>? = withContext(Dispatchers.IO) {
+        dataSource.connection.use { connection ->
+            val access = connection.resolveWorkspaceAccess(firebaseUser) ?: return@withContext null
+            connection.listCustomerOrders(
+                workspaceId = access.workspaceId,
+                customerId = customerId,
+                includeItems = true,
+            )
         }
     }
 
@@ -582,12 +599,12 @@ class DashboardRepository(
             val cleanSku = row.sku.cleanOptionalUpper()
             val cleanBarcode = row.barcode.cleanOptional()
             when {
-                cleanSku != null && !seenSkus.add(cleanSku) -> {
+                cleanSku != null && cleanSku in seenSkus -> {
                     skipped += 1
                     errors += ProductImportErrorResponse(row = rowNumber, message = "Duplicate SKU in this CSV.")
                     return@forEachIndexed
                 }
-                cleanBarcode != null && !seenBarcodes.add(cleanBarcode) -> {
+                cleanBarcode != null && cleanBarcode in seenBarcodes -> {
                     skipped += 1
                     errors += ProductImportErrorResponse(row = rowNumber, message = "Duplicate barcode in this CSV.")
                     return@forEachIndexed
@@ -598,26 +615,39 @@ class DashboardRepository(
                     return@forEachIndexed
                 }
             }
-            val supplierId = row.supplierName.cleanOptional()?.let { supplierName ->
-                findOrCreateSupplier(access.workspaceId, supplierName)
-            }
-            val productRequest = row.toProductRequest(
-                access = access,
-                supplierId = supplierId,
-                productName = name,
-            )
-            val product = insertProduct(access, productRequest)
-            if (productRequest.trackStock && productRequest.stockQuantity.decimalOrZero() != BigDecimal.ZERO) {
-                insertStockMovement(
+            val savepoint = setSavepoint("product_import_$rowNumber")
+            try {
+                val supplierId = row.supplierName.cleanOptional()?.let { supplierName ->
+                    findOrCreateSupplier(access.workspaceId, supplierName)
+                }
+                val productRequest = row.toProductRequest(
                     access = access,
-                    productId = product.id,
-                    movementType = "import",
-                    quantityDelta = productRequest.stockQuantity.decimalOrZero(),
-                    balanceAfter = productRequest.stockQuantity.decimalOrZero(),
-                    note = "Product import",
+                    supplierId = supplierId,
+                    productName = name,
+                )
+                val product = insertProduct(access, productRequest)
+                if (productRequest.trackStock && productRequest.stockQuantity.decimalOrZero() != BigDecimal.ZERO) {
+                    insertStockMovement(
+                        access = access,
+                        productId = product.id,
+                        movementType = "import",
+                        quantityDelta = productRequest.stockQuantity.decimalOrZero(),
+                        balanceAfter = productRequest.stockQuantity.decimalOrZero(),
+                        note = "Product import",
+                    )
+                }
+                imported += product
+                cleanSku?.let(seenSkus::add)
+                cleanBarcode?.let(seenBarcodes::add)
+                releaseSavepoint(savepoint)
+            } catch (error: SQLException) {
+                rollback(savepoint)
+                skipped += 1
+                errors += ProductImportErrorResponse(
+                    row = rowNumber,
+                    message = error.productImportRowMessage(),
                 )
             }
-            imported += product
         }
         return ProductImportResponse(
             created = imported.size,
@@ -938,6 +968,7 @@ class DashboardRepository(
             ) offer on true
             where products.workspace_id = ?::uuid
               and products.status = 'active'
+              and (products.expiry_date is null or products.expiry_date >= current_date)
               and (products.track_stock = false or products.stock_quantity > 0)
             order by coalesce(pc.sort_order, 999), coalesce(pc.name, ''), products.name asc
             limit 200
@@ -1394,6 +1425,59 @@ class DashboardRepository(
                     priority = "high",
                     tone = "warning",
                     count = lowStockCount,
+                ),
+            )
+        }
+
+        val expiredProductCount = scalarInt(
+            """
+            select count(*)
+            from products
+            where workspace_id = ?::uuid
+              and status = 'active'
+              and item_type = 'product'
+              and expiry_date is not null
+              and expiry_date < current_date
+            """.trimIndent(),
+            workspaceId,
+        )
+        if (expiredProductCount > 0) {
+            add(
+                DashboardTaskResponse(
+                    id = "expired_products",
+                    title = "Remove expired products",
+                    body = "$expiredProductCount products are past their expiry date.",
+                    action = "products.expiry",
+                    priority = "high",
+                    tone = "danger",
+                    count = expiredProductCount,
+                ),
+            )
+        }
+
+        val expiringProductCount = scalarInt(
+            """
+            select count(*)
+            from products
+            where workspace_id = ?::uuid
+              and status = 'active'
+              and item_type = 'product'
+              and expiry_date is not null
+              and expiry_date >= current_date
+              and expiry_date <= current_date + interval '7 days'
+            """.trimIndent(),
+            workspaceId,
+        )
+        if (expiringProductCount > 0) {
+            add(
+                DashboardTaskResponse(
+                    id = "expiring_products",
+                    title = "Check product expiry",
+                    body = "$expiringProductCount products expire within 7 days.",
+                    action = "products.expiry",
+                    priority = "normal",
+                    tone = "warning",
+                    count = expiringProductCount,
                 ),
             )
         }
@@ -1914,9 +1998,9 @@ class DashboardRepository(
             insert into products (
                 workspace_id, supplier_id, category_id, name, item_type, sku, barcode, description, unit,
                 selling_price, cost_price, currency, tax_rate, prices_include_tax,
-                stock_quantity, reorder_level, track_stock, duration_minutes, booking_required, updated_at
+                stock_quantity, reorder_level, track_stock, duration_minutes, booking_required, expiry_date, updated_at
             )
-            values (?::uuid, ?::uuid, ?::uuid, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now())
+            values (?::uuid, ?::uuid, ?::uuid, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::date, now())
             returning *, null::text as supplier_name, null::text as category_name, null::text as image_storage_path
         """.trimIndent()
         return prepareStatement(sql).use { statement ->
@@ -1994,14 +2078,14 @@ class DashboardRepository(
             set supplier_id = ?::uuid, category_id = ?::uuid, name = ?, item_type = ?, sku = ?, barcode = ?, description = ?,
                 unit = ?, selling_price = ?, cost_price = ?, currency = ?, tax_rate = ?,
                 prices_include_tax = ?, stock_quantity = ?, reorder_level = ?, track_stock = ?,
-                duration_minutes = ?, booking_required = ?, updated_at = now()
+                duration_minutes = ?, booking_required = ?, expiry_date = ?::date, updated_at = now()
             where id = ?::uuid and workspace_id = ?::uuid
             returning *, null::text as supplier_name, null::text as category_name, null::text as image_storage_path
         """.trimIndent()
         return prepareStatement(sql).use { statement ->
             statement.bindProductRequest(access, request, startIndex = 1)
-            statement.setString(19, productId)
-            statement.setString(20, access.workspaceId)
+            statement.setString(20, productId)
+            statement.setString(21, access.workspaceId)
             statement.executeQuery().use { result ->
                 if (result.next()) result.toProductResponse() else null
             }
@@ -2108,6 +2192,32 @@ class DashboardRepository(
         }
         return prepareStatement(sql).use { statement ->
             statement.bindStringParams(params)
+            statement.executeQuery().use { result ->
+                buildList {
+                    while (result.next()) {
+                        val order = result.toOrderResponse(emptyList())
+                        add(if (includeItems) order.copy(items = listOrderItems(order.id)) else order)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun Connection.listCustomerOrders(
+        workspaceId: String,
+        customerId: String,
+        includeItems: Boolean,
+    ): List<OrderResponse> {
+        val sql = """
+            ${orderSelectSql()}
+            where o.workspace_id = ?::uuid and o.customer_id = ?::uuid
+            group by o.id, c.name
+            order by o.created_at desc
+            limit 500
+        """.trimIndent()
+        return prepareStatement(sql).use { statement ->
+            statement.setString(1, workspaceId)
+            statement.setString(2, customerId)
             statement.executeQuery().use { result ->
                 buildList {
                     while (result.next()) {
@@ -2564,6 +2674,7 @@ class DashboardRepository(
             setInt(startIndex + 16, duration)
         }
         setBoolean(startIndex + 17, itemType == "appointment" || request.bookingRequired)
+        setNullableString(startIndex + 18, if (itemType == "product") request.expiryDate.cleanIsoDateOrNull() else null)
     }
 
     private fun PreparedStatement.bindPrinterRequest(request: PrinterProfileRequest, startIndex: Int) {
@@ -2733,6 +2844,7 @@ class DashboardRepository(
             trackStock = trackStock,
             durationMinutes = getNullableInt("duration_minutes"),
             bookingRequired = getBoolean("booking_required"),
+            expiryDate = getString("expiry_date"),
             lowStock = trackStock && stockQuantity <= reorderLevel,
             status = getString("status"),
             imageUrl = getString("image_storage_path").toDashboardMediaUrl(),
@@ -2867,6 +2979,12 @@ class DashboardRepository(
 
     private fun String?.cleanOptionalUpper(): String? =
         cleanOptional()?.uppercase()
+
+    private fun String?.cleanIsoDateOrNull(): String? =
+        this
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?.let { value -> runCatching { LocalDate.parse(value).toString() }.getOrNull() }
 
     private fun String?.cleanSearchTerm(): String? =
         this?.trim()?.take(80)?.ifBlank { null }
@@ -3120,6 +3238,7 @@ class DashboardRepository(
                         .toIntOrNull(),
                     bookingRequired = row.value("bookingRequired", "booking required", "requiresBooking")
                         .csvBoolean(defaultValue = false),
+                    expiryDate = row.value("expiryDate", "expiry date", "expiresAt", "expiry", "bestBefore"),
                     supplierName = row.value("supplierName", "supplier name", "supplier"),
                 )
             },
@@ -3183,6 +3302,9 @@ class DashboardRepository(
         if (!taxRate.isValidNonNegativeDecimal()) add("Tax rate must be a valid number.")
         if (!stockQuantity.isValidNonNegativeDecimal()) add("Stock quantity must be zero or higher.")
         if (!reorderLevel.isValidNonNegativeDecimal()) add("Reorder level must be zero or higher.")
+        if (expiryDate.cleanOptional() != null && expiryDate.cleanIsoDateOrNull() == null) {
+            add("Expiry date must use YYYY-MM-DD.")
+        }
         if (itemType.cleanItemType() == "appointment" && (durationMinutes ?: 0) <= 0) {
             add("Appointment items need a duration in minutes.")
         }
@@ -3193,6 +3315,14 @@ class DashboardRepository(
         if (value.isBlank()) return true
         return value.toBigDecimalOrNull()?.let { it >= BigDecimal.ZERO } == true
     }
+
+    private fun SQLException.productImportRowMessage(): String =
+        when (sqlState) {
+            "23505" -> "SKU or barcode already exists in this workspace."
+            "22P02", "22007", "22008", "22003" -> "Check the number or date format for this row."
+            "42703", "42P01" -> "Catalog database is not ready for import. Run the latest backend migration."
+            else -> "Could not import this row. Check the product values and try again."
+        }
 
     private fun ProductImportRowRequest.toProductRequest(
         access: DashboardWorkspaceAccess,
@@ -3216,6 +3346,7 @@ class DashboardRepository(
             trackStock = trackStock,
             durationMinutes = durationMinutes,
             bookingRequired = bookingRequired,
+            expiryDate = expiryDate,
             supplierId = supplierId,
         )
 
@@ -3238,6 +3369,7 @@ class DashboardRepository(
                 product.trackStock.toString(),
                 product.durationMinutes?.toString().orEmpty(),
                 product.bookingRequired.toString(),
+                product.expiryDate.orEmpty(),
                 product.supplierName.orEmpty(),
             )
         }

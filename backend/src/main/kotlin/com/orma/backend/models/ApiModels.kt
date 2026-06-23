@@ -51,7 +51,6 @@ data class SessionResponse(
     val displayName: String? = null,
     val user: UserResponse? = null,
     val workspace: WorkspaceResponse? = null,
-    val pendingInvite: TeamInviteResponse? = null,
     val onboardingStatus: String = "unknown",
     val requiredStep: String = "unknown",
     val accessPath: String = "business_owner",
@@ -79,7 +78,6 @@ data class WorkspaceResponse(
     val logoUrl: String? = null,
     val coverFileName: String? = null,
     val coverUrl: String? = null,
-    val inviteCode: String? = null,
 )
 
 @Serializable
@@ -109,40 +107,10 @@ data class BusinessSetupRequest(
 )
 
 @Serializable
-data class TeamInviteLookupRequest(
-    val code: String,
-)
-
-@Serializable
-data class TeamInviteCreateRequest(
-    val name: String,
-    val email: String? = null,
-    val phoneNumber: String? = null,
-    val role: String = "team_member",
-)
-
-@Serializable
-data class TeamInviteJoinRequest(
-    val code: String,
-    val displayName: String = "",
-)
-
-@Serializable
-data class TeamInviteResponse(
-    val code: String,
-    val workspace: WorkspaceResponse,
-    val inviteeName: String? = null,
-    val inviteeEmail: String? = null,
-    val inviteePhoneNumber: String? = null,
-    val role: String? = null,
-)
-
-@Serializable
 data class TeamOverviewResponse(
     val workspace: WorkspaceResponse,
     val canInviteMembers: Boolean,
     val members: List<TeamMemberResponse>,
-    val pendingInvites: List<TeamInviteListItemResponse>,
 )
 
 @Serializable
@@ -155,18 +123,6 @@ data class TeamMemberResponse(
     val role: String,
     val status: String,
     val joinedAt: String,
-)
-
-@Serializable
-data class TeamInviteListItemResponse(
-    val code: String,
-    val inviteeName: String,
-    val inviteeEmail: String? = null,
-    val inviteePhoneNumber: String? = null,
-    val role: String,
-    val status: String,
-    val createdAt: String,
-    val expiresAt: String? = null,
 )
 
 @Serializable
@@ -415,6 +371,7 @@ data class ProductImportRowRequest(
     val trackStock: Boolean = true,
     val durationMinutes: Int? = null,
     val bookingRequired: Boolean = false,
+    val expiryDate: String? = null,
     val supplierName: String? = null,
 )
 
@@ -459,6 +416,7 @@ data class ProductRequest(
     val trackStock: Boolean = true,
     val durationMinutes: Int? = null,
     val bookingRequired: Boolean = false,
+    val expiryDate: String? = null,
     val supplierId: String? = null,
 )
 
@@ -485,6 +443,7 @@ data class ProductResponse(
     val trackStock: Boolean,
     val durationMinutes: Int? = null,
     val bookingRequired: Boolean = false,
+    val expiryDate: String? = null,
     val lowStock: Boolean,
     val status: String,
     val imageUrl: String? = null,

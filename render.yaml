@@ -32,3 +32,23 @@ services:
         value: https://sheet.gstincheck.co.in/check
       - key: ALLOWED_ORIGINS
         sync: false
+      - key: META_WEBHOOK_VERIFY_TOKEN
+        sync: false
+      - key: META_APP_ID
+        sync: false
+      - key: META_APP_SECRET
+        sync: false
+      - key: META_REDIRECT_URI
+        sync: false
+      - key: META_TOKEN_ENCRYPTION_SECRET
+        sync: false
+      - key: META_SYSTEM_USER_ACCESS_TOKEN
+        sync: false
+      - key: META_GRAPH_API_VERSION
+        value: v25.0
+      - key: META_DEFAULT_ORDER_TEMPLATE
+        value: orma_order_confirmation
+      - key: META_DEFAULT_LANGUAGE_CODE
+        value: en_US
+      - key: META_OAUTH_SCOPES
+        value: business_management,catalog_management,whatsapp_business_management,whatsapp_business_messaging
