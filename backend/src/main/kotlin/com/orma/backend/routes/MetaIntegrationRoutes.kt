@@ -73,6 +73,19 @@ fun Route.metaIntegrationRoutes(
         call.respond(sync)
     }
 
+    get("/integrations/meta/whatsapp/templates") {
+        val repository = metaIntegrationRepository ?: return@get call.metaDatabaseNotConfigured()
+        call.verifiedFirebaseUser(config) ?: return@get
+        call.respond(repository.defaultWhatsAppTemplates())
+    }
+
+    post("/integrations/meta/whatsapp/templates/sync") {
+        val repository = metaIntegrationRepository ?: return@post call.metaDatabaseNotConfigured()
+        val firebaseUser = call.verifiedFirebaseUser(config) ?: return@post
+        val sync = repository.syncWhatsAppTemplates(firebaseUser) ?: return@post call.metaWorkspaceNotFound()
+        call.respond(if (sync.connected && sync.failed == 0) HttpStatusCode.OK else HttpStatusCode.Conflict, sync)
+    }
+
     post("/integrations/meta/whatsapp/send-order-update") {
         val repository = metaIntegrationRepository ?: return@post call.metaDatabaseNotConfigured()
         val firebaseUser = call.verifiedFirebaseUser(config) ?: return@post

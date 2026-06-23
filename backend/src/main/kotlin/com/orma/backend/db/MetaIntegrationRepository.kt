@@ -12,12 +12,18 @@ import com.orma.backend.models.MetaOrderUpdateResponse
 import com.orma.backend.models.MetaProductReadinessResponse
 import com.orma.backend.models.MetaSystemUserConnectResponse
 import com.orma.backend.models.MetaWebhookEventResponse
+import com.orma.backend.models.MetaWhatsAppTemplateListResponse
+import com.orma.backend.models.MetaWhatsAppTemplateResponse
+import com.orma.backend.models.MetaWhatsAppTemplateSyncItemResponse
+import com.orma.backend.models.MetaWhatsAppTemplateSyncResponse
 import com.orma.backend.meta.MetaAccessToken
 import com.orma.backend.meta.MetaGraphCatalogProductRequest
 import com.orma.backend.meta.MetaGraphClient
 import com.orma.backend.meta.MetaGraphException
+import com.orma.backend.meta.MetaGraphWhatsAppTemplateRequest
 import com.orma.backend.meta.MetaTokenCrypto
 import java.math.BigDecimal
+import java.math.RoundingMode
 import java.sql.Connection
 import java.sql.ResultSet
 import java.sql.Types
@@ -27,6 +33,13 @@ import java.util.UUID
 import javax.sql.DataSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonPrimitive
 
 class MetaIntegrationRepository(
     private val dataSource: DataSource,
@@ -162,6 +175,97 @@ class MetaIntegrationRepository(
         }
     }
 
+    fun defaultWhatsAppTemplates(): MetaWhatsAppTemplateListResponse =
+        MetaWhatsAppTemplateListResponse(
+            templates = OrmaWhatsAppTemplates.map { it.toResponse(config.metaDefaultLanguageCode) },
+        )
+
+    suspend fun syncWhatsAppTemplates(firebaseUser: VerifiedFirebaseUser): MetaWhatsAppTemplateSyncResponse? = withContext(Dispatchers.IO) {
+        val context = dataSource.connection.use { connection ->
+            val access = connection.resolveMetaWorkspaceAccess(firebaseUser) ?: return@withContext null
+            MetaTemplateSyncContext(
+                workspaceId = access.workspaceId,
+                connection = connection.findMetaConnection(access.workspaceId),
+            )
+        }
+        val connectionState = context.connection
+        val accessToken = connectionState?.resolveAccessToken()
+        val whatsappBusinessAccountId = connectionState
+            ?.whatsappBusinessAccountId
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+        if (accessToken.isNullOrBlank() || whatsappBusinessAccountId == null) {
+            return@withContext MetaWhatsAppTemplateSyncResponse(
+                connected = false,
+                created = 0,
+                failed = 0,
+                templates = OrmaWhatsAppTemplates.map {
+                    MetaWhatsAppTemplateSyncItemResponse(
+                        name = it.name,
+                        status = "setup_required",
+                        message = "Connect WhatsApp Business Account and backend Meta token before creating templates.",
+                    )
+                },
+                message = "WhatsApp template sync needs a connected WhatsApp Business Account and backend Meta token.",
+            )
+        }
+
+        val results = mutableListOf<MetaWhatsAppTemplateSyncItemResponse>()
+        var created = 0
+        var failed = 0
+        OrmaWhatsAppTemplates.forEach { template ->
+            try {
+                val result = graphClient.createWhatsAppTemplate(
+                    accessToken = accessToken,
+                    whatsappBusinessAccountId = whatsappBusinessAccountId,
+                    template = template.toGraphRequest(config.metaDefaultLanguageCode),
+                )
+                created += 1
+                results += MetaWhatsAppTemplateSyncItemResponse(
+                    name = template.name,
+                    status = result.status?.lowercase()?.takeIf { it.isNotBlank() } ?: "submitted",
+                    message = "Submitted to Meta for approval.",
+                )
+            } catch (error: MetaGraphException) {
+                val publicMessage = error.publicMetaMessage()
+                if (publicMessage.isTemplateAlreadyCreatedError()) {
+                    results += MetaWhatsAppTemplateSyncItemResponse(
+                        name = template.name,
+                        status = "exists",
+                        message = "Template already exists in Meta.",
+                    )
+                } else {
+                    failed += 1
+                    results += MetaWhatsAppTemplateSyncItemResponse(
+                        name = template.name,
+                        status = "failed",
+                        message = publicMessage,
+                    )
+                }
+            }
+        }
+
+        dataSource.connection.use { connection ->
+            connection.updateMetaMessagingStatus(
+                workspaceId = context.workspaceId,
+                status = if (failed == 0) "templates_submitted" else "template_sync_failed",
+                error = if (failed == 0) null else "$failed WhatsApp templates could not be submitted.",
+            )
+        }
+
+        MetaWhatsAppTemplateSyncResponse(
+            connected = true,
+            created = created,
+            failed = failed,
+            templates = results,
+            message = if (failed == 0) {
+                "WhatsApp templates submitted to Meta. Approval happens inside Meta."
+            } else {
+                "Template sync finished with failures. Review each failed template message."
+            },
+        )
+    }
+
     suspend fun sendOrderUpdate(
         firebaseUser: VerifiedFirebaseUser,
         request: MetaOrderUpdateRequest,
@@ -197,7 +301,7 @@ class MetaIntegrationRepository(
         }
 
         val templateName = request.templateName?.trim()?.takeIf { it.isNotBlank() }
-            ?: config.metaDefaultOrderTemplate
+            ?: context.defaultWhatsAppTemplateName(config.metaDefaultOrderTemplate)
         val languageCode = request.languageCode?.trim()?.takeIf { it.isNotBlank() }
             ?: config.metaDefaultLanguageCode
         return@withContext try {
@@ -334,47 +438,107 @@ class MetaIntegrationRepository(
     }
 
     suspend fun recordWebhook(payload: String): MetaWebhookEventResponse = withContext(Dispatchers.IO) {
+        val webhook = payload.toMetaWebhookPayload()
         dataSource.connection.use { connection ->
             connection.autoCommit = false
-            val phoneNumberId = payload.extractJsonString("phone_number_id")
+            val phoneNumberId = webhook.phoneNumberId ?: payload.extractJsonString("phone_number_id")
             val workspaceId = phoneNumberId?.let { connection.findMetaWorkspaceByPhoneNumberId(it) }
             try {
-                val response = connection.prepareStatement(
-                    """
-                    insert into meta_webhook_events (workspace_id, object_type, event_type, payload)
-                    values (
-                        ?::uuid,
-                        nullif(?,''),
-                        nullif(?,''),
-                        ?::jsonb
+                val messages = webhook.messages.ifEmpty {
+                    listOf(
+                        MetaWebhookMessage(
+                            id = webhook.statusMessageId,
+                            from = null,
+                            waId = null,
+                            customerName = null,
+                            type = webhook.eventType ?: payload.extractWebhookEventType(),
+                            preview = webhook.eventType?.let { "WhatsApp $it update" } ?: "WhatsApp webhook update",
+                            order = null,
+                        ),
                     )
-                    returning id::text, status
-                    """.trimIndent(),
-                ).use { statement ->
-                    statement.setStringOrNull(1, workspaceId)
-                    statement.setString(2, payload.extractJsonString("object").orEmpty())
-                    statement.setString(3, payload.extractWebhookEventType().orEmpty())
-                    statement.setString(4, payload.ifBlank { "{}" })
-                    statement.executeQuery().use { result ->
-                        result.next()
-                        MetaWebhookEventResponse(
-                            id = result.getString("id"),
-                            status = result.getString("status"),
+                }
+                var response: MetaWebhookEventResponse? = null
+                messages.forEach { message ->
+                    val event = connection.upsertMetaWebhookEvent(
+                        workspaceId = workspaceId,
+                        objectType = webhook.objectType ?: payload.extractJsonString("object"),
+                        eventType = webhook.eventType ?: payload.extractWebhookEventType(),
+                        externalMessageId = message.id,
+                        payload = payload,
+                    )
+                    var status = event.status
+                    var convertedOrderId = event.convertedOrderId
+                    var responseMessage = "Webhook received."
+
+                    if (workspaceId != null && message.waId != null) {
+                        val lead = connection.upsertMetaLeadFromWebhook(
+                            workspaceId = workspaceId,
+                            phoneNumberId = phoneNumberId,
+                            waId = message.waId,
+                            customerName = message.customerName,
+                            phoneNumber = message.from,
+                            preview = message.preview,
+                        )
+                        if (message.order != null) {
+                            if (convertedOrderId == null) {
+                                convertedOrderId = connection.createWhatsAppDraftOrder(
+                                    workspaceId = workspaceId,
+                                    lead = lead,
+                                    message = message,
+                                )
+                                if (convertedOrderId != null) {
+                                    connection.markMetaWebhookEvent(
+                                        eventId = event.id,
+                                        status = "processed",
+                                        convertedOrderId = convertedOrderId,
+                                        processingError = null,
+                                    )
+                                    connection.markMetaLeadConverted(
+                                        leadId = lead.leadId,
+                                        orderId = convertedOrderId,
+                                    )
+                                    status = "processed"
+                                    responseMessage = "WhatsApp order created in ORMA."
+                                } else {
+                                    connection.markMetaWebhookEvent(
+                                        eventId = event.id,
+                                        status = "needs_review",
+                                        convertedOrderId = null,
+                                        processingError = "WhatsApp order did not include usable product items.",
+                                    )
+                                    status = "needs_review"
+                                    responseMessage = "WhatsApp order was saved as a lead and needs review."
+                                }
+                            } else {
+                                status = "processed"
+                                responseMessage = "WhatsApp order was already created in ORMA."
+                            }
+                        }
+                    } else if (workspaceId == null) {
+                        connection.markMetaWebhookEvent(
+                            eventId = event.id,
+                            status = "unmatched_workspace",
+                            convertedOrderId = null,
+                            processingError = "No ORMA workspace is connected to this WhatsApp phone number ID.",
+                        )
+                        status = "unmatched_workspace"
+                        responseMessage = "Webhook received, but no workspace matched this WhatsApp number."
+                    }
+
+                    if (response == null || convertedOrderId != null) {
+                        response = MetaWebhookEventResponse(
+                            id = event.id,
+                            status = status,
+                            convertedOrderId = convertedOrderId,
+                            message = responseMessage,
                         )
                     }
                 }
                 if (workspaceId != null) {
-                    connection.upsertMetaLeadFromWebhook(
-                        workspaceId = workspaceId,
-                        phoneNumberId = phoneNumberId,
-                        waId = payload.extractJsonString("wa_id") ?: payload.extractJsonString("from"),
-                        customerName = payload.extractContactProfileName(),
-                        phoneNumber = payload.extractJsonString("from"),
-                        preview = payload.extractMessagePreview(),
-                    )
+                    connection.updateMetaMessagingStatus(workspaceId, "ready", null)
                 }
                 connection.commit()
-                response
+                response ?: MetaWebhookEventResponse(id = "", status = "received")
             } catch (error: Throwable) {
                 connection.rollback()
                 throw error
@@ -549,6 +713,70 @@ class MetaIntegrationRepository(
         }
     }
 
+    private fun Connection.upsertMetaWebhookEvent(
+        workspaceId: String?,
+        objectType: String?,
+        eventType: String?,
+        externalMessageId: String?,
+        payload: String,
+    ): MetaWebhookEventRow {
+        val sql = """
+            insert into meta_webhook_events (
+                workspace_id, object_type, event_type, external_message_id, payload
+            )
+            values (
+                ?::uuid,
+                nullif(?,''),
+                nullif(?,''),
+                nullif(?,''),
+                ?::jsonb
+            )
+            on conflict (workspace_id, external_message_id)
+                where workspace_id is not null and external_message_id is not null
+            do update
+            set payload = excluded.payload
+            returning id::text, status, converted_order_id::text
+        """.trimIndent()
+        return prepareStatement(sql).use { statement ->
+            statement.setStringOrNull(1, workspaceId)
+            statement.setString(2, objectType.orEmpty())
+            statement.setString(3, eventType.orEmpty())
+            statement.setString(4, externalMessageId.orEmpty())
+            statement.setString(5, payload.ifBlank { "{}" })
+            statement.executeQuery().use { result ->
+                result.next()
+                MetaWebhookEventRow(
+                    id = result.getString("id"),
+                    status = result.getString("status") ?: "received",
+                    convertedOrderId = result.getString("converted_order_id"),
+                )
+            }
+        }
+    }
+
+    private fun Connection.markMetaWebhookEvent(
+        eventId: String,
+        status: String,
+        convertedOrderId: String?,
+        processingError: String?,
+    ) {
+        val sql = """
+            update meta_webhook_events
+            set status = ?,
+                processed_at = now(),
+                converted_order_id = ?::uuid,
+                processing_error = ?
+            where id = ?::uuid
+        """.trimIndent()
+        prepareStatement(sql).use { statement ->
+            statement.setString(1, status)
+            statement.setStringOrNull(2, convertedOrderId)
+            statement.setStringOrNull(3, processingError)
+            statement.setString(4, eventId)
+            statement.executeUpdate()
+        }
+    }
+
     private fun Connection.orderWhatsAppContext(
         workspaceId: String,
         orderId: String,
@@ -559,7 +787,9 @@ class MetaIntegrationRepository(
                 o.id::text as order_id,
                 o.workspace_id::text as workspace_id,
                 o.order_number,
+                o.order_type,
                 o.status,
+                o.fulfillment_type,
                 o.total,
                 o.currency,
                 c.name as customer_name,
@@ -585,7 +815,9 @@ class MetaIntegrationRepository(
                         workspaceId = result.getString("workspace_id"),
                         orderId = result.getString("order_id"),
                         orderNumber = result.getString("order_number"),
+                        orderType = result.getString("order_type") ?: "sale",
                         status = result.getString("status"),
+                        fulfillmentType = result.getString("fulfillment_type") ?: "standard",
                         total = (result.getBigDecimal("total") ?: BigDecimal.ZERO).toPlainString(),
                         currency = result.getString("currency") ?: "INR",
                         customerName = result.getString("customer_name"),
@@ -606,8 +838,13 @@ class MetaIntegrationRepository(
         customerName: String?,
         phoneNumber: String?,
         preview: String?,
-    ) {
-        val cleanWaId = waId?.trim()?.takeIf { it.isNotBlank() } ?: return
+    ): MetaLeadContext {
+        val cleanWaId = waId?.trim()?.takeIf { it.isNotBlank() }
+            ?: return MetaLeadContext(
+                threadId = null,
+                leadId = null,
+                convertedOrderId = null,
+            )
         val threadId = prepareStatement(
             """
             insert into meta_message_threads (
@@ -636,7 +873,7 @@ class MetaIntegrationRepository(
                 result.getString("id")
             }
         }
-        prepareStatement(
+        return prepareStatement(
             """
             insert into meta_leads (
                 workspace_id, thread_id, customer_name, phone_number, last_message_preview, updated_at
@@ -647,6 +884,7 @@ class MetaIntegrationRepository(
                 phone_number = coalesce(excluded.phone_number, meta_leads.phone_number),
                 last_message_preview = coalesce(excluded.last_message_preview, meta_leads.last_message_preview),
                 updated_at = now()
+            returning id::text, converted_order_id::text
             """.trimIndent(),
         ).use { statement ->
             statement.setString(1, workspaceId)
@@ -654,9 +892,229 @@ class MetaIntegrationRepository(
             statement.setStringOrNull(3, customerName)
             statement.setStringOrNull(4, phoneNumber)
             statement.setStringOrNull(5, preview)
+            statement.executeQuery().use { result ->
+                result.next()
+                MetaLeadContext(
+                    threadId = threadId,
+                    leadId = result.getString("id"),
+                    convertedOrderId = result.getString("converted_order_id"),
+                )
+            }
+        }
+    }
+
+    private fun Connection.markMetaLeadConverted(
+        leadId: String?,
+        orderId: String,
+    ) {
+        val cleanLeadId = leadId?.trim()?.takeIf { it.isNotBlank() } ?: return
+        prepareStatement(
+            """
+            update meta_leads
+            set status = 'converted',
+                converted_order_id = ?::uuid,
+                updated_at = now()
+            where id = ?::uuid
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setString(1, orderId)
+            statement.setString(2, cleanLeadId)
             statement.executeUpdate()
         }
     }
+
+    private fun Connection.createWhatsAppDraftOrder(
+        workspaceId: String,
+        lead: MetaLeadContext,
+        message: MetaWebhookMessage,
+    ): String? {
+        val order = message.order ?: return null
+        val preparedItems = order.items.mapNotNull { item ->
+            val quantity = item.quantity.takeIf { it > BigDecimal.ZERO } ?: BigDecimal.ONE
+            val product = findWhatsAppOrderProduct(workspaceId, item.productRetailerId)
+            val unitPrice = item.itemPrice
+                ?.takeIf { it >= BigDecimal.ZERO }
+                ?: product?.sellingPrice
+                ?: BigDecimal.ZERO
+            MetaPreparedWhatsAppOrderItem(
+                productId = product?.productId,
+                description = product?.name ?: "WhatsApp item ${item.productRetailerId.take(80)}",
+                quantity = quantity,
+                unitPrice = unitPrice.scaled(),
+                taxRate = product?.taxRate ?: BigDecimal.ZERO,
+            )
+        }
+        if (preparedItems.isEmpty()) return null
+
+        val customerId = findOrCreateWhatsAppCustomer(
+            workspaceId = workspaceId,
+            customerName = message.customerName,
+            phoneNumber = message.from,
+        )
+        val subtotal = preparedItems.fold(BigDecimal.ZERO) { total, item -> total.add(item.lineSubtotal) }.scaled()
+        val taxTotal = preparedItems.fold(BigDecimal.ZERO) { total, item -> total.add(item.lineTax) }.scaled()
+        val total = preparedItems.fold(BigDecimal.ZERO) { sum, item -> sum.add(item.lineTotal) }.scaled()
+        val currency = order.items.firstNotNullOfOrNull { it.currency?.trim()?.uppercase()?.takeIf(String::isNotBlank) }
+            ?: findWorkspaceCurrency(workspaceId)
+        val orderNumber = "WA-${UUID.randomUUID().toString().replace("-", "").take(8).uppercase()}"
+        val notes = buildString {
+            append("Created from WhatsApp API")
+            message.id?.takeIf { it.isNotBlank() }?.let { append(" message $it") }
+            lead.threadId?.takeIf { it.isNotBlank() }?.let { append(". Thread $it") }
+            order.text?.takeIf { it.isNotBlank() }?.let { append(". Customer note: ${it.take(180)}") }
+        }
+        val orderId = prepareStatement(
+            """
+            insert into orders (
+                workspace_id, customer_id, order_number, order_type, status, scheduled_at,
+                subtotal, tax_total, discount_total, paid_total, total, currency,
+                notes, inventory_applied, created_by_user_id, source, fulfillment_type, payment_mode, updated_at
+            )
+            values (
+                ?::uuid, ?::uuid, ?, 'sale', 'draft', null,
+                ?, ?, 0, 0, ?, ?, ?, false, null, 'whatsapp', 'standard', 'pay_on_spot', now()
+            )
+            returning id::text
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setString(1, workspaceId)
+            statement.setStringOrNull(2, customerId)
+            statement.setString(3, orderNumber)
+            statement.setBigDecimal(4, subtotal)
+            statement.setBigDecimal(5, taxTotal)
+            statement.setBigDecimal(6, total)
+            statement.setString(7, currency)
+            statement.setString(8, notes)
+            statement.executeQuery().use { result ->
+                result.next()
+                result.getString("id")
+            }
+        }
+        preparedItems.forEach { item ->
+            insertWhatsAppOrderItem(orderId, item)
+        }
+        return orderId
+    }
+
+    private fun Connection.findOrCreateWhatsAppCustomer(
+        workspaceId: String,
+        customerName: String?,
+        phoneNumber: String?,
+    ): String? {
+        val cleanPhone = phoneNumber.toWhatsAppCustomerPhone()
+        if (cleanPhone != null) {
+            prepareStatement(
+                """
+                select id::text
+                from customers
+                where workspace_id = ?::uuid
+                  and status = 'active'
+                  and phone_number = ?
+                limit 1
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setString(1, workspaceId)
+                statement.setString(2, cleanPhone)
+                statement.executeQuery().use { result ->
+                    if (result.next()) return result.getString("id")
+                }
+            }
+        }
+        return prepareStatement(
+            """
+            insert into customers (
+                workspace_id, name, phone_number, notes, updated_at
+            )
+            values (?::uuid, ?, ?, 'Created from WhatsApp API order.', now())
+            returning id::text
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setString(1, workspaceId)
+            statement.setString(2, customerName.cleanWhatsAppCustomerName())
+            statement.setStringOrNull(3, cleanPhone)
+            statement.executeQuery().use { result ->
+                result.next()
+                result.getString("id")
+            }
+        }
+    }
+
+    private fun Connection.findWhatsAppOrderProduct(
+        workspaceId: String,
+        productRetailerId: String,
+    ): MetaWhatsAppOrderProduct? {
+        val cleanRetailerId = productRetailerId.trim().takeIf { it.isNotBlank() } ?: return null
+        val sql = """
+            select
+                id::text,
+                name,
+                selling_price,
+                currency,
+                tax_rate
+            from products
+            where workspace_id = ?::uuid
+              and status = 'active'
+              and (
+                id::text = ?
+                or upper(coalesce(sku, '')) = upper(?)
+                or coalesce(barcode, '') = ?
+              )
+            limit 1
+        """.trimIndent()
+        return prepareStatement(sql).use { statement ->
+            statement.setString(1, workspaceId)
+            statement.setString(2, cleanRetailerId)
+            statement.setString(3, cleanRetailerId)
+            statement.setString(4, cleanRetailerId)
+            statement.executeQuery().use { result ->
+                if (!result.next()) {
+                    null
+                } else {
+                    MetaWhatsAppOrderProduct(
+                        productId = result.getString("id"),
+                        name = result.getString("name"),
+                        sellingPrice = result.getBigDecimal("selling_price") ?: BigDecimal.ZERO,
+                        currency = result.getString("currency") ?: "INR",
+                        taxRate = result.getBigDecimal("tax_rate") ?: BigDecimal.ZERO,
+                    )
+                }
+            }
+        }
+    }
+
+    private fun Connection.insertWhatsAppOrderItem(
+        orderId: String,
+        item: MetaPreparedWhatsAppOrderItem,
+    ) {
+        prepareStatement(
+            """
+            insert into order_items (
+                order_id, product_id, description, quantity, unit_price, tax_rate,
+                line_subtotal, line_tax, line_total
+            )
+            values (?::uuid, ?::uuid, ?, ?, ?, ?, ?, ?, ?)
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setString(1, orderId)
+            statement.setStringOrNull(2, item.productId)
+            statement.setString(3, item.description.cleanWhatsAppDescription())
+            statement.setBigDecimal(4, item.quantity)
+            statement.setBigDecimal(5, item.unitPrice)
+            statement.setBigDecimal(6, item.taxRate)
+            statement.setBigDecimal(7, item.lineSubtotal)
+            statement.setBigDecimal(8, item.lineTax)
+            statement.setBigDecimal(9, item.lineTotal)
+            statement.executeUpdate()
+        }
+    }
+
+    private fun Connection.findWorkspaceCurrency(workspaceId: String): String =
+        prepareStatement("select currency from business_workspaces where id = ?::uuid limit 1").use { statement ->
+            statement.setString(1, workspaceId)
+            statement.executeQuery().use { result ->
+                if (result.next()) result.getString("currency") ?: "INR" else "INR"
+            }
+        }
 
     private fun Connection.findMetaWorkspaceByPhoneNumberId(phoneNumberId: String): String? {
         val cleanPhoneNumberId = phoneNumberId.trim().takeIf { it.isNotBlank() } ?: return null
@@ -1123,7 +1581,9 @@ private data class MetaOrderWhatsAppContext(
     val workspaceId: String,
     val orderId: String,
     val orderNumber: String,
+    val orderType: String,
     val status: String,
+    val fulfillmentType: String,
     val total: String,
     val currency: String,
     val customerName: String?,
@@ -1133,6 +1593,289 @@ private data class MetaOrderWhatsAppContext(
     val accessTokenCiphertext: String?,
 )
 
+private data class MetaTemplateSyncContext(
+    val workspaceId: String,
+    val connection: MetaConnectionRow?,
+)
+
+private data class MetaWebhookEventRow(
+    val id: String,
+    val status: String,
+    val convertedOrderId: String?,
+)
+
+private data class MetaLeadContext(
+    val threadId: String?,
+    val leadId: String?,
+    val convertedOrderId: String?,
+)
+
+private data class MetaWhatsAppOrderProduct(
+    val productId: String,
+    val name: String,
+    val sellingPrice: BigDecimal,
+    val currency: String,
+    val taxRate: BigDecimal,
+)
+
+private data class MetaPreparedWhatsAppOrderItem(
+    val productId: String?,
+    val description: String,
+    val quantity: BigDecimal,
+    val unitPrice: BigDecimal,
+    val taxRate: BigDecimal,
+) {
+    val lineSubtotal: BigDecimal = quantity.multiply(unitPrice).scaled()
+    val lineTax: BigDecimal = lineSubtotal
+        .multiply(taxRate)
+        .divide(BigDecimal("100"), 2, RoundingMode.HALF_UP)
+        .scaled()
+    val lineTotal: BigDecimal = lineSubtotal.add(lineTax).scaled()
+}
+
+private data class OrmaWhatsAppTemplateSpec(
+    val name: String,
+    val bodyText: String,
+    val category: String = "UTILITY",
+    val sampleParameters: List<String> = listOf("ORD-123456", "Jibin Cherian", "INR 1500.00", "confirmed"),
+) {
+    fun toResponse(languageCode: String): MetaWhatsAppTemplateResponse =
+        MetaWhatsAppTemplateResponse(
+            name = name,
+            category = category,
+            languageCode = languageCode,
+            bodyText = bodyText,
+            sampleParameters = sampleParameters,
+        )
+
+    fun toGraphRequest(languageCode: String): MetaGraphWhatsAppTemplateRequest =
+        MetaGraphWhatsAppTemplateRequest(
+            name = name,
+            category = category,
+            languageCode = languageCode,
+            bodyText = bodyText,
+            sampleParameters = sampleParameters,
+        )
+}
+
+private data class MetaWebhookPayload(
+    val objectType: String?,
+    val eventType: String?,
+    val phoneNumberId: String?,
+    val statusMessageId: String?,
+    val messages: List<MetaWebhookMessage>,
+)
+
+private data class MetaWebhookContact(
+    val waId: String?,
+    val name: String?,
+)
+
+private data class MetaWebhookMessage(
+    val id: String?,
+    val from: String?,
+    val waId: String?,
+    val customerName: String?,
+    val type: String?,
+    val preview: String,
+    val order: MetaWebhookOrder?,
+)
+
+private data class MetaWebhookOrder(
+    val catalogId: String?,
+    val text: String?,
+    val items: List<MetaWebhookOrderItem>,
+)
+
+private data class MetaWebhookOrderItem(
+    val productRetailerId: String,
+    val quantity: BigDecimal,
+    val itemPrice: BigDecimal?,
+    val currency: String?,
+)
+
+private val OrmaWhatsAppTemplates = listOf(
+    OrmaWhatsAppTemplateSpec(
+        name = "orma_product_order_confirmed",
+        bodyText = "Hi {{2}}, your product order {{1}} is confirmed. Total: {{3}}. Current status: {{4}}. We will update you here.",
+    ),
+    OrmaWhatsAppTemplateSpec(
+        name = "orma_product_payment_reminder",
+        bodyText = "Hi {{2}}, payment is pending for order {{1}}. Amount: {{3}}. Current status: {{4}}. Please complete payment to continue.",
+    ),
+    OrmaWhatsAppTemplateSpec(
+        name = "orma_product_payment_received",
+        bodyText = "Hi {{2}}, payment is received for order {{1}}. Amount: {{3}}. Current status: {{4}}. Thank you.",
+    ),
+    OrmaWhatsAppTemplateSpec(
+        name = "orma_product_order_ready",
+        bodyText = "Hi {{2}}, your order {{1}} is ready. Total: {{3}}. Current status: {{4}}. We will share the next update here.",
+    ),
+    OrmaWhatsAppTemplateSpec(
+        name = "orma_product_order_dispatched",
+        bodyText = "Hi {{2}}, your order {{1}} has been dispatched. Total: {{3}}. Current status: {{4}}. We will update you after completion.",
+    ),
+    OrmaWhatsAppTemplateSpec(
+        name = "orma_product_order_completed",
+        bodyText = "Hi {{2}}, your order {{1}} is completed. Total: {{3}}. Current status: {{4}}. Thank you for ordering with us.",
+    ),
+    OrmaWhatsAppTemplateSpec(
+        name = "orma_product_order_cancelled",
+        bodyText = "Hi {{2}}, your order {{1}} is cancelled. Total: {{3}}. Current status: {{4}}. Reply here if this needs review.",
+    ),
+    OrmaWhatsAppTemplateSpec(
+        name = "orma_service_request_confirmed",
+        bodyText = "Hi {{2}}, your service request {{1}} is confirmed. Estimate: {{3}}. Current status: {{4}}. We will update you here.",
+    ),
+    OrmaWhatsAppTemplateSpec(
+        name = "orma_service_scheduled",
+        bodyText = "Hi {{2}}, your service request {{1}} is scheduled. Estimate: {{3}}. Current status: {{4}}. We will share updates here.",
+    ),
+    OrmaWhatsAppTemplateSpec(
+        name = "orma_service_in_progress",
+        bodyText = "Hi {{2}}, work has started for service request {{1}}. Estimate: {{3}}. Current status: {{4}}. We will update you here.",
+    ),
+    OrmaWhatsAppTemplateSpec(
+        name = "orma_service_completed",
+        bodyText = "Hi {{2}}, service request {{1}} is completed. Total: {{3}}. Current status: {{4}}. Thank you.",
+    ),
+    OrmaWhatsAppTemplateSpec(
+        name = "orma_service_cancelled",
+        bodyText = "Hi {{2}}, service request {{1}} is cancelled. Estimate: {{3}}. Current status: {{4}}. Reply here if this needs review.",
+    ),
+    OrmaWhatsAppTemplateSpec(
+        name = "orma_appointment_confirmed",
+        bodyText = "Hi {{2}}, your appointment booking {{1}} is confirmed. Amount: {{3}}. Current status: {{4}}. We will update you here.",
+    ),
+    OrmaWhatsAppTemplateSpec(
+        name = "orma_appointment_reminder",
+        bodyText = "Hi {{2}}, this is a reminder for appointment {{1}}. Amount: {{3}}. Current status: {{4}}. Reply here if you need help.",
+    ),
+    OrmaWhatsAppTemplateSpec(
+        name = "orma_appointment_rescheduled",
+        bodyText = "Hi {{2}}, appointment {{1}} has been rescheduled. Amount: {{3}}. Current status: {{4}}. We will update you here.",
+    ),
+    OrmaWhatsAppTemplateSpec(
+        name = "orma_appointment_completed",
+        bodyText = "Hi {{2}}, appointment {{1}} is completed. Total: {{3}}. Current status: {{4}}. Thank you.",
+    ),
+    OrmaWhatsAppTemplateSpec(
+        name = "orma_appointment_cancelled",
+        bodyText = "Hi {{2}}, appointment {{1}} is cancelled. Amount: {{3}}. Current status: {{4}}. Reply here if this needs review.",
+    ),
+    OrmaWhatsAppTemplateSpec(
+        name = "orma_whatsapp_inquiry_received",
+        bodyText = "Hi {{2}}, we received your WhatsApp inquiry {{1}}. Estimated amount: {{3}}. Current status: {{4}}. We will respond here.",
+    ),
+)
+
+private val MetaWebhookJson = Json { ignoreUnknownKeys = true }
+
+private fun String.toMetaWebhookPayload(): MetaWebhookPayload {
+    val root = runCatching {
+        MetaWebhookJson.parseToJsonElement(ifBlank { "{}" }) as? JsonObject
+    }.getOrNull()
+    val messages = mutableListOf<MetaWebhookMessage>()
+    var eventType: String? = null
+    var phoneNumberId: String? = null
+    var statusMessageId: String? = null
+
+    root?.objects("entry").orEmpty().forEach { entry ->
+        entry.objects("changes").forEach { change ->
+            eventType = eventType ?: change.string("field")
+            val value = change.obj("value") ?: return@forEach
+            phoneNumberId = phoneNumberId ?: value.obj("metadata")?.string("phone_number_id")
+            val contacts = value.objects("contacts").map { contact ->
+                MetaWebhookContact(
+                    waId = contact.string("wa_id"),
+                    name = contact.obj("profile")?.string("name"),
+                )
+            }
+            statusMessageId = statusMessageId ?: value.objects("statuses").firstOrNull()?.string("id")
+            value.objects("messages").forEach { message ->
+                val from = message.string("from")
+                val contact = contacts.firstOrNull { it.waId == from } ?: contacts.firstOrNull()
+                val type = message.string("type")
+                val textBody = message.obj("text")?.string("body")
+                val order = message.obj("order")?.toMetaWebhookOrder()
+                messages += MetaWebhookMessage(
+                    id = message.string("id"),
+                    from = from,
+                    waId = contact?.waId ?: from,
+                    customerName = contact?.name,
+                    type = type,
+                    preview = when {
+                        order != null -> "WhatsApp order with ${order.items.size} item(s)"
+                        !textBody.isNullOrBlank() -> textBody.take(160)
+                        !type.isNullOrBlank() -> "WhatsApp $type message"
+                        else -> "WhatsApp message"
+                    },
+                    order = order,
+                )
+            }
+        }
+    }
+
+    return MetaWebhookPayload(
+        objectType = root?.string("object"),
+        eventType = eventType,
+        phoneNumberId = phoneNumberId,
+        statusMessageId = statusMessageId,
+        messages = messages,
+    )
+}
+
+private fun JsonObject.toMetaWebhookOrder(): MetaWebhookOrder =
+    MetaWebhookOrder(
+        catalogId = string("catalog_id"),
+        text = string("text"),
+        items = objects("product_items").mapNotNull { item ->
+            val retailerId = item.string("product_retailer_id")?.trim()?.takeIf { it.isNotBlank() }
+                ?: return@mapNotNull null
+            MetaWebhookOrderItem(
+                productRetailerId = retailerId,
+                quantity = item.string("quantity").metaDecimalOrNull()?.takeIf { it > BigDecimal.ZERO } ?: BigDecimal.ONE,
+                itemPrice = item.string("item_price").metaDecimalOrNull(),
+                currency = item.string("currency"),
+            )
+        },
+    )
+
+private fun JsonObject.obj(key: String): JsonObject? =
+    get(key) as? JsonObject
+
+private fun JsonObject.objects(key: String): List<JsonObject> =
+    (get(key) as? JsonArray)
+        ?.mapNotNull { it as? JsonObject }
+        .orEmpty()
+
+private fun JsonObject.string(key: String): String? =
+    (get(key) as? JsonPrimitive)
+        ?.jsonPrimitive
+        ?.contentOrNull
+        ?.takeIf { it.isNotBlank() }
+
+private fun String?.metaDecimalOrNull(): BigDecimal? =
+    this
+        ?.trim()
+        ?.replace(",", "")
+        ?.toBigDecimalOrNull()
+        ?.scaled()
+
+private fun String?.toWhatsAppCustomerPhone(): String? {
+    val digits = this?.filter(Char::isDigit).orEmpty()
+    return digits.takeIf { it.length >= 7 }?.let { "+$it" }
+}
+
+private fun String?.cleanWhatsAppCustomerName(): String =
+    this?.trim()?.take(180)?.ifBlank { null } ?: "WhatsApp customer"
+
+private fun String.cleanWhatsAppDescription(): String =
+    trim().take(240).ifBlank { "WhatsApp item" }
+
+private fun BigDecimal.scaled(): BigDecimal =
+    setScale(2, RoundingMode.HALF_UP)
+
 private fun MetaCatalogProductRow.readinessIssues(connected: Boolean): List<String> = buildList {
     if (!connected) add("Connect Meta before syncing this item.")
     if (status != "active") add("Set product status active.")
@@ -1140,6 +1883,46 @@ private fun MetaCatalogProductRow.readinessIssues(connected: Boolean): List<Stri
     if (imageStoragePath.isNullOrBlank()) add("Add a product image.")
     if (trackStock && stockQuantity <= BigDecimal.ZERO) add("Restock before promoting this item.")
     if (trackStock && stockQuantity <= reorderLevel) add("Stock is at or below the reorder level.")
+}
+
+private fun MetaOrderWhatsAppContext.defaultWhatsAppTemplateName(fallback: String): String {
+    val statusKey = status.lowercase()
+    return when (orderType.lowercase()) {
+        "appointment" -> when (statusKey) {
+            "completed" -> "orma_appointment_completed"
+            "cancelled" -> "orma_appointment_cancelled"
+            "draft" -> "orma_appointment_reminder"
+            else -> "orma_appointment_confirmed"
+        }
+
+        "service" -> when (statusKey) {
+            "completed" -> "orma_service_completed"
+            "cancelled" -> "orma_service_cancelled"
+            "confirmed" -> if (fulfillmentType == "scheduled") {
+                "orma_service_scheduled"
+            } else {
+                "orma_service_request_confirmed"
+            }
+            else -> "orma_service_request_confirmed"
+        }
+
+        else -> when (statusKey) {
+            "draft" -> "orma_product_payment_reminder"
+            "paid", "part_paid" -> "orma_product_payment_received"
+            "completed" -> "orma_product_order_completed"
+            "cancelled" -> "orma_product_order_cancelled"
+            "confirmed" -> "orma_product_order_confirmed"
+            else -> fallback.trim().takeIf { it.isNotBlank() } ?: "orma_product_order_confirmed"
+        }
+    }
+}
+
+private fun String.isTemplateAlreadyCreatedError(): Boolean {
+    val message = lowercase()
+    return "already exists" in message ||
+        "duplicate" in message ||
+        "name must be unique" in message ||
+        "same name" in message
 }
 
 private fun AppConfig.publicCatalogBaseUrl(): String =

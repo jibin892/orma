@@ -114,7 +114,8 @@ data class AppConfig(
                 metaTokenEncryptionSecret = env["META_TOKEN_ENCRYPTION_SECRET"].orNullIfBlank(),
                 metaSystemUserAccessToken = env["META_SYSTEM_USER_ACCESS_TOKEN"].orNullIfBlank(),
                 metaOAuthSuccessRedirectUrl = env["META_OAUTH_SUCCESS_REDIRECT_URL"].orNullIfBlank(),
-                metaDefaultOrderTemplate = env["META_DEFAULT_ORDER_TEMPLATE"].orEmpty().ifBlank { "orma_order_update" },
+                metaDefaultOrderTemplate = env["META_DEFAULT_ORDER_TEMPLATE"].orEmpty()
+                    .ifBlank { "orma_product_order_confirmed" },
                 metaDefaultLanguageCode = env["META_DEFAULT_LANGUAGE_CODE"].orEmpty().ifBlank { "en_US" },
                 metaOAuthScopes = env["META_OAUTH_SCOPES"]
                     ?.split(",")
@@ -174,7 +175,7 @@ data class AppConfig(
             metaTokenEncryptionSecret = null,
             metaSystemUserAccessToken = null,
             metaOAuthSuccessRedirectUrl = null,
-            metaDefaultOrderTemplate = "orma_order_update",
+            metaDefaultOrderTemplate = "orma_product_order_confirmed",
             metaDefaultLanguageCode = "en_US",
             metaOAuthScopes = defaultMetaOAuthScopes,
             allowedOrigins = listOf("*"),

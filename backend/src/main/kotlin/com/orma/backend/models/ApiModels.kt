@@ -266,6 +266,7 @@ data class CustomerRequest(
     val name: String,
     val phoneNumber: String? = null,
     val email: String? = null,
+    val taxNumber: String? = null,
     val addressLine: String? = null,
     val city: String? = null,
     val region: String? = null,
@@ -280,6 +281,7 @@ data class CustomerResponse(
     val name: String,
     val phoneNumber: String? = null,
     val email: String? = null,
+    val taxNumber: String? = null,
     val addressLine: String? = null,
     val city: String? = null,
     val region: String? = null,
@@ -472,6 +474,7 @@ data class PublicCatalogWorkspaceResponse(
     val industry: String,
     val city: String,
     val currency: String,
+    val whatsappDisplayNumber: String? = null,
     val logoUrl: String? = null,
     val coverUrl: String? = null,
 )
@@ -586,6 +589,14 @@ data class OrderListResponse(
 data class OrderRequest(
     val customerId: String? = null,
     val customerName: String? = null,
+    val customerPhoneNumber: String? = null,
+    val customerEmail: String? = null,
+    val customerTaxNumber: String? = null,
+    val customerAddressLine: String? = null,
+    val customerCity: String? = null,
+    val customerRegion: String? = null,
+    val customerCountry: String? = null,
+    val customerPostalCode: String? = null,
     val orderType: String = "sale",
     val status: String = "confirmed",
     val scheduledAt: String? = null,
@@ -620,6 +631,7 @@ data class OrderResponse(
     val customerName: String? = null,
     val customerPhoneNumber: String? = null,
     val customerEmail: String? = null,
+    val customerTaxNumber: String? = null,
     val customerAddressLine: String? = null,
     val customerCity: String? = null,
     val customerRegion: String? = null,
@@ -825,9 +837,41 @@ data class MetaCatalogSyncResponse(
 )
 
 @Serializable
+data class MetaWhatsAppTemplateResponse(
+    val name: String,
+    val category: String,
+    val languageCode: String,
+    val bodyText: String,
+    val sampleParameters: List<String> = emptyList(),
+)
+
+@Serializable
+data class MetaWhatsAppTemplateListResponse(
+    val templates: List<MetaWhatsAppTemplateResponse>,
+)
+
+@Serializable
+data class MetaWhatsAppTemplateSyncItemResponse(
+    val name: String,
+    val status: String,
+    val message: String,
+)
+
+@Serializable
+data class MetaWhatsAppTemplateSyncResponse(
+    val connected: Boolean,
+    val created: Int,
+    val failed: Int,
+    val templates: List<MetaWhatsAppTemplateSyncItemResponse>,
+    val message: String,
+)
+
+@Serializable
 data class MetaWebhookEventResponse(
     val id: String,
     val status: String,
+    val convertedOrderId: String? = null,
+    val message: String = "Webhook received.",
 )
 
 @Serializable
