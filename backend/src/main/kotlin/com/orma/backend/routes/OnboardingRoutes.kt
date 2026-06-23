@@ -54,8 +54,18 @@ fun Route.onboardingRoutes(
     }
 
     post("/onboarding/notifications") {
-        val repository = onboardingRepository ?: return@post call.databaseNotConfigured()
         val request = call.receive<NotificationPreferenceRequest>()
+        if (request.enabled && request.deviceToken.isNullOrBlank()) {
+            call.respond(
+                HttpStatusCode.BadRequest,
+                ErrorResponse(
+                    code = "notification_token_required",
+                    message = "ORMA could not register this device for notifications. Allow notifications on this device and try again.",
+                ),
+            )
+            return@post
+        }
+        val repository = onboardingRepository ?: return@post call.databaseNotConfigured()
         val firebaseUser = call.verifiedFirebaseUser(config) ?: return@post
 
         val session = repository.updateNotificationPreference(
