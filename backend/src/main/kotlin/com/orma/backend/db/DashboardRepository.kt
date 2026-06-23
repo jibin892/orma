@@ -15,6 +15,7 @@ import com.orma.backend.models.OrderItemRequest
 import com.orma.backend.models.OrderItemResponse
 import com.orma.backend.models.OrderRequest
 import com.orma.backend.models.OrderResponse
+import com.orma.backend.models.PaginationResponse
 import com.orma.backend.models.PrinterProfileRequest
 import com.orma.backend.models.PrinterProfileResponse
 import com.orma.backend.models.ProductCategoryRequest
@@ -69,11 +70,17 @@ data class DashboardQueryFilters(
     val status: String? = null,
     val itemType: String? = null,
     val orderType: String? = null,
+    val page: Int = 1,
     val limit: Int = 80,
     val lowStockOnly: Boolean = false,
     val supplierId: String? = null,
     val barcode: String? = null,
     val scheduledOnly: Boolean = false,
+)
+
+data class PagedResult<T>(
+    val items: List<T>,
+    val pagination: PaginationResponse,
 )
 
 sealed interface PublicCatalogOrderSubmitResult {
@@ -299,11 +306,11 @@ class DashboardRepository(
                     workspaceId = access.workspaceId,
                     filters = DashboardQueryFilters(limit = 5),
                     includeItems = false,
-                ),
+                ).items,
                 lowStockItems = connection.listProducts(
                     workspaceId = access.workspaceId,
                     filters = DashboardQueryFilters(limit = 5, lowStockOnly = true),
-                ),
+                ).items,
                 revenueSeries = connection.listDashboardRevenueSeries(access.workspaceId),
                 orderStatusBreakdown = connection.listOrderStatusBreakdown(access.workspaceId),
                 orderTypeBreakdown = connection.listOrderTypeBreakdown(access.workspaceId),
@@ -318,7 +325,7 @@ class DashboardRepository(
     suspend fun customers(
         firebaseUser: VerifiedFirebaseUser,
         filters: DashboardQueryFilters = DashboardQueryFilters(),
-    ): List<CustomerResponse>? = withContext(Dispatchers.IO) {
+    ): PagedResult<CustomerResponse>? = withContext(Dispatchers.IO) {
         dataSource.connection.use { connection ->
             val access = connection.resolveWorkspaceAccess(firebaseUser) ?: return@withContext null
             connection.listCustomers(access.workspaceId, filters)
@@ -328,12 +335,14 @@ class DashboardRepository(
     suspend fun customerOrders(
         firebaseUser: VerifiedFirebaseUser,
         customerId: String,
-    ): List<OrderResponse>? = withContext(Dispatchers.IO) {
+        filters: DashboardQueryFilters = DashboardQueryFilters(),
+    ): PagedResult<OrderResponse>? = withContext(Dispatchers.IO) {
         dataSource.connection.use { connection ->
             val access = connection.resolveWorkspaceAccess(firebaseUser) ?: return@withContext null
             connection.listCustomerOrders(
                 workspaceId = access.workspaceId,
                 customerId = customerId,
+                filters = filters,
                 includeItems = true,
             )
         }
@@ -363,7 +372,7 @@ class DashboardRepository(
     suspend fun suppliers(
         firebaseUser: VerifiedFirebaseUser,
         filters: DashboardQueryFilters = DashboardQueryFilters(),
-    ): List<SupplierResponse>? = withContext(Dispatchers.IO) {
+    ): PagedResult<SupplierResponse>? = withContext(Dispatchers.IO) {
         dataSource.connection.use { connection ->
             val access = connection.resolveWorkspaceAccess(firebaseUser) ?: return@withContext null
             connection.listSuppliers(access.workspaceId, filters)
@@ -394,7 +403,7 @@ class DashboardRepository(
     suspend fun productCategories(
         firebaseUser: VerifiedFirebaseUser,
         filters: DashboardQueryFilters = DashboardQueryFilters(),
-    ): List<ProductCategoryResponse>? = withContext(Dispatchers.IO) {
+    ): PagedResult<ProductCategoryResponse>? = withContext(Dispatchers.IO) {
         dataSource.connection.use { connection ->
             val access = connection.resolveWorkspaceAccess(firebaseUser) ?: return@withContext null
             connection.listProductCategories(access.workspaceId, filters)
@@ -414,7 +423,7 @@ class DashboardRepository(
     suspend fun productOffers(
         firebaseUser: VerifiedFirebaseUser,
         filters: DashboardQueryFilters = DashboardQueryFilters(),
-    ): List<ProductOfferResponse>? = withContext(Dispatchers.IO) {
+    ): PagedResult<ProductOfferResponse>? = withContext(Dispatchers.IO) {
         dataSource.connection.use { connection ->
             val access = connection.resolveWorkspaceAccess(firebaseUser) ?: return@withContext null
             connection.listProductOffers(access.workspaceId, filters)
@@ -434,7 +443,7 @@ class DashboardRepository(
     suspend fun paymentMethods(
         firebaseUser: VerifiedFirebaseUser,
         filters: DashboardQueryFilters = DashboardQueryFilters(),
-    ): List<WorkspacePaymentMethodResponse>? = withContext(Dispatchers.IO) {
+    ): PagedResult<WorkspacePaymentMethodResponse>? = withContext(Dispatchers.IO) {
         dataSource.connection.use { connection ->
             val access = connection.resolveWorkspaceAccess(firebaseUser) ?: return@withContext null
             connection.listPaymentMethods(access.workspaceId, filters)
@@ -467,7 +476,7 @@ class DashboardRepository(
     suspend fun products(
         firebaseUser: VerifiedFirebaseUser,
         filters: DashboardQueryFilters = DashboardQueryFilters(),
-    ): List<ProductResponse>? = withContext(Dispatchers.IO) {
+    ): PagedResult<ProductResponse>? = withContext(Dispatchers.IO) {
         dataSource.connection.use { connection ->
             val access = connection.resolveWorkspaceAccess(firebaseUser) ?: return@withContext null
             connection.listProducts(access.workspaceId, filters = filters)
@@ -480,7 +489,7 @@ class DashboardRepository(
     ): ProductExportResponse? = withContext(Dispatchers.IO) {
         dataSource.connection.use { connection ->
             val access = connection.resolveWorkspaceAccess(firebaseUser) ?: return@withContext null
-            val products = connection.listProducts(access.workspaceId, filters = filters.copy(limit = 500))
+            val products = connection.listProducts(access.workspaceId, filters = filters.copy(page = 1, limit = 500)).items
             ProductExportResponse(
                 fileName = "orma-products-${access.workspaceId.take(8)}.csv",
                 count = products.size,
@@ -728,7 +737,7 @@ class DashboardRepository(
     suspend fun orders(
         firebaseUser: VerifiedFirebaseUser,
         filters: DashboardQueryFilters = DashboardQueryFilters(),
-    ): List<OrderResponse>? = withContext(Dispatchers.IO) {
+    ): PagedResult<OrderResponse>? = withContext(Dispatchers.IO) {
         dataSource.connection.use { connection ->
             val access = connection.resolveWorkspaceAccess(firebaseUser) ?: return@withContext null
             connection.listOrders(access.workspaceId, filters = filters, includeItems = false)
@@ -738,7 +747,7 @@ class DashboardRepository(
     suspend fun printers(
         firebaseUser: VerifiedFirebaseUser,
         filters: DashboardQueryFilters = DashboardQueryFilters(),
-    ): List<PrinterProfileResponse>? = withContext(Dispatchers.IO) {
+    ): PagedResult<PrinterProfileResponse>? = withContext(Dispatchers.IO) {
         dataSource.connection.use { connection ->
             val access = connection.resolveWorkspaceAccess(firebaseUser) ?: return@withContext null
             connection.listPrinters(access.workspaceId, filters)
@@ -858,7 +867,8 @@ class DashboardRepository(
                 industry,
                 city,
                 currency,
-                logo_file_name
+                logo_file_name,
+                cover_file_name
             from business_workspaces
             where id = ?::uuid
               and onboarding_completed_at is not null
@@ -876,7 +886,8 @@ class DashboardRepository(
                         industry = result.getString("industry"),
                         city = result.getString("city"),
                         currency = result.getString("currency") ?: "INR",
-                        logoUrl = result.getString("logo_file_name"),
+                        logoUrl = result.getString("logo_file_name").toDashboardMediaUrl(),
+                        coverUrl = result.getString("cover_file_name").toDashboardMediaUrl(),
                     )
                 }
             }
@@ -1553,13 +1564,13 @@ class DashboardRepository(
     private fun Connection.listCustomers(
         workspaceId: String,
         filters: DashboardQueryFilters = DashboardQueryFilters(),
-    ): List<CustomerResponse> {
+    ): PagedResult<CustomerResponse> {
         val params = mutableListOf(workspaceId)
         val search = filters.query.cleanSearchTerm()
         val sql = buildString {
             append(
                 """
-                select *
+                select *, count(*) over()::int as total_count
                 from customers
                 where workspace_id = ?::uuid and status = 'active'
                 """.trimIndent(),
@@ -1580,13 +1591,19 @@ class DashboardRepository(
             }
             append(" order by created_at desc")
             append(" limit ${filters.limit.sanitizedLimit()}")
+            append(" offset ${filters.offset()}")
         }
         return prepareStatement(sql).use { statement ->
             statement.bindStringParams(params)
             statement.executeQuery().use { result ->
-                buildList {
-                    while (result.next()) add(result.toCustomerResponse())
+                var totalItems = 0
+                val items = buildList {
+                    while (result.next()) {
+                        if (totalItems == 0) totalItems = result.getInt("total_count")
+                        add(result.toCustomerResponse())
+                    }
                 }
+                items.toPagedResult(filters, totalItems)
             }
         }
     }
@@ -1635,13 +1652,13 @@ class DashboardRepository(
     private fun Connection.listSuppliers(
         workspaceId: String,
         filters: DashboardQueryFilters = DashboardQueryFilters(),
-    ): List<SupplierResponse> {
+    ): PagedResult<SupplierResponse> {
         val params = mutableListOf(workspaceId)
         val search = filters.query.cleanSearchTerm()
         val sql = buildString {
             append(
                 """
-                select *
+                select *, count(*) over()::int as total_count
                 from suppliers
                 where workspace_id = ?::uuid and status = 'active'
                 """.trimIndent(),
@@ -1662,13 +1679,19 @@ class DashboardRepository(
             }
             append(" order by created_at desc")
             append(" limit ${filters.limit.sanitizedLimit()}")
+            append(" offset ${filters.offset()}")
         }
         return prepareStatement(sql).use { statement ->
             statement.bindStringParams(params)
             statement.executeQuery().use { result ->
-                buildList {
-                    while (result.next()) add(result.toSupplierResponse())
+                var totalItems = 0
+                val items = buildList {
+                    while (result.next()) {
+                        if (totalItems == 0) totalItems = result.getInt("total_count")
+                        add(result.toSupplierResponse())
+                    }
                 }
+                items.toPagedResult(filters, totalItems)
             }
         }
     }
@@ -1716,13 +1739,14 @@ class DashboardRepository(
     private fun Connection.listProductCategories(
         workspaceId: String,
         filters: DashboardQueryFilters = DashboardQueryFilters(),
-    ): List<ProductCategoryResponse> {
+    ): PagedResult<ProductCategoryResponse> {
         val params = mutableListOf(workspaceId)
         val search = filters.query.cleanSearchTerm()
         val sql = buildString {
             append(
                 """
-                select id::text, name, sort_order, status, created_at::text, updated_at::text
+                select id::text, name, sort_order, status, created_at::text, updated_at::text,
+                    count(*) over()::int as total_count
                 from product_categories
                 where workspace_id = ?::uuid and status = 'active'
                 """.trimIndent(),
@@ -1731,14 +1755,19 @@ class DashboardRepository(
                 append(" and name ilike ?")
                 params.add(search.ilikePattern())
             }
-            append(" order by sort_order asc, name asc limit ${filters.limit.sanitizedLimit()}")
+            append(" order by sort_order asc, name asc limit ${filters.limit.sanitizedLimit()} offset ${filters.offset()}")
         }
         return prepareStatement(sql).use { statement ->
             statement.bindStringParams(params)
             statement.executeQuery().use { result ->
-                buildList {
-                    while (result.next()) add(result.toProductCategoryResponse())
+                var totalItems = 0
+                val items = buildList {
+                    while (result.next()) {
+                        if (totalItems == 0) totalItems = result.getInt("total_count")
+                        add(result.toProductCategoryResponse())
+                    }
                 }
+                items.toPagedResult(filters, totalItems)
             }
         }
     }
@@ -1768,7 +1797,7 @@ class DashboardRepository(
     private fun Connection.listProductOffers(
         workspaceId: String,
         filters: DashboardQueryFilters = DashboardQueryFilters(),
-    ): List<ProductOfferResponse> {
+    ): PagedResult<ProductOfferResponse> {
         val params = mutableListOf(workspaceId)
         val search = filters.query.cleanSearchTerm()
         val sql = buildString {
@@ -1789,7 +1818,8 @@ class DashboardRepository(
                     po.ends_at::text,
                     po.status,
                     po.created_at::text,
-                    po.updated_at::text
+                    po.updated_at::text,
+                    count(*) over()::int as total_count
                 from product_offers po
                 left join products p on p.id = po.product_id
                 left join product_categories pc on pc.id = po.category_id
@@ -1800,14 +1830,19 @@ class DashboardRepository(
                 append(" and (po.name ilike ? or coalesce(p.name, '') ilike ? or coalesce(pc.name, '') ilike ?)")
                 repeat(3) { params.add(search.ilikePattern()) }
             }
-            append(" order by po.created_at desc limit ${filters.limit.sanitizedLimit()}")
+            append(" order by po.created_at desc limit ${filters.limit.sanitizedLimit()} offset ${filters.offset()}")
         }
         return prepareStatement(sql).use { statement ->
             statement.bindStringParams(params)
             statement.executeQuery().use { result ->
-                buildList {
-                    while (result.next()) add(result.toProductOfferResponse())
+                var totalItems = 0
+                val items = buildList {
+                    while (result.next()) {
+                        if (totalItems == 0) totalItems = result.getInt("total_count")
+                        add(result.toProductOfferResponse())
+                    }
                 }
+                items.toPagedResult(filters, totalItems)
             }
         }
     }
@@ -1861,13 +1896,14 @@ class DashboardRepository(
     private fun Connection.listPaymentMethods(
         workspaceId: String,
         filters: DashboardQueryFilters = DashboardQueryFilters(),
-    ): List<WorkspacePaymentMethodResponse> {
+    ): PagedResult<WorkspacePaymentMethodResponse> {
         val params = mutableListOf(workspaceId)
         val search = filters.query.cleanSearchTerm()
         val sql = buildString {
             append(
                 """
-                select id::text, type, label, upi_id, payee_name, is_default, status, created_at::text, updated_at::text
+                select id::text, type, label, upi_id, payee_name, is_default, status, created_at::text, updated_at::text,
+                    count(*) over()::int as total_count
                 from workspace_payment_methods
                 where workspace_id = ?::uuid and status = 'active'
                 """.trimIndent(),
@@ -1876,14 +1912,19 @@ class DashboardRepository(
                 append(" and (label ilike ? or coalesce(upi_id, '') ilike ? or coalesce(payee_name, '') ilike ?)")
                 repeat(3) { params.add(search.ilikePattern()) }
             }
-            append(" order by is_default desc, created_at desc limit ${filters.limit.sanitizedLimit()}")
+            append(" order by is_default desc, created_at desc limit ${filters.limit.sanitizedLimit()} offset ${filters.offset()}")
         }
         return prepareStatement(sql).use { statement ->
             statement.bindStringParams(params)
             statement.executeQuery().use { result ->
-                buildList {
-                    while (result.next()) add(result.toWorkspacePaymentMethodResponse())
+                var totalItems = 0
+                val items = buildList {
+                    while (result.next()) {
+                        if (totalItems == 0) totalItems = result.getInt("total_count")
+                        add(result.toWorkspacePaymentMethodResponse())
+                    }
                 }
+                items.toPagedResult(filters, totalItems)
             }
         }
     }
@@ -1922,7 +1963,7 @@ class DashboardRepository(
     private fun Connection.listProducts(
         workspaceId: String,
         filters: DashboardQueryFilters = DashboardQueryFilters(),
-    ): List<ProductResponse> {
+    ): PagedResult<ProductResponse> {
         val params = mutableListOf(workspaceId)
         val search = filters.query.cleanSearchTerm()
         val supplierId = filters.supplierId.cleanUuidOrNull()
@@ -1932,6 +1973,7 @@ class DashboardRepository(
             append(
                 """
                 select p.*, s.name as supplier_name, pc.name as category_name,
+                    count(*) over()::int as total_count,
                     (
                         select pi.storage_path
                         from product_images pi
@@ -1979,13 +2021,19 @@ class DashboardRepository(
             }
             append(" order by p.created_at desc")
             append(" limit ${filters.limit.sanitizedLimit()}")
+            append(" offset ${filters.offset()}")
         }
         return prepareStatement(sql).use { statement ->
             statement.bindStringParams(params)
             statement.executeQuery().use { result ->
-                buildList {
-                    while (result.next()) add(result.toProductResponse())
+                var totalItems = 0
+                val items = buildList {
+                    while (result.next()) {
+                        if (totalItems == 0) totalItems = result.getInt("total_count")
+                        add(result.toProductResponse())
+                    }
                 }
+                items.toPagedResult(filters, totalItems)
             }
         }
     }
@@ -2153,7 +2201,7 @@ class DashboardRepository(
         workspaceId: String,
         filters: DashboardQueryFilters = DashboardQueryFilters(),
         includeItems: Boolean,
-    ): List<OrderResponse> {
+    ): PagedResult<OrderResponse> {
         val params = mutableListOf(workspaceId)
         val search = filters.query.cleanSearchTerm()
         val status = filters.status.cleanOrderStatusFilter()
@@ -2189,16 +2237,20 @@ class DashboardRepository(
             append(" group by o.id, c.name")
             append(" order by o.created_at desc")
             append(" limit ${filters.limit.sanitizedLimit()}")
+            append(" offset ${filters.offset()}")
         }
         return prepareStatement(sql).use { statement ->
             statement.bindStringParams(params)
             statement.executeQuery().use { result ->
-                buildList {
+                var totalItems = 0
+                val items = buildList {
                     while (result.next()) {
+                        if (totalItems == 0) totalItems = result.getInt("total_count")
                         val order = result.toOrderResponse(emptyList())
                         add(if (includeItems) order.copy(items = listOrderItems(order.id)) else order)
                     }
                 }
+                items.toPagedResult(filters, totalItems)
             }
         }
     }
@@ -2206,25 +2258,30 @@ class DashboardRepository(
     private fun Connection.listCustomerOrders(
         workspaceId: String,
         customerId: String,
+        filters: DashboardQueryFilters = DashboardQueryFilters(),
         includeItems: Boolean,
-    ): List<OrderResponse> {
+    ): PagedResult<OrderResponse> {
         val sql = """
             ${orderSelectSql()}
             where o.workspace_id = ?::uuid and o.customer_id = ?::uuid
             group by o.id, c.name
             order by o.created_at desc
-            limit 500
+            limit ${filters.limit.sanitizedLimit()}
+            offset ${filters.offset()}
         """.trimIndent()
         return prepareStatement(sql).use { statement ->
             statement.setString(1, workspaceId)
             statement.setString(2, customerId)
             statement.executeQuery().use { result ->
-                buildList {
+                var totalItems = 0
+                val items = buildList {
                     while (result.next()) {
+                        if (totalItems == 0) totalItems = result.getInt("total_count")
                         val order = result.toOrderResponse(emptyList())
                         add(if (includeItems) order.copy(items = listOrderItems(order.id)) else order)
                     }
                 }
+                items.toPagedResult(filters, totalItems)
             }
         }
     }
@@ -2252,13 +2309,13 @@ class DashboardRepository(
     private fun Connection.listPrinters(
         workspaceId: String,
         filters: DashboardQueryFilters = DashboardQueryFilters(),
-    ): List<PrinterProfileResponse> {
+    ): PagedResult<PrinterProfileResponse> {
         val params = mutableListOf(workspaceId)
         val search = filters.query.cleanSearchTerm()
         val sql = buildString {
             append(
                 """
-                select *
+                select *, count(*) over()::int as total_count
                 from printer_profiles
                 where workspace_id = ?::uuid and status = 'active'
                 """.trimIndent(),
@@ -2278,13 +2335,19 @@ class DashboardRepository(
             }
             append(" order by is_default_receipt desc, is_default_barcode desc, created_at desc")
             append(" limit ${filters.limit.sanitizedLimit()}")
+            append(" offset ${filters.offset()}")
         }
         return prepareStatement(sql).use { statement ->
             statement.bindStringParams(params)
             statement.executeQuery().use { result ->
-                buildList {
-                    while (result.next()) add(result.toPrinterProfileResponse())
+                var totalItems = 0
+                val items = buildList {
+                    while (result.next()) {
+                        if (totalItems == 0) totalItems = result.getInt("total_count")
+                        add(result.toPrinterProfileResponse())
+                    }
                 }
+                items.toPagedResult(filters, totalItems)
             }
         }
     }
@@ -2615,7 +2678,8 @@ class DashboardRepository(
             o.source,
             o.created_at::text,
             o.updated_at::text,
-            count(oi.id)::int as item_count
+            count(oi.id)::int as item_count,
+            count(*) over()::int as total_count
         from orders o
         left join customers c on c.id = o.customer_id
         left join order_items oi on oi.order_id = o.id
@@ -2994,6 +3058,29 @@ class DashboardRepository(
 
     private fun Int.sanitizedLimit(): Int =
         coerceIn(1, 200)
+
+    private fun Int.sanitizedPage(): Int =
+        coerceAtLeast(1)
+
+    private fun DashboardQueryFilters.offset(): Int =
+        (page.sanitizedPage() - 1) * limit.sanitizedLimit()
+
+    private fun <T> List<T>.toPagedResult(filters: DashboardQueryFilters, totalItems: Int): PagedResult<T> {
+        val pageSize = filters.limit.sanitizedLimit()
+        val page = filters.page.sanitizedPage()
+        val totalPages = if (totalItems <= 0) 0 else ((totalItems - 1) / pageSize) + 1
+        return PagedResult(
+            items = this,
+            pagination = PaginationResponse(
+                page = page,
+                pageSize = pageSize,
+                totalItems = totalItems.coerceAtLeast(0),
+                totalPages = totalPages,
+                hasPrevious = page > 1 && totalItems > 0,
+                hasNext = page < totalPages,
+            ),
+        )
+    }
 
     private fun String?.cleanOrderStatusFilter(): String? =
         this

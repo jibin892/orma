@@ -246,8 +246,19 @@ data class DashboardNotificationPreviewResponse(
 )
 
 @Serializable
+data class PaginationResponse(
+    val page: Int = 1,
+    val pageSize: Int = 80,
+    val totalItems: Int = 0,
+    val totalPages: Int = 0,
+    val hasPrevious: Boolean = false,
+    val hasNext: Boolean = false,
+)
+
+@Serializable
 data class CustomerListResponse(
     val customers: List<CustomerResponse>,
+    val pagination: PaginationResponse = PaginationResponse(totalItems = customers.size),
 )
 
 @Serializable
@@ -283,6 +294,7 @@ data class CustomerResponse(
 @Serializable
 data class SupplierListResponse(
     val suppliers: List<SupplierResponse>,
+    val pagination: PaginationResponse = PaginationResponse(totalItems = suppliers.size),
 )
 
 @Serializable
@@ -312,11 +324,13 @@ data class SupplierResponse(
 @Serializable
 data class ProductListResponse(
     val products: List<ProductResponse>,
+    val pagination: PaginationResponse = PaginationResponse(totalItems = products.size),
 )
 
 @Serializable
 data class ProductCategoryListResponse(
     val categories: List<ProductCategoryResponse>,
+    val pagination: PaginationResponse = PaginationResponse(totalItems = categories.size),
 )
 
 @Serializable
@@ -459,6 +473,7 @@ data class PublicCatalogWorkspaceResponse(
     val city: String,
     val currency: String,
     val logoUrl: String? = null,
+    val coverUrl: String? = null,
 )
 
 @Serializable
@@ -564,6 +579,7 @@ data class StockMovementResponse(
 @Serializable
 data class OrderListResponse(
     val orders: List<OrderResponse>,
+    val pagination: PaginationResponse = PaginationResponse(totalItems = orders.size),
 )
 
 @Serializable
@@ -624,6 +640,7 @@ data class OrderResponse(
 @Serializable
 data class ProductOfferListResponse(
     val offers: List<ProductOfferResponse>,
+    val pagination: PaginationResponse = PaginationResponse(totalItems = offers.size),
 )
 
 @Serializable
@@ -661,6 +678,7 @@ data class ProductOfferResponse(
 @Serializable
 data class WorkspacePaymentMethodListResponse(
     val paymentMethods: List<WorkspacePaymentMethodResponse>,
+    val pagination: PaginationResponse = PaginationResponse(totalItems = paymentMethods.size),
 )
 
 @Serializable
@@ -702,6 +720,7 @@ data class OrderItemResponse(
 @Serializable
 data class PrinterProfileListResponse(
     val printers: List<PrinterProfileResponse>,
+    val pagination: PaginationResponse = PaginationResponse(totalItems = printers.size),
 )
 
 @Serializable

@@ -101,7 +101,7 @@ fun Route.dashboardRoutes(
         val repository = dashboardRepository ?: return@get call.dashboardDatabaseNotConfigured()
         val firebaseUser = call.verifiedFirebaseUser(config) ?: return@get
         val customers = repository.customers(firebaseUser, call.dashboardFilters()) ?: return@get call.workspaceNotFound()
-        call.respond(CustomerListResponse(customers))
+        call.respond(CustomerListResponse(customers.items, customers.pagination))
     }
 
     post("/customers") {
@@ -131,15 +131,15 @@ fun Route.dashboardRoutes(
         val repository = dashboardRepository ?: return@get call.dashboardDatabaseNotConfigured()
         val firebaseUser = call.verifiedFirebaseUser(config) ?: return@get
         val customerId = call.parameters["id"].orEmpty()
-        val orders = repository.customerOrders(firebaseUser, customerId) ?: return@get call.workspaceNotFound()
-        call.respond(OrderListResponse(orders))
+        val orders = repository.customerOrders(firebaseUser, customerId, call.dashboardFilters()) ?: return@get call.workspaceNotFound()
+        call.respond(OrderListResponse(orders.items, orders.pagination))
     }
 
     get("/suppliers") {
         val repository = dashboardRepository ?: return@get call.dashboardDatabaseNotConfigured()
         val firebaseUser = call.verifiedFirebaseUser(config) ?: return@get
         val suppliers = repository.suppliers(firebaseUser, call.dashboardFilters()) ?: return@get call.workspaceNotFound()
-        call.respond(SupplierListResponse(suppliers))
+        call.respond(SupplierListResponse(suppliers.items, suppliers.pagination))
     }
 
     post("/suppliers") {
@@ -169,14 +169,14 @@ fun Route.dashboardRoutes(
         val repository = dashboardRepository ?: return@get call.dashboardDatabaseNotConfigured()
         val firebaseUser = call.verifiedFirebaseUser(config) ?: return@get
         val products = repository.products(firebaseUser, call.dashboardFilters()) ?: return@get call.workspaceNotFound()
-        call.respond(ProductListResponse(products))
+        call.respond(ProductListResponse(products.items, products.pagination))
     }
 
     get("/product-categories") {
         val repository = dashboardRepository ?: return@get call.dashboardDatabaseNotConfigured()
         val firebaseUser = call.verifiedFirebaseUser(config) ?: return@get
         val categories = repository.productCategories(firebaseUser, call.dashboardFilters()) ?: return@get call.workspaceNotFound()
-        call.respond(ProductCategoryListResponse(categories))
+        call.respond(ProductCategoryListResponse(categories.items, categories.pagination))
     }
 
     post("/product-categories") {
@@ -194,7 +194,7 @@ fun Route.dashboardRoutes(
         val repository = dashboardRepository ?: return@get call.dashboardDatabaseNotConfigured()
         val firebaseUser = call.verifiedFirebaseUser(config) ?: return@get
         val offers = repository.productOffers(firebaseUser, call.dashboardFilters()) ?: return@get call.workspaceNotFound()
-        call.respond(ProductOfferListResponse(offers))
+        call.respond(ProductOfferListResponse(offers.items, offers.pagination))
     }
 
     post("/offers") {
@@ -308,7 +308,7 @@ fun Route.dashboardRoutes(
         val repository = dashboardRepository ?: return@get call.dashboardDatabaseNotConfigured()
         val firebaseUser = call.verifiedFirebaseUser(config) ?: return@get
         val orders = repository.orders(firebaseUser, call.dashboardFilters()) ?: return@get call.workspaceNotFound()
-        call.respond(OrderListResponse(orders))
+        call.respond(OrderListResponse(orders.items, orders.pagination))
     }
 
     post("/orders") {
@@ -365,14 +365,14 @@ fun Route.dashboardRoutes(
         val repository = dashboardRepository ?: return@get call.dashboardDatabaseNotConfigured()
         val firebaseUser = call.verifiedFirebaseUser(config) ?: return@get
         val printers = repository.printers(firebaseUser, call.dashboardFilters()) ?: return@get call.workspaceNotFound()
-        call.respond(PrinterProfileListResponse(printers))
+        call.respond(PrinterProfileListResponse(printers.items, printers.pagination))
     }
 
     get("/payment-methods") {
         val repository = dashboardRepository ?: return@get call.dashboardDatabaseNotConfigured()
         val firebaseUser = call.verifiedFirebaseUser(config) ?: return@get
         val methods = repository.paymentMethods(firebaseUser, call.dashboardFilters()) ?: return@get call.workspaceNotFound()
-        call.respond(WorkspacePaymentMethodListResponse(methods))
+        call.respond(WorkspacePaymentMethodListResponse(methods.items, methods.pagination))
     }
 
     post("/payment-methods") {
@@ -421,6 +421,7 @@ private fun ApplicationCall.dashboardFilters(): DashboardQueryFilters {
         status = query["status"],
         itemType = query["itemType"],
         orderType = query["orderType"],
+        page = query["page"]?.toIntOrNull() ?: 1,
         limit = query["limit"]?.toIntOrNull() ?: 80,
         lowStockOnly = query["lowStock"].toBooleanQuery(),
         supplierId = query["supplierId"],
