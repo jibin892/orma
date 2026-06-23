@@ -28,6 +28,7 @@ data class WorkspaceRecord(
     val role: String,
     val onboardingComplete: Boolean,
     val logoFileName: String?,
+    val coverFileName: String?,
     val inviteCode: String?,
 )
 
@@ -359,6 +360,15 @@ class OnboardingRepository(
         }
     }
 
+    suspend fun saveBusinessCover(
+        workspaceId: String,
+        storagePath: String,
+    ) = withContext(Dispatchers.IO) {
+        dataSource.connection.use { connection ->
+            connection.updateBusinessCover(workspaceId, storagePath)
+        }
+    }
+
     suspend fun saveProductImage(
         workspaceId: String,
         userId: String,
@@ -441,6 +451,7 @@ class OnboardingRepository(
                 wm.role,
                 bw.onboarding_completed_at is not null as onboarding_complete,
                 bw.logo_file_name,
+                bw.cover_file_name,
                 ti.code as invite_code
             from workspace_members wm
             join business_workspaces bw on bw.id = wm.workspace_id
@@ -534,6 +545,7 @@ class OnboardingRepository(
                 'business_owner' as role,
                 onboarding_completed_at is not null as onboarding_complete,
                 logo_file_name,
+                cover_file_name,
                 null::text as invite_code
         """.trimIndent()
 
@@ -584,6 +596,7 @@ class OnboardingRepository(
                 'business_owner' as role,
                 onboarding_completed_at is not null as onboarding_complete,
                 logo_file_name,
+                cover_file_name,
                 null::text as invite_code
         """.trimIndent()
 
@@ -848,7 +861,8 @@ class OnboardingRepository(
                 bw.legal_name,
                 ti.role as workspace_role,
                 bw.onboarding_completed_at is not null as onboarding_complete,
-                bw.logo_file_name
+                bw.logo_file_name,
+                bw.cover_file_name
             from team_invites ti
             join business_workspaces bw on bw.id = ti.workspace_id
             where ti.status = 'active'
@@ -884,7 +898,8 @@ class OnboardingRepository(
                 bw.legal_name,
                 ti.role as workspace_role,
                 bw.onboarding_completed_at is not null as onboarding_complete,
-                bw.logo_file_name
+                bw.logo_file_name,
+                bw.cover_file_name
             from team_invites ti
             join business_workspaces bw on bw.id = ti.workspace_id
             where ti.code = ?
@@ -1066,6 +1081,22 @@ class OnboardingRepository(
         }
     }
 
+    private fun Connection.updateBusinessCover(
+        workspaceId: String,
+        storagePath: String,
+    ) {
+        val sql = """
+            update business_workspaces
+            set cover_file_name = ?, updated_at = now()
+            where id = ?::uuid
+        """.trimIndent()
+        prepareStatement(sql).use { statement ->
+            statement.setString(1, storagePath)
+            statement.setString(2, workspaceId)
+            statement.executeUpdate()
+        }
+    }
+
     private fun Connection.insertProductImage(
         workspaceId: String,
         userId: String,
@@ -1188,6 +1219,7 @@ class OnboardingRepository(
                 ?: RoleTeamMember,
             onboardingComplete = getBoolean("onboarding_complete"),
             logoFileName = getString("logo_file_name"),
+            coverFileName = runCatching { getString("cover_file_name") }.getOrNull(),
             inviteCode = runCatching { getString("invite_code") }.getOrNull()
                 ?: runCatching { getString("code") }.getOrNull(),
         )
@@ -1200,6 +1232,7 @@ class OnboardingRepository(
             role = getString("workspace_role"),
             onboardingComplete = getBoolean("onboarding_complete"),
             logoFileName = getString("logo_file_name"),
+            coverFileName = runCatching { getString("cover_file_name") }.getOrNull(),
             inviteCode = getString("code"),
         )
         return TeamInviteRecord(

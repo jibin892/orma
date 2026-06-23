@@ -681,7 +681,8 @@ class MetaIntegrationRepository(
                 au.id::text as user_id,
                 bw.id::text as workspace_id,
                 wm.role,
-                bw.currency
+                bw.currency,
+                bw.business_mode
             from app_users au
             join workspace_members wm on wm.user_id = au.id and wm.status = 'active'
             join business_workspaces bw on bw.id = wm.workspace_id
@@ -700,6 +701,7 @@ class MetaIntegrationRepository(
                         workspaceId = result.getString("workspace_id"),
                         role = result.getString("role"),
                         currency = result.getString("currency") ?: "INR",
+                        businessMode = result.getString("business_mode") ?: "product_selling",
                     )
                 }
             }

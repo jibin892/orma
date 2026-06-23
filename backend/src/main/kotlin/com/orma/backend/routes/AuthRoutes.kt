@@ -95,11 +95,15 @@ fun com.orma.backend.db.WorkspaceRecord.toResponse(): WorkspaceResponse =
         role = role,
         onboardingComplete = onboardingComplete,
         logoFileName = logoFileName,
+        coverFileName = coverFileName,
         inviteCode = inviteCode,
     )
 
 fun com.orma.backend.db.WorkspaceRecord.toResponse(config: AppConfig): WorkspaceResponse =
-    toResponse().copy(logoUrl = logoFileName.toMediaUrl(config))
+    toResponse().copy(
+        logoUrl = logoFileName.toMediaUrl(config),
+        coverUrl = coverFileName.toMediaUrl(config),
+    )
 
 fun com.orma.backend.db.TeamInviteRecord.toTeamInviteResponse(): com.orma.backend.models.TeamInviteResponse =
     com.orma.backend.models.TeamInviteResponse(

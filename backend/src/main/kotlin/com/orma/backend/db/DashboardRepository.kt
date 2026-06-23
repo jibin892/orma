@@ -59,6 +59,7 @@ data class DashboardWorkspaceAccess(
     val workspaceId: String,
     val role: String,
     val currency: String,
+    val businessMode: String,
 )
 
 data class DashboardQueryFilters(
@@ -217,6 +218,7 @@ class DashboardRepository(
             val access = connection.resolveWorkspaceAccess(firebaseUser) ?: return@withContext null
             DashboardSummaryResponse(
                 currency = access.currency,
+                businessMode = access.businessMode,
                 totalCustomers = connection.scalarInt(
                     "select count(*) from customers where workspace_id = ?::uuid and status = 'active'",
                     access.workspaceId,
@@ -857,7 +859,8 @@ class DashboardRepository(
             select
                 id::text as workspace_id,
                 owner_user_id::text as user_id,
-                currency
+                currency,
+                business_mode
             from business_workspaces
             where id = ?::uuid
               and onboarding_completed_at is not null
@@ -874,6 +877,7 @@ class DashboardRepository(
                         workspaceId = result.getString("workspace_id"),
                         role = "public_catalog",
                         currency = result.getString("currency") ?: "INR",
+                        businessMode = result.getString("business_mode") ?: "product_selling",
                     )
                 }
             }
@@ -1143,7 +1147,8 @@ class DashboardRepository(
                 au.id::text as user_id,
                 bw.id::text as workspace_id,
                 wm.role,
-                bw.currency
+                bw.currency,
+                bw.business_mode
             from app_users au
             join workspace_members wm on wm.user_id = au.id and wm.status = 'active'
             join business_workspaces bw on bw.id = wm.workspace_id
@@ -1162,6 +1167,7 @@ class DashboardRepository(
                         workspaceId = result.getString("workspace_id"),
                         role = result.getString("role"),
                         currency = result.getString("currency") ?: "INR",
+                        businessMode = result.getString("business_mode") ?: "product_selling",
                     )
                 }
             }
@@ -1189,15 +1195,21 @@ class DashboardRepository(
     private fun Connection.listDashboardRevenueSeries(workspaceId: String): List<DashboardRevenuePointResponse> {
         val sql = """
             select
-                date_trunc('day', created_at)::date::text as date,
-                coalesce(sum(total), 0) as amount,
-                count(*)::int as orders_count
-            from orders
-            where workspace_id = ?::uuid
-              and status <> 'cancelled'
-              and created_at >= now() - interval '13 days'
-            group by 1
-            order by 1 asc
+                to_char(days.day, 'YYYY-MM-DD') as date,
+                coalesce(sum(o.paid_total), 0) as amount,
+                count(o.id)::int as orders_count
+            from generate_series(
+                date_trunc('day', now()) - interval '6 days',
+                date_trunc('day', now()),
+                interval '1 day'
+            ) as days(day)
+            left join orders o
+              on o.workspace_id = ?::uuid
+             and o.status <> 'cancelled'
+             and o.created_at >= days.day
+             and o.created_at < days.day + interval '1 day'
+            group by days.day
+            order by days.day asc
         """.trimIndent()
         return prepareStatement(sql).use { statement ->
             statement.setString(1, workspaceId)
@@ -1227,6 +1239,7 @@ class DashboardRepository(
                     coalesce(sum(total), 0) as amount
                 from orders
                 where workspace_id = ?::uuid
+                  and status <> 'cancelled'
                 group by status
                 order by item_count desc, status asc
             """.trimIndent(),

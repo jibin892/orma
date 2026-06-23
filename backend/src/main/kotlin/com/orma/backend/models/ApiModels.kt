@@ -77,6 +77,8 @@ data class WorkspaceResponse(
     val onboardingComplete: Boolean,
     val logoFileName: String? = null,
     val logoUrl: String? = null,
+    val coverFileName: String? = null,
+    val coverUrl: String? = null,
     val inviteCode: String? = null,
 )
 
@@ -210,6 +212,7 @@ data class GstinLookupResponse(
 @Serializable
 data class DashboardSummaryResponse(
     val currency: String,
+    val businessMode: String = "product_selling",
     val totalCustomers: Int,
     val totalPaidAmount: String,
     val ordersCount: Int,
