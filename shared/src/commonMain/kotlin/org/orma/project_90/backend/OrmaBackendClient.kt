@@ -221,6 +221,7 @@ data class OrmaProduct(
 data class OrmaProductCategory(
     val id: String,
     val name: String,
+    val itemType: String = "all",
     val sortOrder: Int,
     val status: String,
     val createdAt: String = "",
@@ -229,6 +230,7 @@ data class OrmaProductCategory(
 
 data class OrmaProductCategoryDraft(
     val name: String = "",
+    val itemType: String = "all",
     val sortOrder: String = "0",
 )
 
@@ -467,6 +469,7 @@ data class OrmaProductDraft(
     val name: String = "",
     val itemType: String = "product",
     val categoryId: String = "",
+    val categoryName: String = "",
     val sku: String = "",
     val barcode: String = "",
     val description: String = "",
@@ -545,6 +548,7 @@ data class OrmaDashboardFilters(
     val orderStatus: String = "all",
     val itemType: String = "all",
     val orderType: String = "all",
+    val datePreset: String = "",
     val dateFrom: String = "",
     val dateTo: String = "",
     val page: Int = 1,
@@ -967,6 +971,7 @@ class OrmaBackendClient(
                     bearerToken = idToken,
                     body = buildJsonObject(
                         "name" to JsonValue.StringValue(draft.name),
+                        "itemType" to JsonValue.StringValue(draft.itemType),
                         "sortOrder" to JsonValue.RawValue(draft.sortOrder.intInput(default = "0")),
                     ),
                 )
@@ -1434,6 +1439,7 @@ class OrmaBackendClient(
             filters.orderStatus.trim().takeIf { it.isNotBlank() && it != "all" }?.let { add("status" to it) }
             filters.itemType.trim().takeIf { it.isNotBlank() && it != "all" }?.let { add("itemType" to it) }
             filters.orderType.trim().takeIf { it.isNotBlank() && it != "all" }?.let { add("orderType" to it) }
+            filters.datePreset.trim().takeIf { it.isNotBlank() && it != "all" }?.let { add("datePreset" to it) }
             filters.dateFrom.trim().takeIf { it.isNotBlank() }?.let { add("dateFrom" to it) }
             filters.dateTo.trim().takeIf { it.isNotBlank() }?.let { add("dateTo" to it) }
             if (filters.lowStockOnly) add("lowStock" to "true")
@@ -1809,6 +1815,7 @@ private fun String.toProductCategory(): OrmaProductCategory =
     OrmaProductCategory(
         id = jsonString("id").orEmpty(),
         name = jsonString("name").orEmpty(),
+        itemType = jsonString("itemType") ?: "all",
         sortOrder = jsonInt("sortOrder") ?: 0,
         status = jsonString("status").orEmpty(),
         createdAt = jsonString("createdAt").orEmpty(),
@@ -2100,6 +2107,7 @@ private fun OrmaProductDraft.toProductRequestJson(): String =
         "name" to JsonValue.StringValue(name),
         "itemType" to JsonValue.StringValue(itemType),
         "categoryId" to JsonValue.StringValue(categoryId.blankToNull()),
+        "categoryName" to JsonValue.StringValue(categoryName.blankToNull()),
         "sku" to JsonValue.StringValue(sku.blankToNull()),
         "barcode" to JsonValue.StringValue(barcode.blankToNull()),
         "description" to JsonValue.StringValue(description.blankToNull()),

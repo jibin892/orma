@@ -120,6 +120,7 @@ import org.orma.project_90.backend.OrmaPagination
 import org.orma.project_90.backend.OrmaPrinterDraft
 import org.orma.project_90.backend.OrmaPrinterProfile
 import org.orma.project_90.backend.OrmaProduct
+import org.orma.project_90.backend.OrmaProductCategory
 import org.orma.project_90.backend.OrmaProductCategoryDraft
 import org.orma.project_90.backend.OrmaProductDraft
 import org.orma.project_90.backend.OrmaStockAdjustmentDraft
@@ -144,7 +145,6 @@ import org.orma.project_90.components.organisms.OrmaDashboardNotificationPanel
 import org.orma.project_90.components.organisms.OrmaDashboardRevenueCard
 import org.orma.project_90.components.organisms.OrmaDashboardRevenueChart
 import org.orma.project_90.components.organisms.OrmaDashboardStatsGrid
-import org.orma.project_90.components.organisms.OrmaDashboardTasksPanel
 import org.orma.project_90.components.organisms.OrmaDashboardTopItemsPanel
 import org.orma.project_90.components.templates.OrmaDashboardResponsiveWorkspace
 import org.orma.project_90.components.templates.OrmaDashboardSectionScaffold
@@ -2641,13 +2641,15 @@ private fun DashboardWideSearchAndFilterBar(
                     },
                 )
             }
-            DashboardToolbarButton(
-                text = if (state.dashboard.loading) "Searching" else "Apply",
-                onClick = actions.onDashboardRefresh,
-                modifier = Modifier.widthIn(min = 104.dp, max = 132.dp),
-                enabled = !state.dashboard.loading,
-                primary = true,
-            )
+            if (selectedSection != DashboardSection.Dashboard) {
+                DashboardToolbarButton(
+                    text = if (state.dashboard.loading) "Searching" else "Apply",
+                    onClick = actions.onDashboardRefresh,
+                    modifier = Modifier.widthIn(min = 104.dp, max = 132.dp),
+                    enabled = !state.dashboard.loading,
+                    primary = true,
+                )
+            }
         }
         when (selectedSection) {
             DashboardSection.OrdersBookings -> {
@@ -2716,28 +2718,121 @@ private fun DashboardDateRangeFilter(
     wide: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    Row(
+    Column(
         modifier = modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.Top,
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        OrmaCalendarDateField(
-            value = filters.dateFrom,
-            onValueChange = { actions.onDashboardDateFilterChange(it, filters.dateTo) },
-            label = "From",
-            placeholder = "Start date",
-            modifier = Modifier.weight(1f),
-        )
-        OrmaCalendarDateField(
-            value = filters.dateTo,
-            onValueChange = { actions.onDashboardDateFilterChange(filters.dateFrom, it) },
-            label = "To",
-            placeholder = "End date",
-            modifier = Modifier.weight(1f),
+        DashboardDatePresetFilterChips(
+            filters = filters,
+            actions = actions,
         )
         if (wide) {
-            Spacer(modifier = Modifier.weight(2f))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
+                OrmaCalendarDateField(
+                    value = filters.dateFrom,
+                    onValueChange = { actions.onDashboardDateFilterChange(it, filters.dateTo) },
+                    label = "From",
+                    placeholder = "Start date",
+                    modifier = Modifier.weight(1f),
+                )
+                OrmaCalendarDateField(
+                    value = filters.dateTo,
+                    onValueChange = { actions.onDashboardDateFilterChange(filters.dateFrom, it) },
+                    label = "To",
+                    placeholder = "End date",
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(modifier = Modifier.weight(2f))
+            }
+        } else {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                OrmaCalendarDateField(
+                    value = filters.dateFrom,
+                    onValueChange = { actions.onDashboardDateFilterChange(it, filters.dateTo) },
+                    label = "From",
+                    placeholder = "Start date",
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OrmaCalendarDateField(
+                    value = filters.dateTo,
+                    onValueChange = { actions.onDashboardDateFilterChange(filters.dateFrom, it) },
+                    label = "To",
+                    placeholder = "End date",
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
         }
+    }
+}
+
+@Composable
+private fun DashboardDatePresetFilterChips(
+    filters: OrmaDashboardFilters,
+    actions: OnboardingActions,
+    includeUpcoming: Boolean = false,
+    onClearSelection: () -> Unit = {},
+    modifier: Modifier = Modifier,
+) {
+    val options = dashboardDatePresetOptions(includeUpcoming = includeUpcoming)
+    val activeKey = dashboardActiveDatePresetKey(filters, options)
+    Row(
+        modifier = modifier.horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        options.forEach { option ->
+            DashboardDatePresetChip(
+                label = option.label,
+                selected = activeKey == option.key,
+                onClick = {
+                    onClearSelection()
+                    actions.onDashboardDatePresetChange(option.key, option.dateFrom, option.dateTo)
+                },
+            )
+        }
+        if (activeKey == "custom") {
+            DashboardDatePresetChip(
+                label = "Custom",
+                selected = true,
+                onClick = {},
+            )
+        }
+    }
+}
+
+@Composable
+private fun DashboardDatePresetChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Surface(
+        onClick = onClick,
+        shape = OrmaShapes.Capsule,
+        color = if (selected) OrmaColors.Accent else OrmaColors.ScreenBackground,
+        contentColor = if (selected) OrmaColors.OnAccent else OrmaColors.TextPrimary,
+        border = BorderStroke(
+            0.6.dp,
+            if (selected) OrmaColors.Accent.copy(alpha = 0.44f) else OrmaColors.Hairline.copy(alpha = 0.16f),
+        ),
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
+    ) {
+        Text(
+            text = label,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            style = MaterialTheme.typography.labelMedium,
+            color = if (selected) OrmaColors.OnAccent else OrmaColors.TextPrimary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
@@ -4270,14 +4365,6 @@ private fun DashboardHomeContent(
     var showOrderSheet by rememberSaveable { mutableStateOf(false) }
     var showCustomerSheet by rememberSaveable { mutableStateOf(false) }
     var showProductSheet by rememberSaveable { mutableStateOf(false) }
-    fun handleDashboardTask(action: String) {
-        when {
-            action.startsWith("orders") || action.startsWith("bookings") -> showOrderSheet = true
-            action.startsWith("products") || action.startsWith("catalog") -> showProductSheet = true
-            action.startsWith("customers") -> showCustomerSheet = true
-            else -> actions.onDashboardRefresh()
-        }
-    }
 
     if (wide) {
         DashboardWideHomeContent(
@@ -4288,7 +4375,6 @@ private fun DashboardHomeContent(
             onProduct = { showProductSheet = true },
             onOpenOrders = onOpenOrders,
             onOpenProducts = onOpenProducts,
-            onTaskAction = ::handleDashboardTask,
         )
     } else {
         Column(
@@ -4303,10 +4389,6 @@ private fun DashboardHomeContent(
                 onProduct = { showProductSheet = true },
                 onOpenOrders = onOpenOrders,
                 onOpenProducts = onOpenProducts,
-            )
-            OrmaDashboardTasksPanel(
-                tasks = state.dashboard.summary.dashboardTasks,
-                onAction = ::handleDashboardTask,
             )
             OrmaDashboardRevenueCard(
                 series = state.dashboard.summary.revenueSeries,
@@ -4370,7 +4452,6 @@ private fun DashboardWideHomeContent(
     onProduct: () -> Unit,
     onOpenOrders: (() -> Unit)?,
     onOpenProducts: (() -> Unit)?,
-    onTaskAction: (String) -> Unit,
 ) {
     val summary = state.dashboard.summary
     val activeOrders = state.dashboard.orders.count { it.status in DashboardActiveOrderStatuses || it.status == "paid" }
@@ -4422,10 +4503,6 @@ private fun DashboardWideHomeContent(
                         onOrder = onOpenOrders ?: onOrder,
                         onProduct = onOpenProducts ?: onProduct,
                         onCustomer = onCustomer,
-                    )
-                    OrmaDashboardTasksPanel(
-                        tasks = summary.dashboardTasks.take(4),
-                        onAction = onTaskAction,
                     )
                     OrmaDashboardTopItemsPanel(
                         items = summary.topItems.take(5),
@@ -4502,11 +4579,6 @@ private fun DashboardWideHomeContent(
                             onOrder = onOpenOrders ?: onOrder,
                             onProduct = onOpenProducts ?: onProduct,
                             onCustomer = onCustomer,
-                        )
-                        OrmaDashboardTasksPanel(
-                            tasks = summary.dashboardTasks.take(4),
-                            onAction = onTaskAction,
-                            modifier = Modifier.fillMaxWidth(),
                         )
                         OrmaDashboardTopItemsPanel(
                             items = summary.topItems.take(5),
@@ -8333,89 +8405,13 @@ private fun DashboardSalesQuickDateFilters(
     onClearSelection: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val today = ormaCurrentIsoDate()
-    val monthStart = today.takeIf { it.length >= 8 }?.let { "${it.take(8)}01" }.orEmpty()
-    val activeKey = when {
-        filters.dateFrom.isBlank() && filters.dateTo.isBlank() -> "all"
-        filters.dateFrom == today && filters.dateTo == today -> "today"
-        monthStart.isNotBlank() && filters.dateFrom == monthStart && filters.dateTo == today -> "month"
-        filters.dateFrom == today && filters.dateTo.isBlank() -> "upcoming"
-        else -> "custom"
-    }
-    Row(
-        modifier = modifier.horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        DashboardSalesQuickDateChip(
-            label = "All dates",
-            selected = activeKey == "all",
-            onClick = {
-                onClearSelection()
-                actions.onDashboardDateFilterChange("", "")
-            },
-        )
-        DashboardSalesQuickDateChip(
-            label = "Today",
-            selected = activeKey == "today",
-            onClick = {
-                onClearSelection()
-                actions.onDashboardDateFilterChange(today, today)
-            },
-        )
-        DashboardSalesQuickDateChip(
-            label = "This month",
-            selected = activeKey == "month",
-            onClick = {
-                onClearSelection()
-                actions.onDashboardDateFilterChange(monthStart, today)
-            },
-        )
-        DashboardSalesQuickDateChip(
-            label = "Upcoming",
-            selected = activeKey == "upcoming",
-            onClick = {
-                onClearSelection()
-                actions.onDashboardDateFilterChange(today, "")
-            },
-        )
-        if (activeKey == "custom") {
-            DashboardSalesQuickDateChip(
-                label = "Custom",
-                selected = true,
-                onClick = {},
-            )
-        }
-    }
-}
-
-@Composable
-private fun DashboardSalesQuickDateChip(
-    label: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-) {
-    Surface(
-        onClick = onClick,
-        shape = OrmaShapes.Capsule,
-        color = if (selected) OrmaColors.Accent else OrmaColors.ScreenBackground,
-        contentColor = if (selected) OrmaColors.OnAccent else OrmaColors.TextPrimary,
-        border = BorderStroke(
-            0.6.dp,
-            if (selected) OrmaColors.Accent.copy(alpha = 0.44f) else OrmaColors.Hairline.copy(alpha = 0.16f),
-        ),
-        tonalElevation = 0.dp,
-        shadowElevation = 0.dp,
-    ) {
-        Text(
-            text = label,
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-            style = MaterialTheme.typography.labelMedium,
-            color = if (selected) OrmaColors.OnAccent else OrmaColors.TextPrimary,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
+    DashboardDatePresetFilterChips(
+        filters = filters,
+        actions = actions,
+        includeUpcoming = true,
+        onClearSelection = onClearSelection,
+        modifier = modifier,
+    )
 }
 
 @Composable
@@ -11987,6 +11983,8 @@ private fun DashboardProductsContent(
     }
     if (showCategorySheet) {
         CategoryFormSheet(
+            initialItemType = if (selectedItemType == "all") "all" else itemType,
+            allowedItemTypes = state.allowedDashboardItemTypes(),
             onDismiss = { showCategorySheet = false },
             onSubmit = { draft ->
                 actions.onCreateProductCategory(draft)
@@ -16744,15 +16742,32 @@ private fun productAiImagePrompt(
 
 @Composable
 private fun CategoryFormSheet(
+    initialItemType: String = "all",
+    allowedItemTypes: List<String> = listOf("product"),
     onDismiss: () -> Unit,
     onSubmit: (OrmaProductCategoryDraft) -> Unit,
 ) {
-    var draft by remember { mutableStateOf(OrmaProductCategoryDraft()) }
+    val itemTypeOptions = remember(allowedItemTypes) {
+        (listOf("all") + allowedItemTypes).distinct()
+    }
+    var draft by remember {
+        mutableStateOf(
+            OrmaProductCategoryDraft(
+                itemType = initialItemType.takeIf { it in itemTypeOptions } ?: "all",
+            ),
+        )
+    }
     DashboardFormSheet(
-        title = "Product category",
-        body = "Group products and services so customers can browse faster.",
+        title = "Category",
+        body = "Group products, services, and appointments so staff and customers can browse faster.",
         onDismiss = onDismiss,
     ) {
+        OrmaSegmentedRow(
+            options = itemTypeOptions,
+            selected = draft.itemType,
+            label = { it.categoryScopeLabel() },
+            onSelected = { draft = draft.copy(itemType = it) },
+        )
         OrmaTextField(
             value = draft.name,
             onValueChange = { draft = draft.copy(name = it.take(80)) },
@@ -16768,7 +16783,14 @@ private fun CategoryFormSheet(
         )
         OrmaActionRow(
             primaryText = "Save category",
-            onPrimary = { onSubmit(draft) },
+            onPrimary = {
+                onSubmit(
+                    draft.copy(
+                        name = draft.name.trim(),
+                        itemType = draft.itemType,
+                    ),
+                )
+            },
             primaryEnabled = draft.name.trim().length >= 2,
             secondaryText = "Cancel",
             onSecondary = LocalSmoothSheetDismiss.current ?: onDismiss,
@@ -16920,6 +16942,14 @@ private fun ProductFormSheet(
                 ),
         )
     }
+    val categoryOptions = remember(state.dashboard.categories, draft.itemType) {
+        state.dashboard.categories.filter { it.matchesCategoryItemType(draft.itemType) }
+    }
+    LaunchedEffect(draft.itemType, draft.categoryId, state.dashboard.categories) {
+        if (draft.categoryId.isNotBlank() && categoryOptions.none { it.id == draft.categoryId }) {
+            draft = draft.copy(categoryId = "")
+        }
+    }
     val productImagePicker = rememberOrmaBusinessLogoPicker { result ->
         handleProductImagePickerResult(
             result = result,
@@ -16980,8 +17010,17 @@ private fun ProductFormSheet(
                 selected = draft.itemType,
                 label = { it.sellableItemTypeLabel() },
                 onSelected = { itemType ->
+                    val nextCategoryId = draft.categoryId
+                        .takeIf { selectedId ->
+                            state.dashboard.categories.any { category ->
+                                category.id == selectedId && category.matchesCategoryItemType(itemType)
+                            }
+                        }
+                        .orEmpty()
                     draft = draft.copy(
                         itemType = itemType,
+                        categoryId = nextCategoryId,
+                        categoryName = "",
                         unit = when (itemType) {
                             "product" -> draft.unit.takeIf { it != "service" && it != "booking" } ?: "pcs"
                             "appointment" -> "booking"
@@ -17001,14 +17040,31 @@ private fun ProductFormSheet(
                 tone = OrmaStatusTone.Info,
             )
         }
-        if (state.dashboard.categories.isNotEmpty()) {
+        if (categoryOptions.isNotEmpty()) {
             DashboardChipPicker(
-                label = "Category",
-                options = state.dashboard.categories,
+                label = "${draft.itemType.sellableItemTypeLabel()} category",
+                options = categoryOptions,
                 selectedId = draft.categoryId,
                 optionId = { it.id },
-                optionLabel = { it.name },
-                onSelected = { draft = draft.copy(categoryId = it.id) },
+                optionLabel = { it.categoryOptionLabel() },
+                onSelected = { draft = draft.copy(categoryId = it.id, categoryName = "") },
+            )
+        }
+        OrmaTextField(
+            value = draft.categoryName,
+            onValueChange = { draft = draft.copy(categoryName = it.take(80), categoryId = "") },
+            label = "New category",
+            placeholder = when (draft.itemType) {
+                "service" -> "Repairs, consulting"
+                "appointment" -> "Consultation, salon"
+                else -> "Bakery, lunch menu"
+            },
+        )
+        if (draft.categoryId.isNotBlank() || draft.categoryName.isNotBlank()) {
+            OrmaTextButton(
+                text = "Clear category",
+                onClick = { draft = draft.copy(categoryId = "", categoryName = "") },
+                modifier = Modifier.fillMaxWidth(),
             )
         }
         ProductImagePickerCard(
@@ -17120,6 +17176,7 @@ private fun ProductFormSheet(
                             durationMinutes = draft.durationMinutes.trim(),
                             bookingRequired = draft.itemType == "appointment" || draft.bookingRequired,
                             expiryDate = if (draft.itemType == "product") draft.expiryDate.trim() else "",
+                            categoryName = if (draft.categoryId.isBlank()) draft.categoryName.trim() else "",
                             taxRate = draft.taxRate.trim().ifBlank { "0" },
                         ),
                     )
@@ -17137,6 +17194,7 @@ private fun OrmaProduct.toProductDraft(): OrmaProductDraft =
         name = name,
         itemType = itemType,
         categoryId = categoryId.orEmpty(),
+        categoryName = "",
         sku = sku.orEmpty(),
         barcode = barcode.orEmpty(),
         description = description.orEmpty(),
@@ -18987,6 +19045,18 @@ private fun String.sellableItemTypeLabel(): String =
         else -> "Product"
     }
 
+private fun String.categoryScopeLabel(): String =
+    when (trim().lowercase()) {
+        "all" -> "Shared"
+        else -> sellableItemTypeLabel()
+    }
+
+private fun OrmaProductCategory.matchesCategoryItemType(itemType: String): Boolean =
+    this.itemType.ifBlank { "all" } == "all" || this.itemType == itemType
+
+private fun OrmaProductCategory.categoryOptionLabel(): String =
+    if (itemType.ifBlank { "all" } == "all") "$name - Shared" else name
+
 private fun String.orderTypeLabel(): String =
     when (trim().lowercase()) {
         "service" -> "Service"
@@ -20664,6 +20734,115 @@ private fun OnboardingUiState.defaultInvoiceTaxRate(): String {
 
 private fun Double?.orZero(): Double = this ?: 0.0
 
+private data class DashboardDatePresetOption(
+    val key: String,
+    val label: String,
+    val dateFrom: String,
+    val dateTo: String,
+)
+
+private data class DashboardIsoDateParts(
+    val year: Int,
+    val month: Int,
+    val day: Int,
+)
+
+private fun dashboardDatePresetOptions(includeUpcoming: Boolean = false): List<DashboardDatePresetOption> {
+    val today = ormaCurrentIsoDate().take(10)
+    val todayParts = today.dashboardIsoDatePartsOrNull()
+    val yesterday = todayParts?.plusDays(-1)?.toIsoDate().orEmpty()
+    val weekStart = todayParts?.weekStartMonday()?.toIsoDate().orEmpty()
+    val monthStart = todayParts?.copy(day = 1)?.toIsoDate().orEmpty()
+    return buildList {
+        add(DashboardDatePresetOption("all", "All dates", "", ""))
+        add(DashboardDatePresetOption("today", "Today", today, today))
+        if (yesterday.isNotBlank()) add(DashboardDatePresetOption("yesterday", "Yesterday", yesterday, yesterday))
+        if (weekStart.isNotBlank()) add(DashboardDatePresetOption("week", "This week", weekStart, today))
+        if (monthStart.isNotBlank()) add(DashboardDatePresetOption("month", "This month", monthStart, today))
+        if (includeUpcoming) add(DashboardDatePresetOption("upcoming", "Upcoming", today, ""))
+    }
+}
+
+private fun dashboardActiveDatePresetKey(
+    filters: OrmaDashboardFilters,
+    options: List<DashboardDatePresetOption>,
+): String {
+    val normalizedPreset = filters.datePreset.trim().lowercase().replace("-", "_")
+    val supportedKeys = options.map { it.key }.toSet()
+    if (normalizedPreset in supportedKeys) return normalizedPreset
+    val from = filters.dateFrom.trim().take(10)
+    val to = filters.dateTo.trim().take(10)
+    if (from.isBlank() && to.isBlank()) return "all"
+    return options.firstOrNull { it.dateFrom == from && it.dateTo == to }?.key ?: "custom"
+}
+
+private fun String.dashboardIsoDatePartsOrNull(): DashboardIsoDateParts? {
+    if (length < 10) return null
+    val year = substring(0, 4).toIntOrNull() ?: return null
+    val month = substring(5, 7).toIntOrNull() ?: return null
+    val day = substring(8, 10).toIntOrNull() ?: return null
+    if (month !in 1..12 || day !in 1..daysInDashboardMonth(year, month)) return null
+    return DashboardIsoDateParts(year, month, day)
+}
+
+private fun DashboardIsoDateParts.toIsoDate(): String =
+    "${year.toString().padStart(4, '0')}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}"
+
+private fun DashboardIsoDateParts.plusDays(delta: Int): DashboardIsoDateParts =
+    dashboardDatePartsFromEpochDays(toEpochDays() + delta)
+
+private fun DashboardIsoDateParts.weekStartMonday(): DashboardIsoDateParts {
+    val epochDays = toEpochDays()
+    val isoDayOfWeek = ((epochDays + 3).floorMod(7)) + 1
+    return dashboardDatePartsFromEpochDays(epochDays - (isoDayOfWeek - 1))
+}
+
+private fun DashboardIsoDateParts.toEpochDays(): Int {
+    val adjustedYear = year - if (month <= 2) 1 else 0
+    val era = adjustedYear.floorDiv(400)
+    val yearOfEra = adjustedYear - era * 400
+    val monthPrime = month + if (month > 2) -3 else 9
+    val dayOfYear = (153 * monthPrime + 2) / 5 + day - 1
+    val dayOfEra = yearOfEra * 365 + yearOfEra / 4 - yearOfEra / 100 + dayOfYear
+    return era * 146097 + dayOfEra - 719468
+}
+
+private fun dashboardDatePartsFromEpochDays(epochDays: Int): DashboardIsoDateParts {
+    val shifted = epochDays + 719468
+    val era = shifted.floorDiv(146097)
+    val dayOfEra = shifted - era * 146097
+    val yearOfEra = (dayOfEra - dayOfEra / 1460 + dayOfEra / 36524 - dayOfEra / 146096) / 365
+    val year = yearOfEra + era * 400
+    val dayOfYear = dayOfEra - (365 * yearOfEra + yearOfEra / 4 - yearOfEra / 100)
+    val monthPrime = (5 * dayOfYear + 2) / 153
+    val day = dayOfYear - (153 * monthPrime + 2) / 5 + 1
+    val month = monthPrime + if (monthPrime < 10) 3 else -9
+    return DashboardIsoDateParts(
+        year = year + if (month <= 2) 1 else 0,
+        month = month,
+        day = day,
+    )
+}
+
+private fun Int.floorDiv(other: Int): Int {
+    val quotient = this / other
+    val remainder = this % other
+    return if (remainder != 0 && ((remainder < 0) != (other < 0))) quotient - 1 else quotient
+}
+
+private fun Int.floorMod(other: Int): Int =
+    this - floorDiv(other) * other
+
+private fun daysInDashboardMonth(year: Int, month: Int): Int =
+    when (month) {
+        2 -> if (year.isDashboardLeapYear()) 29 else 28
+        4, 6, 9, 11 -> 30
+        else -> 31
+    }
+
+private fun Int.isDashboardLeapYear(): Boolean =
+    this % 4 == 0 && (this % 100 != 0 || this % 400 == 0)
+
 private fun orderLineTotal(
     item: OrmaOrderItemDraft,
     currency: String,
@@ -20715,6 +20894,7 @@ private fun OnboardingUiState.hasActiveDashboardFilter(): Boolean =
         dashboard.filters.orderStatus != "all" ||
         selectedDashboardItemTypeFilter() != defaultDashboardItemTypeFilter() ||
         selectedDashboardOrderTypeFilter() != defaultDashboardOrderTypeFilter() ||
+        dashboard.filters.datePreset.isNotBlank() && dashboard.filters.datePreset != "all" ||
         dashboard.filters.dateFrom.isNotBlank() ||
         dashboard.filters.dateTo.isNotBlank() ||
         dashboard.filters.lowStockOnly ||

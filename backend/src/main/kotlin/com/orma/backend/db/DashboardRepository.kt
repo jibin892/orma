@@ -73,6 +73,7 @@ data class DashboardQueryFilters(
     val status: String? = null,
     val itemType: String? = null,
     val orderType: String? = null,
+    val datePreset: String? = null,
     val dateFrom: String? = null,
     val dateTo: String? = null,
     val page: Int = 1,
@@ -2412,6 +2413,7 @@ class DashboardRepository(
             where workspace_id = ?::uuid
               and item_type = ?
               and lower(name) = lower(?)
+            order by case when status = 'active' then 0 else 1 end, updated_at desc
             limit 1
             """.trimIndent(),
         ).use { statement ->
@@ -2718,6 +2720,7 @@ class DashboardRepository(
         access: DashboardWorkspaceAccess,
         request: ProductRequest,
     ): ProductResponse {
+        val categoryId = resolveProductCategoryId(access, request)
         val sql = """
             insert into products (
                 workspace_id, supplier_id, category_id, name, item_type, sku, barcode, description, unit,
@@ -2729,7 +2732,7 @@ class DashboardRepository(
         """.trimIndent()
         return prepareStatement(sql).use { statement ->
             statement.setString(1, access.workspaceId)
-            statement.bindProductRequest(access, request, startIndex = 2)
+            statement.bindProductRequest(access, request, categoryId, startIndex = 2)
             statement.executeQuery().use { result ->
                 result.next()
                 result.toProductResponse()
@@ -2792,11 +2795,90 @@ class DashboardRepository(
         ).id
     }
 
+    private fun Connection.resolveProductCategoryId(
+        access: DashboardWorkspaceAccess,
+        request: ProductRequest,
+    ): String? {
+        val itemType = request.itemType.cleanItemType()
+        request.categoryId.cleanUuidOrNull()?.let { categoryId ->
+            if (productCategoryMatches(access.workspaceId, categoryId, itemType)) return categoryId
+            throw DashboardOrderValidationException(
+                code = "product_category_invalid",
+                publicMessage = "Choose a category for this item type.",
+            )
+        }
+        val categoryName = request.categoryName?.cleanOptional() ?: return null
+        return findOrCreateProductCategory(
+            workspaceId = access.workspaceId,
+            categoryName = categoryName,
+            itemType = itemType,
+        )
+    }
+
+    private fun Connection.productCategoryMatches(
+        workspaceId: String,
+        categoryId: String,
+        itemType: String,
+    ): Boolean =
+        prepareStatement(
+            """
+            select 1
+            from product_categories
+            where id = ?::uuid
+              and workspace_id = ?::uuid
+              and status = 'active'
+              and (item_type = ? or item_type = 'all')
+            limit 1
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setString(1, categoryId)
+            statement.setString(2, workspaceId)
+            statement.setString(3, itemType.cleanItemType())
+            statement.executeQuery().use { result -> result.next() }
+        }
+
+    private fun Connection.findOrCreateProductCategory(
+        workspaceId: String,
+        categoryName: String,
+        itemType: String,
+    ): String {
+        val cleanName = categoryName.cleanName()
+        val cleanType = itemType.cleanCategoryItemType()
+        prepareStatement(
+            """
+            select id::text
+            from product_categories
+            where workspace_id = ?::uuid
+              and status = 'active'
+              and lower(name) = lower(?)
+              and (item_type = ? or item_type = 'all')
+            order by case when item_type = ? then 0 else 1 end, sort_order asc, name asc
+            limit 1
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setString(1, workspaceId)
+            statement.setString(2, cleanName)
+            statement.setString(3, cleanType)
+            statement.setString(4, cleanType)
+            statement.executeQuery().use { result ->
+                if (result.next()) return result.getString("id")
+            }
+        }
+        return insertProductCategory(
+            workspaceId = workspaceId,
+            request = ProductCategoryRequest(
+                name = cleanName,
+                itemType = cleanType,
+            ),
+        ).id
+    }
+
     private fun Connection.updateProduct(
         access: DashboardWorkspaceAccess,
         productId: String,
         request: ProductRequest,
     ): ProductResponse? {
+        val categoryId = resolveProductCategoryId(access, request)
         val sql = """
             update products
             set supplier_id = ?::uuid, category_id = ?::uuid, name = ?, item_type = ?, sku = ?, barcode = ?, description = ?,
@@ -2807,7 +2889,7 @@ class DashboardRepository(
             returning *, null::text as supplier_name, null::text as category_name, null::text as image_storage_path
         """.trimIndent()
         return prepareStatement(sql).use { statement ->
-            statement.bindProductRequest(access, request, startIndex = 1)
+            statement.bindProductRequest(access, request, categoryId, startIndex = 1)
             statement.setString(20, productId)
             statement.setString(21, access.workspaceId)
             statement.executeQuery().use { result ->
@@ -3625,6 +3707,7 @@ class DashboardRepository(
     private fun PreparedStatement.bindProductRequest(
         access: DashboardWorkspaceAccess,
         request: ProductRequest,
+        categoryId: String?,
         startIndex: Int,
     ) {
         val itemType = request.itemType.cleanItemType()
@@ -3633,7 +3716,7 @@ class DashboardRepository(
         val reorderLevel = if (trackStock) request.reorderLevel.decimalOrZero() else BigDecimal.ZERO
         val duration = request.durationMinutes?.takeIf { it > 0 }?.coerceAtMost(1440)
         setNullableUuid(startIndex, request.supplierId)
-        setNullableUuid(startIndex + 1, request.categoryId)
+        setNullableUuid(startIndex + 1, categoryId)
         setString(startIndex + 2, request.name.cleanName())
         setString(startIndex + 3, itemType)
         setNullableString(startIndex + 4, request.sku?.cleanOptionalUpper())
@@ -3674,6 +3757,7 @@ class DashboardRepository(
         ProductCategoryResponse(
             id = getString("id"),
             name = getString("name"),
+            itemType = getString("item_type") ?: "all",
             sortOrder = getInt("sort_order"),
             status = getString("status"),
             createdAt = getString("created_at"),
@@ -4051,11 +4135,40 @@ class DashboardRepository(
             runCatching { UUID.fromString(value).toString() }.getOrNull()
         }
 
+    private data class DashboardResolvedDateRange(
+        val from: String? = null,
+        val to: String? = null,
+    )
+
     private fun DashboardQueryFilters.cleanDateFromOrNull(): String? =
-        dateFrom.cleanIsoDateOrNull()
+        resolvedDateRange().from
 
     private fun DashboardQueryFilters.cleanDateToOrNull(): String? =
-        dateTo.cleanIsoDateOrNull()
+        resolvedDateRange().to
+
+    private fun DashboardQueryFilters.resolvedDateRange(): DashboardResolvedDateRange {
+        val today = LocalDate.now()
+        return when (datePreset.cleanDatePreset()) {
+            "today" -> DashboardResolvedDateRange(today.toString(), today.toString())
+            "yesterday" -> {
+                val yesterday = today.minusDays(1)
+                DashboardResolvedDateRange(yesterday.toString(), yesterday.toString())
+            }
+            "week" -> DashboardResolvedDateRange(
+                from = today.minusDays((today.dayOfWeek.value - 1).toLong()).toString(),
+                to = today.toString(),
+            )
+            "month" -> DashboardResolvedDateRange(
+                from = today.withDayOfMonth(1).toString(),
+                to = today.toString(),
+            )
+            "all" -> DashboardResolvedDateRange()
+            else -> DashboardResolvedDateRange(
+                from = dateFrom.cleanIsoDateOrNull(),
+                to = dateTo.cleanIsoDateOrNull(),
+            )
+        }
+    }
 
     private fun DashboardQueryFilters.withOrderDateParams(workspaceId: String): List<String> =
         buildList {
@@ -4271,11 +4384,38 @@ class DashboardRepository(
             ?.filter { it.isLetterOrDigit() || it == '_' }
             ?.takeIf { it in AllowedOrderTypes }
 
+    private fun String?.cleanDatePreset(): String? {
+        val normalized = this
+            ?.trim()
+            ?.lowercase()
+            ?.replace("-", "_")
+            ?.filter { it.isLetterOrDigit() || it == '_' }
+            ?.takeIf { it.isNotBlank() }
+        return when (normalized) {
+            "all" -> "all"
+            "today" -> "today"
+            "yesterday" -> "yesterday"
+            "week", "this_week" -> "week"
+            "month", "this_month" -> "month"
+            else -> null
+        }
+    }
+
     private fun String.cleanItemType(): String {
         val normalized = trim().lowercase().replace("-", "_").filter { it.isLetterOrDigit() || it == '_' }
         return when (normalized) {
             "service", "services" -> "service"
             "appointment", "booking", "booking_required" -> "appointment"
+            else -> "product"
+        }
+    }
+
+    private fun String.cleanCategoryItemType(): String {
+        val normalized = trim().lowercase().replace("-", "_").filter { it.isLetterOrDigit() || it == '_' }
+        return when (normalized) {
+            "all", "shared", "any" -> "all"
+            "service", "services" -> "service"
+            "appointment", "appointments", "booking", "booking_required" -> "appointment"
             else -> "product"
         }
     }

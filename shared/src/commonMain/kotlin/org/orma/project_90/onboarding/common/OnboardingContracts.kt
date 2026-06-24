@@ -189,6 +189,7 @@ internal data class OnboardingActions(
     val onDashboardSearchChange: (String) -> Unit,
     val onOrderStatusFilterChange: (String) -> Unit,
     val onOrderTypeFilterChange: (String) -> Unit,
+    val onDashboardDatePresetChange: (String, String, String) -> Unit,
     val onDashboardDateFilterChange: (String, String) -> Unit,
     val onProductItemTypeFilterChange: (String) -> Unit,
     val onProductLowStockFilterChange: (Boolean) -> Unit,

@@ -1754,10 +1754,24 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
                 ),
             )
         },
+        onDashboardDatePresetChange = { preset, dateFrom, dateTo ->
+            val normalizedPreset = preset.take(24).takeIf { it != "all" }.orEmpty()
+            state = state.copy(
+                dashboard = state.dashboard.withResetPagination(
+                    filters = state.dashboard.filters.copy(
+                        datePreset = normalizedPreset,
+                        dateFrom = dateFrom.take(10),
+                        dateTo = dateTo.take(10),
+                    ),
+                ),
+            )
+            refreshDashboard()
+        },
         onDashboardDateFilterChange = { dateFrom, dateTo ->
             state = state.copy(
                 dashboard = state.dashboard.withResetPagination(
                     filters = state.dashboard.filters.copy(
+                        datePreset = "",
                         dateFrom = dateFrom.take(10),
                         dateTo = dateTo.take(10),
                     ),

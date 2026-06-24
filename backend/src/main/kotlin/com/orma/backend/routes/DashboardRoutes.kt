@@ -475,6 +475,7 @@ private fun ApplicationCall.dashboardFilters(): DashboardQueryFilters {
         status = query["status"],
         itemType = query["itemType"],
         orderType = query["orderType"],
+        datePreset = query["datePreset"],
         dateFrom = query["dateFrom"],
         dateTo = query["dateTo"],
         page = query["page"]?.toIntOrNull() ?: 1,
