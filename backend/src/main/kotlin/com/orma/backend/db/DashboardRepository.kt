@@ -138,6 +138,34 @@ class DashboardRepository(
         }
     }
 
+    suspend fun publicCatalogOrder(
+        workspaceId: String,
+        orderId: String,
+    ): PublicCatalogOrderResponse? = withContext(Dispatchers.IO) {
+        dataSource.connection.use { connection ->
+            val access = connection.resolvePublicWorkspaceAccess(workspaceId) ?: return@withContext null
+            val cleanOrderId = orderId.cleanUuidOrNull() ?: return@withContext null
+            val order = connection.getOrder(access.workspaceId, cleanOrderId, includeItems = true)
+                ?.takeIf { it.source == "public_catalog" }
+                ?: return@withContext null
+            val paymentMethod = if (order.paymentMode == "upi" && order.status in setOf("draft", "confirmed", "part_paid")) {
+                connection.defaultPublicCatalogPaymentMethod(access.workspaceId)
+            } else {
+                null
+            }
+            PublicCatalogOrderResponse(
+                message = order.publicCatalogStatusMessage(),
+                order = order,
+                paymentLink = paymentMethod?.toUpiPaymentLink(
+                    amount = order.total,
+                    currency = order.currency,
+                    note = "ORMA ${order.orderNumber}",
+                ),
+                paymentMethod = paymentMethod,
+            )
+        }
+    }
+
     suspend fun createPublicCatalogOrder(
         workspaceId: String,
         request: PublicCatalogOrderRequest,
@@ -150,7 +178,10 @@ class DashboardRepository(
                     return@withContext PublicCatalogOrderSubmitResult.WorkspaceNotFound
                 }
                 val publicItems = connection.publicOrderItems(access.workspaceId, request)
-                if (publicItems.isEmpty()) {
+                val requestedItemCount = request.items
+                    .take(50)
+                    .count { it.productId.cleanUuidOrNull() != null && it.quantity.decimalOrZero() > BigDecimal.ZERO }
+                if (publicItems.isEmpty() || publicItems.size != requestedItemCount) {
                     connection.rollback()
                     return@withContext PublicCatalogOrderSubmitResult.ItemsUnavailable
                 }
@@ -1166,6 +1197,9 @@ class DashboardRepository(
                     ?: BigDecimal.ONE
                 val product = publicOrderProduct(workspaceId, productId) ?: return@mapNotNull null
                 if (product.trackStock && product.stockQuantity.decimalOrZero() <= BigDecimal.ZERO) {
+                    return@mapNotNull null
+                }
+                if (product.trackStock && quantity > product.stockQuantity.decimalOrZero()) {
                     return@mapNotNull null
                 }
                 PublicCatalogPreparedItem(
@@ -3700,6 +3734,23 @@ class DashboardRepository(
             append("&tn=").append(note.cleanOptional().orEmpty().urlEncoded())
         }
     }
+
+    private fun OrderResponse.publicCatalogStatusMessage(): String =
+        when (status.normalizedOrderStatus()) {
+            "confirmed" -> "The business confirmed your ${orderType.cleanOrderType().publicCatalogWorkLabel()}."
+            "part_paid" -> "The business recorded a partial payment for this ${orderType.cleanOrderType().publicCatalogWorkLabel()}."
+            "paid" -> "Payment is recorded for this ${orderType.cleanOrderType().publicCatalogWorkLabel()}."
+            "completed" -> "This ${orderType.cleanOrderType().publicCatalogWorkLabel()} is completed."
+            "cancelled" -> "The business rejected or cancelled this ${orderType.cleanOrderType().publicCatalogWorkLabel()}."
+            else -> "Your ${orderType.cleanOrderType().publicCatalogWorkLabel()} is waiting for business confirmation."
+        }
+
+    private fun String.publicCatalogWorkLabel(): String =
+        when (cleanOrderType()) {
+            "appointment" -> "appointment"
+            "service" -> "service request"
+            else -> "order"
+        }
 
     private fun discountAmount(
         price: BigDecimal,

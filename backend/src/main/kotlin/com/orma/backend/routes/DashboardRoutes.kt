@@ -58,6 +58,15 @@ fun Route.dashboardRoutes(
         call.respond(catalog)
     }
 
+    post("/public/workspaces/{workspaceId}/orders/{orderId}") {
+        val repository = dashboardRepository ?: return@post call.dashboardDatabaseNotConfigured()
+        val workspaceId = call.parameters["workspaceId"].orEmpty()
+        val orderId = call.parameters["orderId"].orEmpty()
+        val order = repository.publicCatalogOrder(workspaceId, orderId)
+            ?: return@post call.publicCatalogNotFound()
+        call.respond(order)
+    }
+
     post("/public/workspaces/{workspaceId}/orders") {
         val repository = dashboardRepository ?: return@post call.dashboardDatabaseNotConfigured()
         val workspaceId = call.parameters["workspaceId"].orEmpty()
