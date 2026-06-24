@@ -157,6 +157,9 @@ class OnboardingRepository(
             )
             val workspace = connection.findPrimaryWorkspace(user.id) ?: return@withContext null
             val canInviteMembers = workspace.role == RoleBusinessOwner
+            if (canInviteMembers) {
+                connection.ensureOwnerMembership(workspace.id, user.id)
+            }
             TeamOverviewRecord(
                 workspace = workspace,
                 canInviteMembers = canInviteMembers,
@@ -434,7 +437,10 @@ class OnboardingRepository(
                 bw.id::text,
                 bw.business_name,
                 bw.legal_name,
-                wm.role,
+                case
+                    when bw.owner_user_id = wm.user_id then 'business_owner'
+                    else wm.role
+                end as role,
                 bw.onboarding_completed_at is not null as onboarding_complete,
                 bw.logo_file_name,
                 bw.cover_file_name
@@ -442,7 +448,7 @@ class OnboardingRepository(
             join business_workspaces bw on bw.id = wm.workspace_id
             where wm.user_id = ?::uuid
               and wm.status = 'active'
-            order by case when wm.role = 'business_owner' then 0 else 1 end, wm.created_at
+            order by case when bw.owner_user_id = wm.user_id or wm.role = 'business_owner' then 0 else 1 end, wm.created_at
             limit 1
         """.trimIndent()
 
@@ -609,15 +615,19 @@ class OnboardingRepository(
                 au.display_name,
                 au.email,
                 au.phone_number,
-                wm.role,
+                case
+                    when bw.owner_user_id = wm.user_id then 'business_owner'
+                    else wm.role
+                end as role,
                 wm.status,
                 wm.created_at::text as joined_at
             from workspace_members wm
             join app_users au on au.id = wm.user_id
+            join business_workspaces bw on bw.id = wm.workspace_id
             where wm.workspace_id = ?::uuid
               and wm.status = 'active'
             order by
-                case when wm.role = 'business_owner' then 0 else 1 end,
+                case when bw.owner_user_id = wm.user_id or wm.role = 'business_owner' then 0 else 1 end,
                 coalesce(nullif(au.display_name, ''), au.email, au.phone_number, wm.created_at::text)
         """.trimIndent()
 
