@@ -1406,6 +1406,61 @@ class OrmaBackendClient(
             parse = { it.toWorkspacePaymentMethod() },
         )
 
+    suspend fun updatePaymentMethod(
+        idToken: String,
+        paymentMethodId: String,
+        draft: OrmaWorkspacePaymentMethodDraft,
+    ): OrmaBackendResult<OrmaWorkspacePaymentMethod> =
+        executeBackendRequest(
+            actionTitle = "Update UPI",
+            request = {
+                ormaPutJsonAuthorized(
+                    url = config.url("/payment-methods/$paymentMethodId"),
+                    bearerToken = idToken,
+                    body = buildJsonObject(
+                        "type" to JsonValue.StringValue("upi"),
+                        "label" to JsonValue.StringValue(draft.label),
+                        "upiId" to JsonValue.StringValue(draft.upiId),
+                        "payeeName" to JsonValue.StringValue(draft.payeeName.blankToNull()),
+                        "isDefault" to JsonValue.BooleanValue(draft.isDefault),
+                    ),
+                )
+            },
+            parse = { it.toWorkspacePaymentMethod() },
+        )
+
+    suspend fun setDefaultPaymentMethod(
+        idToken: String,
+        paymentMethodId: String,
+    ): OrmaBackendResult<OrmaWorkspacePaymentMethod> =
+        executeBackendRequest(
+            actionTitle = "Set default UPI",
+            request = {
+                ormaPutJsonAuthorized(
+                    url = config.url("/payment-methods/$paymentMethodId/default"),
+                    bearerToken = idToken,
+                    body = "{}",
+                )
+            },
+            parse = { it.toWorkspacePaymentMethod() },
+        )
+
+    suspend fun deletePaymentMethod(
+        idToken: String,
+        paymentMethodId: String,
+    ): OrmaBackendResult<OrmaWorkspacePaymentMethod> =
+        executeBackendRequest(
+            actionTitle = "Delete UPI",
+            request = {
+                ormaPutJsonAuthorized(
+                    url = config.url("/payment-methods/$paymentMethodId/delete"),
+                    bearerToken = idToken,
+                    body = "{}",
+                )
+            },
+            parse = { it.toWorkspacePaymentMethod() },
+        )
+
     suspend fun getMetaConnectionStatus(
         idToken: String,
     ): OrmaBackendResult<OrmaMetaConnectionStatus> =

@@ -110,6 +110,7 @@ import org.orma.project_90.backend.OrmaCustomerDraft
 import org.orma.project_90.backend.OrmaDashboardFilters
 import org.orma.project_90.backend.OrmaDashboardRevenuePoint
 import org.orma.project_90.backend.OrmaGstinLookup
+import org.orma.project_90.backend.OrmaMetaConnectionStatus
 import org.orma.project_90.backend.OrmaMetaProductReadiness
 import org.orma.project_90.backend.OrmaMetaConnectionDraft
 import org.orma.project_90.backend.OrmaOrder
@@ -130,6 +131,7 @@ import org.orma.project_90.backend.OrmaSupplierDraft
 import org.orma.project_90.backend.OrmaTeamInvite
 import org.orma.project_90.backend.OrmaTeamInviteDraft
 import org.orma.project_90.backend.OrmaTeamMember
+import org.orma.project_90.backend.OrmaWorkspacePaymentMethod
 import org.orma.project_90.backend.OrmaWorkspacePaymentMethodDraft
 import org.orma.project_90.components.atoms.OrmaDashboardEmptyState
 import org.orma.project_90.components.atoms.OrmaDashboardIconBubble
@@ -193,6 +195,9 @@ import org.orma.project_90.documents.rememberOrmaOrderDocumentExporter
 import org.orma.project_90.publiccatalog.currentOrmaPublicCatalogUrl
 
 private const val ProductImageMaxBytes = 5 * 1024 * 1024
+private const val DashboardMetaWebhookCallbackUrl = "https://orma-backend.onrender.com/webhooks/meta"
+private const val DashboardMetaAppsUrl = "https://developers.facebook.com/apps/"
+private const val DashboardWhatsAppManagerUrl = "https://business.facebook.com/wa/manage/"
 private val DashboardCounterCreateOrderTypes = listOf("sale", "appointment", "service")
 
 @Composable
@@ -7394,6 +7399,7 @@ private fun DashboardSalesCounterWorkspace(
             primary = primaryContent,
             secondary = {
                 DashboardSaleInspectorPanel(
+                    state = state,
                     order = selectedOrder,
                     onClose = onClearSelection,
                     onEdit = { onEditOrder(selectedOrder) },
@@ -7631,33 +7637,29 @@ private fun DashboardSalesFocusToolbar(
                             currency = currency,
                             compact = false,
                         )
-                        Row(
+                        Column(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            verticalAlignment = Alignment.Bottom,
+                            verticalArrangement = Arrangement.spacedBy(9.dp),
+                            horizontalAlignment = Alignment.Start,
                         ) {
-                            Column(
-                                modifier = Modifier.weight(0.86f),
-                                verticalArrangement = Arrangement.spacedBy(7.dp),
-                            ) {
-                                Text(
-                                    text = "DATE",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = OrmaColors.TextSecondary,
-                                    maxLines = 1,
-                                )
-                                DashboardSalesQuickDateFilters(
-                                    filters = filters,
-                                    actions = actions,
-                                    onClearSelection = onClearSelection,
-                                )
-                            }
+                            Text(
+                                text = "DATE",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = OrmaColors.TextSecondary,
+                                maxLines = 1,
+                            )
+                            DashboardSalesQuickDateFilters(
+                                filters = filters,
+                                actions = actions,
+                                onClearSelection = onClearSelection,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
                             DashboardSalesDateRangeControls(
                                 filters = filters,
                                 actions = actions,
                                 onClearSelection = onClearSelection,
                                 compact = false,
-                                modifier = Modifier.weight(1.14f),
+                                modifier = Modifier.fillMaxWidth(),
                             )
                         }
                         typeFilters()
@@ -9210,6 +9212,7 @@ private fun DashboardSalesStatePanel(
 
 @Composable
 private fun DashboardSaleInspectorPanel(
+    state: OnboardingUiState,
     order: OrmaOrder,
     onClose: () -> Unit,
     onEdit: () -> Unit,
@@ -9272,7 +9275,7 @@ private fun DashboardSaleInspectorPanel(
                 )
             }
         }
-        BookingDetailsSummaryCard(order = order)
+        BookingDetailsSummaryCard(state = state, order = order)
         BookingDetailsFulfillmentCard(
             order = order,
             onStatusChange = onStatusChange,
@@ -12058,6 +12061,7 @@ private fun DashboardProductsContent(
         ) {
             DashboardProductWorkspaceTabs(
                 selectedTab = selectedProductTab,
+                activeItemType = itemType,
                 onSelected = { selectedProductTab = it },
             )
             if (selectedProductTab == DashboardProductWorkspaceTabSuppliers) {
@@ -12210,6 +12214,7 @@ private fun DashboardProductsWorkspace(
             ) {
                 DashboardProductWorkspaceTabs(
                     selectedTab = selectedTab,
+                    activeItemType = state.activeDashboardItemType(),
                     onSelected = onTabSelected,
                 )
                 if (selectedTab == DashboardProductWorkspaceTabSuppliers) {
@@ -12293,6 +12298,7 @@ private val DashboardProductWorkspaceTabOptions = listOf(
 @Composable
 private fun DashboardProductWorkspaceTabs(
     selectedTab: String,
+    activeItemType: String,
     onSelected: (String) -> Unit,
 ) {
     DashboardCompactSegmentedPicker(
@@ -12301,7 +12307,7 @@ private fun DashboardProductWorkspaceTabs(
         label = {
             when (it) {
                 DashboardProductWorkspaceTabSuppliers -> "Supplier"
-                else -> "Product / service / appointment"
+                else -> activeItemType.sellableItemTypeLabel()
             }
         },
         onSelected = onSelected,
@@ -12943,11 +12949,14 @@ private fun DashboardMarketingContent(
     wide: Boolean,
 ) {
     val products = filteredDashboardProducts(state)
+    val metaSetupComplete = state.dashboard.metaConnection.dashboardMetaSetupComplete()
     var selectedMarketingTab by rememberSaveable { mutableStateOf("store") }
     DashboardListScaffold(
         eyebrow = "MARKETING",
         title = if (selectedMarketingTab == "store") "Store" else "Sales channels",
         body = when {
+            selectedMarketingTab == "store" && !metaSetupComplete ->
+                "Set up Meta and WhatsApp first. After the connection is ready, ORMA will show catalog, QR, product sync, and order actions here."
             selectedMarketingTab == "store" && state.workspaceId.isNotBlank() ->
                 "Share the public ORMA store link or QR code so customers can order, request services, or book appointments."
             selectedMarketingTab == "store" ->
@@ -12959,8 +12968,20 @@ private fun DashboardMarketingContent(
             else ->
                 "${state.dashboard.products.size} catalog items available for WhatsApp, Meta, and social selling."
         },
-        primaryText = if (selectedMarketingTab == "store") "Manage catalog" else "Review catalog",
-        onPrimary = { onOpenProducts?.invoke() },
+        primaryText = if (selectedMarketingTab == "store" && !metaSetupComplete) {
+            "Set up Meta"
+        } else if (selectedMarketingTab == "store") {
+            "Manage catalog"
+        } else {
+            "Review catalog"
+        },
+        onPrimary = {
+            if (selectedMarketingTab == "store" && !metaSetupComplete) {
+                selectedMarketingTab = "channels"
+            } else {
+                onOpenProducts?.invoke()
+            }
+        },
         loading = state.dashboard.loading,
         wide = wide,
     ) {
@@ -12972,7 +12993,9 @@ private fun DashboardMarketingContent(
             modifier = Modifier.widthIn(max = 340.dp),
         )
         if (selectedMarketingTab == "store") {
-            if (wide) {
+            if (!metaSetupComplete) {
+                DashboardMarketingChannelCard(state = state, actions = actions)
+            } else if (wide) {
                 DashboardModuleWorkspace(
                     wide = true,
                     primary = {
@@ -12992,7 +13015,7 @@ private fun DashboardMarketingContent(
                     products = products,
                 )
             }
-        } else if (wide) {
+        } else if (wide && metaSetupComplete) {
             DashboardModuleWorkspace(
                 wide = true,
                 primary = {
@@ -13007,10 +13030,12 @@ private fun DashboardMarketingContent(
             )
         } else {
             DashboardMarketingChannelCard(state = state, actions = actions)
-            DashboardMarketingProductRecords(
-                state = state,
-                products = products,
-            )
+            if (metaSetupComplete) {
+                DashboardMarketingProductRecords(
+                    state = state,
+                    products = products,
+                )
+            }
         }
     }
 }
@@ -13132,11 +13157,44 @@ private fun DashboardMarketingChannelCard(
     actions: OnboardingActions,
 ) {
     var showMetaSetupSheet by rememberSaveable { mutableStateOf(false) }
+    var actionMessage by rememberSaveable { mutableStateOf<String?>(null) }
     val workspaceId = state.workspaceId.trim()
     val hasCatalogLink = workspaceId.isNotBlank()
+    val shopLink = if (hasCatalogLink) currentOrmaPublicCatalogUrl(workspaceId) else ""
     val metaConnection = state.dashboard.metaConnection
-    val connected = metaConnection?.connected == true
+    val setupComplete = metaConnection.dashboardMetaSetupComplete()
+    val idsReady = metaConnection.dashboardMetaIdsReady()
+    val credentialsReady = metaConnection.dashboardMetaCredentialsReady()
+    val webhookReady = metaConnection.dashboardMetaWebhookReady()
+    val messagingReady = metaConnection.dashboardMetaMessagingReady()
+    val catalogChecked = metaConnection.dashboardMetaCatalogChecked()
     val setupSaved = metaConnection != null && metaConnection.status != "not_connected"
+    val localReadyProducts = state.dashboard.products.count { dashboardMarketingReadinessIssues(it).isEmpty() }
+    val localBlockedProducts = state.dashboard.products.count { dashboardMarketingReadinessIssues(it).isNotEmpty() }
+    val readyProducts = metaConnection?.productsReady ?: localReadyProducts
+    val blockedProducts = metaConnection?.productsBlocked ?: localBlockedProducts
+    val clipboard = rememberOrmaClipboard()
+    val uriHandler = LocalUriHandler.current
+
+    fun copyValue(label: String, value: String) {
+        actionMessage = if (value.isBlank()) {
+            "$label is not available yet."
+        } else if (clipboard.copyText(value)) {
+            "$label copied."
+        } else {
+            "Could not copy $label."
+        }
+    }
+
+    fun openPage(label: String, url: String) {
+        actionMessage = runCatching {
+            uriHandler.openUri(url)
+            "Opening $label."
+        }.getOrElse {
+            "Could not open $label here."
+        }
+    }
+
     DashboardRecordCard {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -13149,23 +13207,29 @@ private fun DashboardMarketingChannelCard(
             ) {
                 OrmaBadge(
                     text = when {
-                        connected -> "WHATSAPP LIVE"
-                        setupSaved -> "SETUP SAVED"
-                        else -> "NOT CONNECTED"
+                        setupComplete -> "WHATSAPP LIVE"
+                        messagingReady -> "API READY"
+                        credentialsReady -> "BACKEND READY"
+                        idsReady -> "IDS SAVED"
+                        else -> "SETUP REQUIRED"
                     },
-                    tone = if (connected) OrmaStatusTone.Success else OrmaStatusTone.Warning,
+                    tone = if (setupComplete) OrmaStatusTone.Success else OrmaStatusTone.Warning,
                 )
                 Text(
                     text = when {
-                        connected -> "WhatsApp sales channel is live"
-                        setupSaved -> "WhatsApp account details are ready for backend credentials"
-                        else -> "Connect each business to its own WhatsApp account"
+                        setupComplete -> "WhatsApp sales channel is live"
+                        setupSaved -> "Finish Meta setup before showing catalog actions"
+                        else -> "Set up Meta and WhatsApp first"
                     },
                     style = MaterialTheme.typography.titleMedium,
                     color = OrmaColors.TextPrimary,
                 )
                 Text(
-                    text = "Use the ORMA catalog for WhatsApp chats, Facebook and Instagram discovery, QR ordering, and future campaign sync.",
+                    text = if (setupComplete) {
+                        "Use this channel for WhatsApp chats, order updates, catalog sync, and future click-to-WhatsApp ads."
+                    } else {
+                        "Complete each step, copy the needed values, then ORMA will show the normal store actions."
+                    },
                     style = MaterialTheme.typography.bodyMedium,
                     color = OrmaColors.TextSecondary,
                 )
@@ -13178,40 +13242,63 @@ private fun DashboardMarketingChannelCard(
                 )
             }
         }
+
+        if (!setupComplete) {
+            DashboardMetaSetupSteps(
+                idsReady = idsReady,
+                credentialsReady = credentialsReady,
+                webhookReady = webhookReady,
+                messagingReady = messagingReady,
+                catalogChecked = catalogChecked,
+            )
+        } else {
+            BookingMetricGrid(
+                metrics = listOf(
+                    BookingMetric("Ready", readyProducts.toString(), "Meta-ready items"),
+                    BookingMetric("Blocked", blockedProducts.toString(), "needs product fixes"),
+                    BookingMetric("Synced", (metaConnection?.productsSynced ?: 0).toString(), "catalog items"),
+                ),
+            )
+        }
+
         OrmaKeyValueList(
-            rows = listOf(
-                "WhatsApp account" to (metaConnection?.businessDisplayName ?: state.workspaceName.ifBlank { "Not set" }),
-                "WhatsApp number" to (metaConnection?.whatsappDisplayNumber ?: "Not set"),
-                "Setup status" to (metaConnection?.status?.dashboardTitleCase() ?: "Not connected"),
-                "Credentials" to (metaConnection?.accessTokenStatus?.dashboardTitleCase() ?: "Not configured"),
-                "Messaging" to (metaConnection?.messagingStatus?.dashboardTitleCase() ?: "Not configured"),
-                "Ready products" to (metaConnection?.productsReady ?: state.dashboard.products.count {
-                    dashboardMarketingReadinessIssues(it).isEmpty()
-                }).toString(),
-                "Blocked products" to (metaConnection?.productsBlocked ?: state.dashboard.products.count {
-                    dashboardMarketingReadinessIssues(it).isNotEmpty()
-                }).toString(),
-                "Last check" to (metaConnection?.lastSyncAt ?: "Not checked yet"),
-                "Public link" to if (hasCatalogLink) currentOrmaPublicCatalogUrl(workspaceId) else "Complete workspace setup",
+            rows = dashboardMetaConnectionRows(
+                state = state,
+                metaConnection = metaConnection,
+                shopLink = shopLink,
+                readyProducts = readyProducts,
+                blockedProducts = blockedProducts,
             ),
         )
-        OrmaSecondaryButton(
-            text = if (setupSaved) "Manage WhatsApp setup" else "Set up WhatsApp",
-            onClick = { showMetaSetupSheet = true },
-            enabled = !state.dashboard.loading && !state.dashboard.metaActionLoading,
-            modifier = Modifier.fillMaxWidth(),
+
+        DashboardMetaSetupActions(
+            setupSaved = setupSaved,
+            hasCatalogLink = hasCatalogLink,
+            actionLoading = state.dashboard.loading || state.dashboard.metaActionLoading,
+            onEditMetaIds = { showMetaSetupSheet = true },
+            onOpenMeta = { openPage("Meta app setup", DashboardMetaAppsUrl) },
+            onOpenWhatsApp = { openPage("WhatsApp Manager", DashboardWhatsAppManagerUrl) },
+            onCopyWebhook = { copyValue("Webhook URL", DashboardMetaWebhookCallbackUrl) },
+            onCopyShopLink = { copyValue("Shop link", shopLink) },
+            onCheckCatalog = actions.onSyncMetaCatalog,
+            checkingCatalog = state.dashboard.metaActionLoading,
         )
-        OrmaSecondaryButton(
-            text = if (state.dashboard.metaActionLoading) "Checking catalog..." else "Check catalog readiness",
-            onClick = actions.onSyncMetaCatalog,
-            enabled = !state.dashboard.loading && !state.dashboard.metaActionLoading,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        if (!connected) {
-            DashboardChecklistRow(text = "Connect Meta Business, WhatsApp Business Account, and catalog before automated sync.")
+
+        metaConnection?.lastError?.takeIf { it.isNotBlank() }?.let { error ->
+            DashboardChecklistRow(text = "Last Meta error: $error")
         }
-        DashboardChecklistRow(text = "Public catalog requests already appear in Orders.")
-        DashboardChecklistRow(text = "Products need image, price, and stock readiness before campaigns.")
+
+        actionMessage?.let { message ->
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (message.startsWith("Could") || message.contains("not available")) {
+                    OrmaColors.Warning
+                } else {
+                    OrmaColors.Success
+                },
+            )
+        }
     }
     if (showMetaSetupSheet) {
         MetaConnectionSetupSheet(
@@ -13223,6 +13310,276 @@ private fun DashboardMarketingChannelCard(
             },
         )
     }
+}
+
+@Composable
+private fun DashboardMetaSetupSteps(
+    idsReady: Boolean,
+    credentialsReady: Boolean,
+    webhookReady: Boolean,
+    messagingReady: Boolean,
+    catalogChecked: Boolean,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        DashboardMetaSetupStepRow(
+            number = "1",
+            title = "Meta business and WhatsApp IDs",
+            body = if (idsReady) {
+                "Business ID, WABA ID, and Phone Number ID are saved for this workspace."
+            } else {
+                "Open Meta, copy Business ID, WABA ID, and Phone Number ID, then paste them in ORMA."
+            },
+            complete = idsReady,
+        )
+        DashboardMetaSetupStepRow(
+            number = "2",
+            title = "Backend credentials in Render",
+            body = if (credentialsReady) {
+                "Render has the backend Meta token configured."
+            } else {
+                "Add META_APP_ID, META_APP_SECRET, META_SYSTEM_USER_ACCESS_TOKEN, META_TOKEN_ENCRYPTION_SECRET, and META_WEBHOOK_VERIFY_TOKEN in Render."
+            },
+            complete = credentialsReady,
+        )
+        DashboardMetaSetupStepRow(
+            number = "3",
+            title = "Webhook verification",
+            body = if (webhookReady) {
+                "Meta webhook delivery is ready for messages and status updates."
+            } else {
+                "Paste the ORMA callback URL in Meta Webhooks and use the Render verify token."
+            },
+            complete = webhookReady,
+        )
+        DashboardMetaSetupStepRow(
+            number = "4",
+            title = "WhatsApp templates",
+            body = if (messagingReady) {
+                "Business-initiated WhatsApp messaging is ready."
+            } else {
+                "Create order, product, service, and appointment templates, then wait for Meta approval."
+            },
+            complete = messagingReady,
+        )
+        DashboardMetaSetupStepRow(
+            number = "5",
+            title = "Catalog readiness",
+            body = if (catalogChecked) {
+                "ORMA has checked product readiness for Meta catalog sync."
+            } else {
+                "Run catalog readiness after setup. Items missing image, price, or stock will be listed."
+            },
+            complete = catalogChecked,
+        )
+    }
+}
+
+@Composable
+private fun DashboardMetaSetupStepRow(
+    number: String,
+    title: String,
+    body: String,
+    complete: Boolean,
+) {
+    val tone = if (complete) OrmaStatusTone.Success else OrmaStatusTone.Warning
+    val colors = org.orma.project_90.designsystem.ormaStatusColors(tone)
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = OrmaShapes.SmallCard,
+        color = OrmaColors.CellBackground,
+        border = BorderStroke(0.6.dp, colors.border),
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(28.dp)
+                    .clip(CircleShape)
+                    .background(colors.container),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = if (complete) "OK" else number,
+                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                    color = colors.content,
+                    maxLines = 1,
+                )
+            }
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(3.dp),
+            ) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = OrmaColors.TextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = body,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = OrmaColors.TextSecondary,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            OrmaBadge(
+                text = if (complete) "DONE" else "NEXT",
+                tone = tone,
+            )
+        }
+    }
+}
+
+@Composable
+private fun DashboardMetaSetupActions(
+    setupSaved: Boolean,
+    hasCatalogLink: Boolean,
+    actionLoading: Boolean,
+    onEditMetaIds: () -> Unit,
+    onOpenMeta: () -> Unit,
+    onOpenWhatsApp: () -> Unit,
+    onCopyWebhook: () -> Unit,
+    onCopyShopLink: () -> Unit,
+    onCheckCatalog: () -> Unit,
+    checkingCatalog: Boolean,
+) {
+    BoxWithConstraints(
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        val compact = maxWidth < 520.dp
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            if (compact) {
+                OrmaSecondaryButton(
+                    text = if (setupSaved) "Edit Meta IDs" else "Enter Meta IDs",
+                    onClick = onEditMetaIds,
+                    enabled = !actionLoading,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OrmaSecondaryButton(
+                    text = "Open Meta setup",
+                    onClick = onOpenMeta,
+                    enabled = !actionLoading,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OrmaSecondaryButton(
+                    text = "Copy webhook URL",
+                    onClick = onCopyWebhook,
+                    enabled = !actionLoading,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OrmaSecondaryButton(
+                    text = "Open WhatsApp",
+                    onClick = onOpenWhatsApp,
+                    enabled = !actionLoading,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (hasCatalogLink) {
+                    OrmaSecondaryButton(
+                        text = "Copy shop link",
+                        onClick = onCopyShopLink,
+                        enabled = !actionLoading,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                OrmaSecondaryButton(
+                    text = if (checkingCatalog) "Checking catalog..." else "Check catalog readiness",
+                    onClick = onCheckCatalog,
+                    enabled = !actionLoading,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    OrmaSecondaryButton(
+                        text = if (setupSaved) "Edit Meta IDs" else "Enter Meta IDs",
+                        onClick = onEditMetaIds,
+                        enabled = !actionLoading,
+                        modifier = Modifier.weight(1f),
+                    )
+                    OrmaSecondaryButton(
+                        text = "Open Meta setup",
+                        onClick = onOpenMeta,
+                        enabled = !actionLoading,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    OrmaSecondaryButton(
+                        text = "Copy webhook URL",
+                        onClick = onCopyWebhook,
+                        enabled = !actionLoading,
+                        modifier = Modifier.weight(1f),
+                    )
+                    OrmaSecondaryButton(
+                        text = "Open WhatsApp",
+                        onClick = onOpenWhatsApp,
+                        enabled = !actionLoading,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    if (hasCatalogLink) {
+                        OrmaSecondaryButton(
+                            text = "Copy shop link",
+                            onClick = onCopyShopLink,
+                            enabled = !actionLoading,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                    OrmaSecondaryButton(
+                        text = if (checkingCatalog) "Checking catalog..." else "Check catalog readiness",
+                        onClick = onCheckCatalog,
+                        enabled = !actionLoading,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun dashboardMetaConnectionRows(
+    state: OnboardingUiState,
+    metaConnection: OrmaMetaConnectionStatus?,
+    shopLink: String,
+    readyProducts: Int,
+    blockedProducts: Int,
+): List<Pair<String, String>> = buildList {
+    add("WhatsApp account" to (metaConnection?.businessDisplayName ?: state.workspaceName.ifBlank { "Not set" }))
+    add("WhatsApp number" to (metaConnection?.whatsappDisplayNumber ?: "Not set"))
+    add("Business ID" to (metaConnection?.businessId ?: "Paste from Meta"))
+    add("WABA ID" to (metaConnection?.whatsappBusinessAccountId ?: "Paste from WhatsApp setup"))
+    add("Phone Number ID" to (metaConnection?.phoneNumberId ?: "Paste from Cloud API"))
+    add("Webhook callback" to DashboardMetaWebhookCallbackUrl)
+    add("Verify token" to "Render env: META_WEBHOOK_VERIFY_TOKEN")
+    add("Setup status" to (metaConnection?.status?.dashboardTitleCase() ?: "Not connected"))
+    add("Credentials" to (metaConnection?.accessTokenStatus?.dashboardTitleCase() ?: "Not configured"))
+    add("Messaging" to (metaConnection?.messagingStatus?.dashboardTitleCase() ?: "Not configured"))
+    add("Ready products" to readyProducts.toString())
+    add("Blocked products" to blockedProducts.toString())
+    add("Last check" to (metaConnection?.lastSyncAt ?: "Not checked yet"))
+    add("Public link" to shopLink.ifBlank { "Complete workspace setup" })
 }
 
 @Composable
@@ -13482,6 +13839,38 @@ private fun dashboardMarketingReadinessIssues(product: OrmaProduct): List<String
         add("Check stock before promoting this item.")
     }
 }
+
+private fun OrmaMetaConnectionStatus?.dashboardMetaSetupComplete(): Boolean {
+    val connection = this ?: return false
+    return connection.connected &&
+        dashboardMetaIdsReady() &&
+        dashboardMetaCredentialsReady() &&
+        dashboardMetaMessagingReady()
+}
+
+private fun OrmaMetaConnectionStatus?.dashboardMetaIdsReady(): Boolean {
+    val connection = this ?: return false
+    return !connection.businessId.isNullOrBlank() &&
+        !connection.whatsappBusinessAccountId.isNullOrBlank() &&
+        !connection.phoneNumberId.isNullOrBlank()
+}
+
+private fun OrmaMetaConnectionStatus?.dashboardMetaCredentialsReady(): Boolean =
+    this?.accessTokenStatus.dashboardMetaReadyValue()
+
+private fun OrmaMetaConnectionStatus?.dashboardMetaWebhookReady(): Boolean =
+    this?.webhookSubscribedAt?.isNotBlank() == true || dashboardMetaMessagingReady()
+
+private fun OrmaMetaConnectionStatus?.dashboardMetaMessagingReady(): Boolean =
+    this?.messagingStatus.dashboardMetaReadyValue()
+
+private fun OrmaMetaConnectionStatus?.dashboardMetaCatalogChecked(): Boolean =
+    this?.lastSyncAt?.isNotBlank() == true ||
+        this?.productReadiness?.isNotEmpty() == true ||
+        (this?.productsSynced ?: 0) > 0
+
+private fun String?.dashboardMetaReadyValue(): Boolean =
+    this?.trim()?.lowercase().orEmpty() in setOf("active", "configured", "connected", "live", "ready", "valid")
 
 private fun String.dashboardTitleCase(): String =
     split("_", "-", " ")
@@ -14481,7 +14870,7 @@ private fun DashboardBookingDetailsContent(
                 modifier = Modifier.weight(1.35f),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            BookingDetailsSummaryCard(order = order)
+            BookingDetailsSummaryCard(state = state, order = order)
             BookingDetailsDocumentsCard(
                 state = state,
                 order = order,
@@ -14508,7 +14897,7 @@ private fun DashboardBookingDetailsContent(
             }
         }
     } else {
-        BookingDetailsSummaryCard(order = order)
+        BookingDetailsSummaryCard(state = state, order = order)
         BookingDetailsDocumentsCard(
             state = state,
             order = order,
@@ -14555,8 +14944,12 @@ private fun DashboardBookingDetailsContent(
 }
 
 @Composable
-private fun BookingDetailsSummaryCard(order: OrmaOrder) {
+private fun BookingDetailsSummaryCard(
+    state: OnboardingUiState,
+    order: OrmaOrder,
+) {
     val partPaid = order.isPartPaidRecord()
+    val upiMethod = state.dashboard.defaultUpiPaymentMethod()
     DashboardRecordCard {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -14599,6 +14992,9 @@ private fun BookingDetailsSummaryCard(order: OrmaOrder) {
         if (partPaid) {
             BookingDetailsPartPaidBreakdown(order = order)
         }
+        if (order.balanceDueValue() > 0.0 && upiMethod != null) {
+            BookingDetailsUpiQrSection(order = order, method = upiMethod)
+        }
         DashboardChecklistRow(
             text = when {
                 partPaid -> {
@@ -14612,6 +15008,112 @@ private fun BookingDetailsSummaryCard(order: OrmaOrder) {
                 }
             },
         )
+    }
+}
+
+@Composable
+private fun BookingDetailsUpiQrSection(
+    order: OrmaOrder,
+    method: OrmaWorkspacePaymentMethod,
+) {
+    val qrValue = remember(order.id, order.orderNumber, order.total, order.paidTotal, method.id, method.upiId) {
+        order.upiQrPaymentValue(method)
+    }
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = OrmaShapes.SmallCard,
+        color = OrmaColors.ScreenBackground,
+        contentColor = OrmaColors.TextPrimary,
+        border = BorderStroke(0.8.dp, OrmaColors.Hairline),
+        tonalElevation = 0.dp,
+        shadowElevation = OrmaElevation.None,
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top,
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(3.dp),
+                ) {
+                    Text(
+                        text = "UPI collection QR",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = OrmaColors.TextPrimary,
+                    )
+                    Text(
+                        text = "Scan to collect the current balance for this order.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = OrmaColors.TextSecondary,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                OrmaBadge(text = "BALANCE", tone = OrmaStatusTone.Warning)
+            }
+            if (qrValue != null) {
+                BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                    if (maxWidth < 520.dp) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            OrmaQrCode(
+                                value = qrValue,
+                                modifier = Modifier.size(168.dp),
+                            )
+                            BookingDetailsUpiQrMeta(order = order, method = method)
+                        }
+                    } else {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            OrmaQrCode(
+                                value = qrValue,
+                                modifier = Modifier.size(168.dp),
+                            )
+                            BookingDetailsUpiQrMeta(
+                                order = order,
+                                method = method,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                    }
+                }
+            } else {
+                DashboardChecklistRow(text = "This UPI ID or order reference is too long for the built-in QR. Collect using the UPI ID manually.")
+            }
+        }
+    }
+}
+
+@Composable
+private fun BookingDetailsUpiQrMeta(
+    order: OrmaOrder,
+    method: OrmaWorkspacePaymentMethod,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        OrmaKeyValueList(
+            rows = listOf(
+                "Amount" to order.balanceDueText(),
+                "Order ID" to order.orderNumber.ifBlank { order.id },
+                "UPI ID" to method.upiId.orEmpty(),
+                "Default" to method.label.ifBlank { "UPI payment" },
+            ),
+        )
+        DashboardChecklistRow(text = "Amount and order reference are embedded in the QR.")
     }
 }
 
@@ -21402,6 +21904,51 @@ private fun OrmaOrder.balanceDueValue(): Double =
 private fun OrmaOrder.balanceDueText(): String =
     dashboardMoney(balanceDueValue().toDashboardMoneyInput(), currency)
 
+private fun DashboardDataState.defaultUpiPaymentMethod(): OrmaWorkspacePaymentMethod? =
+    paymentMethods.firstOrNull { it.isUsableUpiPaymentMethod() && it.isDefault }
+        ?: paymentMethods.firstOrNull { it.isUsableUpiPaymentMethod() }
+
+private fun OrmaWorkspacePaymentMethod.isUsableUpiPaymentMethod(): Boolean =
+    status.trim().lowercase().let { it.isBlank() || it == "active" } &&
+        type.trim().lowercase() == "upi" &&
+        upiId.orEmpty().contains("@")
+
+private fun OrmaOrder.upiQrPaymentValue(method: OrmaWorkspacePaymentMethod): String? {
+    val upiId = method.upiId?.trim()?.takeIf { it.contains("@") } ?: return null
+    val amount = balanceDueValue().takeIf { it > 0.0 }?.toDashboardMoneyInput() ?: return null
+    val reference = orderNumber.ifBlank { id }.take(32)
+    val paymentValue = buildString {
+        append("upi://pay?pa=")
+        append(upiId.dashboardUrlQueryEscaped())
+        append("&am=")
+        append(amount)
+        append("&cu=")
+        append(currency.ifBlank { "INR" }.dashboardUrlQueryEscaped())
+        append("&tn=")
+        append(reference.dashboardUrlQueryEscaped())
+    }
+    return paymentValue.takeIf { it.encodeToByteArray().size <= 106 }
+}
+
+private fun String.dashboardUrlQueryEscaped(): String =
+    encodeToByteArray().joinToString(separator = "") { byte ->
+        val value = byte.toInt() and 0xff
+        val char = value.toChar()
+        if (
+            char in 'A'..'Z' ||
+            char in 'a'..'z' ||
+            char in '0'..'9' ||
+            char == '-' ||
+            char == '_' ||
+            char == '.' ||
+            char == '~'
+        ) {
+            char.toString()
+        } else {
+            "%" + value.toString(16).uppercase().padStart(2, '0')
+        }
+    }
+
 private fun OrmaOrder.isPartPaidRecord(): Boolean =
     status == "part_paid" ||
         (paidTotal.toDoubleOrNull().orZero() > 0.0 && balanceDueValue() > 0.0)
@@ -22226,8 +22773,6 @@ private fun DashboardTeamContent(
                 actions = actions,
                 canInviteMembers = canInviteMembers,
             )
-            DashboardTeamAccessPanel(state = state, canInviteMembers = canInviteMembers)
-            DashboardTeamGuideCard(canInviteMembers = canInviteMembers)
         }
     }
 }
@@ -22238,38 +22783,17 @@ private fun DashboardTeamWorkspace(
     actions: OnboardingActions,
     canInviteMembers: Boolean,
 ) {
-    OrmaDashboardResponsiveWorkspace(
-        wide = true,
-        primaryWeight = 1.58f,
-        secondaryMinWidth = 330.dp,
-        secondaryMaxWidth = 400.dp,
-        stackBelowWidth = 1080.dp,
-        primary = {
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
-            ) {
-                DashboardTeamKpiStrip(state = state, canInviteMembers = canInviteMembers)
-                DashboardTeamMembersSurface(
-                    state = state,
-                    actions = actions,
-                    canInviteMembers = canInviteMembers,
-                )
-            }
-        },
-        secondary = {
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
-            ) {
-                DashboardTeamAccessPanel(
-                    state = state,
-                    canInviteMembers = canInviteMembers,
-                )
-                DashboardTeamGuideCard(canInviteMembers = canInviteMembers)
-            }
-        },
-    )
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        DashboardTeamKpiStrip(state = state, canInviteMembers = canInviteMembers)
+        DashboardTeamMembersSurface(
+            state = state,
+            actions = actions,
+            canInviteMembers = canInviteMembers,
+        )
+    }
 }
 
 @Composable
@@ -22966,71 +23490,6 @@ private fun DashboardWideTeamMemberRow(
 }
 
 @Composable
-private fun DashboardTeamAccessPanel(
-    state: OnboardingUiState,
-    canInviteMembers: Boolean,
-) {
-    val currentMember = state.currentDashboardTeamMember()
-    val currentRole = currentMember?.role
-        ?.let { teamRoleLabel(it) }
-        ?: if (state.accessPath == AccessPath.TeamMember) "Team member" else "Business owner"
-    val currentStatus = currentMember?.status?.dashboardTeamStatusLabel()
-        ?: if (state.accessPath == AccessPath.TeamMember) "Active" else "Owner"
-    val title = if (canInviteMembers) "Access policy" else "My workspace access"
-    val body = if (canInviteMembers) {
-        "Owner access can invite staff, revoke pending invites, and remove active team members."
-    } else {
-        "This is the role and contact ORMA resolved for your signed-in account."
-    }
-    DashboardRecordCard {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.Top,
-        ) {
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = OrmaColors.TextPrimary,
-                )
-                Text(
-                    text = body,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = OrmaColors.TextSecondary,
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            OrmaBadge(
-                text = if (canInviteMembers) "OWNER" else "TEAM MEMBER",
-                tone = if (canInviteMembers) OrmaStatusTone.Success else OrmaStatusTone.Info,
-            )
-        }
-        if (canInviteMembers) {
-            DashboardChecklistRow(text = "${state.dashboard.teamMembers.size} members are currently linked to this workspace.")
-            DashboardChecklistRow(text = "${state.dashboard.teamInvites.size} pending invites can be reviewed or revoked.")
-            DashboardChecklistRow(text = "Owner and current-session access are protected from accidental removal.")
-        } else {
-            OrmaKeyValueList(
-                rows = listOf(
-                    "Name" to (currentMember?.dashboardDisplayName() ?: state.teamProfileName.ifBlank { "Team member" }),
-                    "Signed in as" to state.currentTeamContactLabel(currentMember),
-                    "Role" to currentRole,
-                    "Status" to currentStatus,
-                    "Joined" to (currentMember?.joinedAt?.dashboardDateLabel() ?: "Loaded from session"),
-                ),
-            )
-            DashboardChecklistRow(text = "Owners or admins manage role changes for this workspace.")
-            DashboardChecklistRow(text = "Use Account to sign out or switch to a different workspace.")
-        }
-    }
-}
-
-@Composable
 private fun DashboardTeamMembersCard(
     state: OnboardingUiState,
     canInviteMembers: Boolean,
@@ -23192,28 +23651,6 @@ private fun String?.productExpiryLabel(): String? =
         ?.take(10)
         ?.takeIf { it.length == 10 }
         ?.let { "Expires ${it.dashboardDateLabel().take(10)}" }
-
-@Composable
-private fun DashboardTeamGuideCard(
-    canInviteMembers: Boolean,
-) {
-    DashboardModuleChecklistCard(
-        title = if (canInviteMembers) "Team access" else "Team member setup",
-        items = if (canInviteMembers) {
-            listOf(
-                "Create an invite with email or phone for each staff member.",
-                "Open Details before removing any active member.",
-                "Revoked invites disappear from the pending queue after sync.",
-            )
-        } else {
-            listOf(
-                "Your account is connected to this workspace as a team member.",
-                "Owners or admins manage your role, permissions, and workspace access.",
-                "Use Account when you need to switch workspace or sign out.",
-            )
-        },
-    )
-}
 
 @Composable
 private fun DashboardAccountContent(
@@ -23489,8 +23926,10 @@ private fun DashboardAccountPaymentCard(
     actions: OnboardingActions,
 ) {
     var showPaymentSheet by rememberSaveable { mutableStateOf(false) }
+    var editingPaymentMethodId by rememberSaveable { mutableStateOf<String?>(null) }
     val defaultMethod = state.dashboard.paymentMethods.firstOrNull { it.isDefault }
         ?: state.dashboard.paymentMethods.firstOrNull()
+    val editingMethod = state.dashboard.paymentMethods.firstOrNull { it.id == editingPaymentMethodId }
     DashboardRecordCard {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -23516,18 +23955,28 @@ private fun DashboardAccountPaymentCard(
                     color = OrmaColors.TextSecondary,
                 )
             }
-            OrmaTextButton(text = "Add", onClick = { showPaymentSheet = true })
+            OrmaTextButton(
+                text = "Add",
+                onClick = {
+                    editingPaymentMethodId = null
+                    showPaymentSheet = true
+                },
+                enabled = !state.dashboard.actionLoading,
+            )
         }
         if (state.dashboard.paymentMethods.isEmpty()) {
             DashboardChecklistRow(text = "Add a UPI ID before showing UPI payment links on public orders.")
         } else {
             state.dashboard.paymentMethods.forEach { method ->
-                OrmaKeyValueList(
-                    rows = listOf(
-                        "Label" to method.label,
-                        "UPI ID" to method.upiId.orEmpty().ifBlank { "Not set" },
-                        "Default" to if (method.isDefault) "Yes" else "No",
-                    ),
+                DashboardPaymentMethodRow(
+                    method = method,
+                    actionLoading = state.dashboard.actionLoading,
+                    onEdit = {
+                        editingPaymentMethodId = method.id
+                        showPaymentSheet = true
+                    },
+                    onMakeDefault = { actions.onSetDefaultPaymentMethod(method.id) },
+                    onDelete = { actions.onDeletePaymentMethod(method.id) },
                 )
             }
         }
@@ -23535,31 +23984,134 @@ private fun DashboardAccountPaymentCard(
     if (showPaymentSheet) {
         PaymentMethodFormSheet(
             state = state,
-            onDismiss = { showPaymentSheet = false },
-            onSubmit = { draft ->
-                actions.onCreatePaymentMethod(draft)
+            method = editingMethod,
+            onDismiss = {
                 showPaymentSheet = false
+                editingPaymentMethodId = null
+            },
+            onSubmit = { draft ->
+                val method = editingMethod
+                if (method != null) {
+                    actions.onUpdatePaymentMethod(method.id, draft)
+                } else {
+                    actions.onCreatePaymentMethod(draft)
+                }
+                showPaymentSheet = false
+                editingPaymentMethodId = null
             },
         )
     }
 }
 
 @Composable
+private fun DashboardPaymentMethodRow(
+    method: OrmaWorkspacePaymentMethod,
+    actionLoading: Boolean,
+    onEdit: () -> Unit,
+    onMakeDefault: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = OrmaShapes.StandardCell,
+        color = OrmaColors.ScreenBackground,
+        contentColor = OrmaColors.TextPrimary,
+        border = BorderStroke(0.6.dp, OrmaColors.Hairline),
+        tonalElevation = 0.dp,
+        shadowElevation = OrmaElevation.None,
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        text = method.label.ifBlank { "UPI payment" },
+                        style = MaterialTheme.typography.titleSmall,
+                        color = OrmaColors.TextPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = method.upiId.orEmpty().ifBlank { "UPI ID missing" },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = OrmaColors.TextSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    method.payeeName?.takeIf { it.isNotBlank() }?.let { payee ->
+                        Text(
+                            text = payee,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = OrmaColors.TextTertiary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                OrmaBadge(
+                    text = if (method.isDefault) "DEFAULT" else "UPI",
+                    tone = if (method.isDefault) OrmaStatusTone.Success else OrmaStatusTone.Info,
+                )
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (!method.isDefault) {
+                    OrmaTextButton(
+                        text = "Make default",
+                        onClick = onMakeDefault,
+                        enabled = !actionLoading,
+                    )
+                }
+                OrmaTextButton(
+                    text = "Edit",
+                    onClick = onEdit,
+                    enabled = !actionLoading,
+                )
+                OrmaTextButton(
+                    text = "Delete",
+                    onClick = onDelete,
+                    enabled = !actionLoading,
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun PaymentMethodFormSheet(
     state: OnboardingUiState,
+    method: OrmaWorkspacePaymentMethod? = null,
     onDismiss: () -> Unit,
     onSubmit: (OrmaWorkspacePaymentMethodDraft) -> Unit,
 ) {
-    var draft by remember {
+    val editing = method != null
+    var draft by remember(method?.id) {
         mutableStateOf(
             OrmaWorkspacePaymentMethodDraft(
-                isDefault = state.dashboard.paymentMethods.none { it.isDefault },
+                label = method?.label.orEmpty(),
+                upiId = method?.upiId.orEmpty(),
+                payeeName = method?.payeeName.orEmpty(),
+                isDefault = method?.isDefault ?: state.dashboard.paymentMethods.none { it.isDefault },
             ),
         )
     }
     DashboardFormSheet(
-        title = "UPI payment",
-        body = "Add a UPI ID for customer payment links in the ordering page.",
+        title = if (editing) "Edit UPI payment" else "Add UPI payment",
+        body = "Use the default UPI ID for unpaid orders, balance collection, and customer checkout QR codes.",
         onDismiss = onDismiss,
     ) {
         OrmaTextField(
@@ -23587,9 +24139,17 @@ private fun PaymentMethodFormSheet(
             onCheckedChange = { draft = draft.copy(isDefault = it) },
         )
         OrmaActionRow(
-            primaryText = "Save UPI",
-            onPrimary = { onSubmit(draft) },
-            primaryEnabled = draft.label.trim().length >= 2 && draft.upiId.contains("@"),
+            primaryText = if (editing) "Update UPI" else "Save UPI",
+            onPrimary = {
+                onSubmit(
+                    draft.copy(
+                        label = draft.label.trim(),
+                        upiId = draft.upiId.trim().lowercase(),
+                        payeeName = draft.payeeName.trim(),
+                    ),
+                )
+            },
+            primaryEnabled = !state.dashboard.actionLoading && draft.label.trim().length >= 2 && draft.upiId.contains("@"),
             secondaryText = "Cancel",
             onSecondary = LocalSmoothSheetDismiss.current ?: onDismiss,
         )

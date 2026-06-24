@@ -291,15 +291,19 @@ fun OrmaTextField(
         Surface(
             modifier = Modifier.fillMaxWidth(),
             shape = OrmaShapes.Field,
-            color = OrmaColors.CellBackground,
+            color = if (enabled) OrmaColors.CardBackground else OrmaColors.CellBackground,
             contentColor = OrmaColors.TextPrimary,
+            border = BorderStroke(
+                0.8.dp,
+                if (enabled) OrmaColors.Accent.copy(alpha = 0.12f) else OrmaColors.Hairline.copy(alpha = 0.70f),
+            ),
             tonalElevation = 0.dp,
             shadowElevation = 0.dp,
         ) {
             Row(
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp),
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = if (singleLine) 13.dp else 12.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                verticalAlignment = if (singleLine) Alignment.CenterVertically else Alignment.Top,
             ) {
                 leading?.invoke()
                 BasicTextField(

@@ -1381,6 +1381,45 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
         }
     }
 
+    fun updateDashboardPaymentMethod(paymentMethodId: String, draft: OrmaWorkspacePaymentMethodDraft) {
+        val snapshot = state
+        if (snapshot.dashboard.actionLoading || paymentMethodId.isBlank() || draft.label.trim().length < 2 || !draft.upiId.contains("@")) return
+        markDashboardActionLoading()
+        scope.launch {
+            val idToken = freshDashboardTokenOrError(snapshot) ?: return@launch
+            when (val result = backendClient.updatePaymentMethod(idToken, paymentMethodId, draft)) {
+                is OrmaBackendResult.Success -> refreshDashboard("UPI updated.")
+                is OrmaBackendResult.Failure -> applyDashboardFailure(result.title, result.message, result.code)
+            }
+        }
+    }
+
+    fun setDefaultDashboardPaymentMethod(paymentMethodId: String) {
+        val snapshot = state
+        if (snapshot.dashboard.actionLoading || paymentMethodId.isBlank()) return
+        markDashboardActionLoading()
+        scope.launch {
+            val idToken = freshDashboardTokenOrError(snapshot) ?: return@launch
+            when (val result = backendClient.setDefaultPaymentMethod(idToken, paymentMethodId)) {
+                is OrmaBackendResult.Success -> refreshDashboard("Default UPI updated.")
+                is OrmaBackendResult.Failure -> applyDashboardFailure(result.title, result.message, result.code)
+            }
+        }
+    }
+
+    fun deleteDashboardPaymentMethod(paymentMethodId: String) {
+        val snapshot = state
+        if (snapshot.dashboard.actionLoading || paymentMethodId.isBlank()) return
+        markDashboardActionLoading()
+        scope.launch {
+            val idToken = freshDashboardTokenOrError(snapshot) ?: return@launch
+            when (val result = backendClient.deletePaymentMethod(idToken, paymentMethodId)) {
+                is OrmaBackendResult.Success -> refreshDashboard("UPI deleted.")
+                is OrmaBackendResult.Failure -> applyDashboardFailure(result.title, result.message, result.code)
+            }
+        }
+    }
+
     fun syncDashboardMetaCatalog() {
         val snapshot = state
         if (snapshot.dashboard.actionLoading || snapshot.dashboard.metaActionLoading) return
@@ -1893,6 +1932,9 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
         onInvoiceGstinLookupRequest = ::lookupInvoiceGstin,
         onCreatePrinter = ::createDashboardPrinter,
         onCreatePaymentMethod = ::createDashboardPaymentMethod,
+        onUpdatePaymentMethod = ::updateDashboardPaymentMethod,
+        onSetDefaultPaymentMethod = ::setDefaultDashboardPaymentMethod,
+        onDeletePaymentMethod = ::deleteDashboardPaymentMethod,
         onUpdateMetaConnection = ::updateDashboardMetaConnection,
         onSyncMetaCatalog = ::syncDashboardMetaCatalog,
         onCreateBusiness = {

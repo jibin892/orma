@@ -60,6 +60,7 @@ import org.orma.project_90.designsystem.OrmaFullButton
 import org.orma.project_90.designsystem.OrmaKeyValueList
 import org.orma.project_90.designsystem.OrmaLightButton
 import org.orma.project_90.designsystem.OrmaPrice
+import org.orma.project_90.designsystem.OrmaQrCode
 import org.orma.project_90.designsystem.OrmaSectionHeader
 import org.orma.project_90.designsystem.OrmaSegmentedRow
 import org.orma.project_90.designsystem.OrmaShapes
@@ -2607,6 +2608,7 @@ private fun PublicCatalogSuccess(
     onNewOrder: () -> Unit,
 ) {
     val order = receipt.order
+    val balanceDue = order.publicCatalogBalanceDueValue()
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         PublicCatalogMessageCard(
             title = order.publicCatalogStatusTitle(),
@@ -2620,6 +2622,12 @@ private fun PublicCatalogSuccess(
                 add("Type" to order.orderType.publicCatalogWorkTitle())
                 order.scheduledAt?.takeIf { it.isNotBlank() }?.let { add("Preferred time" to it) }
                 add("Total" to "${order.currency} ${order.total}")
+                if (order.paidTotal.toDoubleOrNull().orZero() > 0.0) {
+                    add("Paid" to "${order.currency} ${order.paidTotal}")
+                }
+                if (balanceDue > 0.0) {
+                    add("Balance" to order.publicCatalogBalanceDueText())
+                }
             },
         )
         OrmaLightButton(
@@ -2634,24 +2642,80 @@ private fun PublicCatalogSuccess(
             modifier = Modifier.fillMaxWidth(),
             enabled = !refreshing,
         )
-        receipt.paymentLink?.takeIf { it.isNotBlank() }?.let { link ->
-            receipt.paymentMethod?.let { method ->
-                OrmaKeyValueList(
-                    rows = listOf(
-                        "Pay to" to (method.payeeName ?: method.label),
-                        "UPI ID" to method.upiId.orEmpty(),
-                        "Amount" to "${receipt.order.currency} ${receipt.order.total}",
-                    ),
-                )
-            }
-            OrmaLightButton(
-                text = "Pay with UPI",
-                onClick = { openPublicCatalogPaymentLink(link) },
+        receipt.paymentLink?.takeIf { it.isNotBlank() && balanceDue > 0.0 }?.let { link ->
+            Surface(
                 modifier = Modifier.fillMaxWidth(),
-            )
+                shape = OrmaShapes.SmallCard,
+                color = OrmaColors.ScreenBackground,
+                contentColor = OrmaColors.TextPrimary,
+                border = BorderStroke(0.6.dp, OrmaColors.Hairline),
+                tonalElevation = 0.dp,
+                shadowElevation = 0.dp,
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.Top,
+                    ) {
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(3.dp),
+                        ) {
+                            Text(
+                                text = "Pay with UPI",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = OrmaColors.TextPrimary,
+                            )
+                            Text(
+                                text = "Scan this QR to pay the balance for this order.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = OrmaColors.TextSecondary,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        OrmaBadge(text = "UPI", tone = OrmaStatusTone.Success)
+                    }
+                    if (link.publicCatalogQrSafe()) {
+                        OrmaQrCode(
+                            value = link,
+                            modifier = Modifier.size(196.dp),
+                        )
+                    }
+                    receipt.paymentMethod?.let { method ->
+                        OrmaKeyValueList(
+                            rows = listOf(
+                                "Amount" to order.publicCatalogBalanceDueText(),
+                                "Order ID" to order.orderNumber.ifBlank { order.id },
+                                "UPI ID" to method.upiId.orEmpty(),
+                                "Pay to" to (method.payeeName ?: method.label),
+                            ),
+                        )
+                    }
+                    OrmaLightButton(
+                        text = "Open UPI app",
+                        onClick = { openPublicCatalogPaymentLink(link) },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
         }
     }
 }
+
+private fun OrmaOrder.publicCatalogBalanceDueValue(): Double =
+    (total.toDoubleOrNull().orZero() - paidTotal.toDoubleOrNull().orZero()).coerceAtLeast(0.0)
+
+private fun OrmaOrder.publicCatalogBalanceDueText(): String =
+    "${currency.ifBlank { "INR" }} ${money(publicCatalogBalanceDueValue())}"
+
+private fun String.publicCatalogQrSafe(): Boolean =
+    encodeToByteArray().size <= 106
 
 private fun OrmaOrder.publicCatalogStatusTitle(): String =
     when (status.trim().lowercase()) {

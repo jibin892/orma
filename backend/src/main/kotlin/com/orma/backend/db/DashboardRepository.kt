@@ -158,7 +158,12 @@ class DashboardRepository(
             val order = connection.getOrder(access.workspaceId, cleanOrderId, includeItems = true)
                 ?.takeIf { it.source == "public_catalog" }
                 ?: return@withContext null
-            val paymentMethod = if (order.paymentMode == "upi" && order.status in setOf("draft", "confirmed", "part_paid")) {
+            val balanceDue = order.paymentBalanceDue()
+            val paymentMethod = if (
+                balanceDue > BigDecimal.ZERO &&
+                order.paymentMode == "upi" &&
+                order.status in setOf("draft", "confirmed", "part_paid")
+            ) {
                 connection.defaultPublicCatalogPaymentMethod(access.workspaceId)
             } else {
                 null
@@ -167,7 +172,7 @@ class DashboardRepository(
                 message = order.publicCatalogStatusMessage(),
                 order = order,
                 paymentLink = paymentMethod?.toUpiPaymentLink(
-                    amount = order.total,
+                    amount = balanceDue.moneyString(),
                     currency = order.currency,
                     note = "ORMA ${order.orderNumber}",
                 ),
@@ -718,6 +723,7 @@ class DashboardRepository(
                     return@withContext null
                 }
                 val method = connection.insertPaymentMethod(access.workspaceId, request)
+                connection.ensureOneDefaultPaymentMethod(access.workspaceId)
                 connection.insertWorkspaceActivity(
                     access = access,
                     activityType = "payment_method_created",
@@ -735,6 +741,111 @@ class DashboardRepository(
                 throw error
             } finally {
                 connection.autoCommit = true
+            }
+        }
+    }
+
+    suspend fun updatePaymentMethod(
+        firebaseUser: VerifiedFirebaseUser,
+        paymentMethodId: String,
+        request: WorkspacePaymentMethodRequest,
+    ): WorkspacePaymentMethodResponse? = withContext(Dispatchers.IO) {
+        dataSource.connection.use { connection ->
+            connection.autoCommit = false
+            try {
+                val access = connection.resolveWorkspaceAccess(firebaseUser) ?: run {
+                    connection.rollback()
+                    return@withContext null
+                }
+                val method = connection.updatePaymentMethod(access.workspaceId, paymentMethodId, request) ?: run {
+                    connection.rollback()
+                    return@withContext null
+                }
+                connection.ensureOneDefaultPaymentMethod(access.workspaceId)
+                connection.insertWorkspaceActivity(
+                    access = access,
+                    activityType = "payment_method_updated",
+                    entityType = "payment_method",
+                    entityId = method.id,
+                    entityLabel = method.label,
+                    title = "UPI ID updated",
+                    body = method.label,
+                    tone = "info",
+                )
+                connection.commit()
+                method
+            } catch (error: Throwable) {
+                connection.rollback()
+                throw error
+            }
+        }
+    }
+
+    suspend fun setDefaultPaymentMethod(
+        firebaseUser: VerifiedFirebaseUser,
+        paymentMethodId: String,
+    ): WorkspacePaymentMethodResponse? = withContext(Dispatchers.IO) {
+        dataSource.connection.use { connection ->
+            connection.autoCommit = false
+            try {
+                val access = connection.resolveWorkspaceAccess(firebaseUser) ?: run {
+                    connection.rollback()
+                    return@withContext null
+                }
+                val method = connection.setDefaultPaymentMethod(access.workspaceId, paymentMethodId) ?: run {
+                    connection.rollback()
+                    return@withContext null
+                }
+                connection.insertWorkspaceActivity(
+                    access = access,
+                    activityType = "payment_method_defaulted",
+                    entityType = "payment_method",
+                    entityId = method.id,
+                    entityLabel = method.label,
+                    title = "Default UPI changed",
+                    body = method.label,
+                    tone = "success",
+                )
+                connection.commit()
+                method
+            } catch (error: Throwable) {
+                connection.rollback()
+                throw error
+            }
+        }
+    }
+
+    suspend fun deletePaymentMethod(
+        firebaseUser: VerifiedFirebaseUser,
+        paymentMethodId: String,
+    ): WorkspacePaymentMethodResponse? = withContext(Dispatchers.IO) {
+        dataSource.connection.use { connection ->
+            connection.autoCommit = false
+            try {
+                val access = connection.resolveWorkspaceAccess(firebaseUser) ?: run {
+                    connection.rollback()
+                    return@withContext null
+                }
+                val method = connection.deletePaymentMethod(access.workspaceId, paymentMethodId) ?: run {
+                    connection.rollback()
+                    return@withContext null
+                }
+                connection.ensureOneDefaultPaymentMethod(access.workspaceId)
+                connection.insertWorkspaceActivity(
+                    access = access,
+                    activityType = "payment_method_deleted",
+                    entityType = "payment_method",
+                    entityId = method.id,
+                    entityLabel = method.label,
+                    title = "UPI ID deleted",
+                    body = method.label,
+                    tone = "warning",
+                )
+                connection.commit()
+                method
+            } catch (error: Throwable) {
+                connection.rollback()
+                throw error
             }
         }
     }
@@ -2642,6 +2753,117 @@ class DashboardRepository(
                 result.next()
                 result.toWorkspacePaymentMethodResponse()
             }
+        }
+    }
+
+    private fun Connection.updatePaymentMethod(
+        workspaceId: String,
+        paymentMethodId: String,
+        request: WorkspacePaymentMethodRequest,
+    ): WorkspacePaymentMethodResponse? {
+        val cleanPaymentMethodId = paymentMethodId.cleanUuidOrNull() ?: return null
+        if (request.isDefault) {
+            clearPaymentMethodDefaults(workspaceId, exceptPaymentMethodId = cleanPaymentMethodId)
+        }
+        val sql = """
+            update workspace_payment_methods
+            set type = ?, label = ?, upi_id = ?, payee_name = ?, is_default = ?, updated_at = now()
+            where id = ?::uuid and workspace_id = ?::uuid and status = 'active'
+            returning id::text, type, label, upi_id, payee_name, is_default, status, created_at::text, updated_at::text
+        """.trimIndent()
+        return prepareStatement(sql).use { statement ->
+            statement.setString(1, request.type.cleanPaymentMethodType())
+            statement.setString(2, request.label.cleanName())
+            statement.setNullableString(3, request.upiId.cleanUpiId())
+            statement.setNullableString(4, request.payeeName?.cleanOptional())
+            statement.setBoolean(5, request.isDefault)
+            statement.setString(6, cleanPaymentMethodId)
+            statement.setString(7, workspaceId)
+            statement.executeQuery().use { result ->
+                if (result.next()) result.toWorkspacePaymentMethodResponse() else null
+            }
+        }
+    }
+
+    private fun Connection.setDefaultPaymentMethod(
+        workspaceId: String,
+        paymentMethodId: String,
+    ): WorkspacePaymentMethodResponse? {
+        val cleanPaymentMethodId = paymentMethodId.cleanUuidOrNull() ?: return null
+        clearPaymentMethodDefaults(workspaceId, exceptPaymentMethodId = cleanPaymentMethodId)
+        val sql = """
+            update workspace_payment_methods
+            set is_default = true, updated_at = now()
+            where id = ?::uuid and workspace_id = ?::uuid and status = 'active' and type = 'upi'
+            returning id::text, type, label, upi_id, payee_name, is_default, status, created_at::text, updated_at::text
+        """.trimIndent()
+        return prepareStatement(sql).use { statement ->
+            statement.setString(1, cleanPaymentMethodId)
+            statement.setString(2, workspaceId)
+            statement.executeQuery().use { result ->
+                if (result.next()) result.toWorkspacePaymentMethodResponse() else null
+            }
+        }
+    }
+
+    private fun Connection.deletePaymentMethod(
+        workspaceId: String,
+        paymentMethodId: String,
+    ): WorkspacePaymentMethodResponse? {
+        val cleanPaymentMethodId = paymentMethodId.cleanUuidOrNull() ?: return null
+        val sql = """
+            update workspace_payment_methods
+            set status = 'deleted', is_default = false, updated_at = now()
+            where id = ?::uuid and workspace_id = ?::uuid and status = 'active'
+            returning id::text, type, label, upi_id, payee_name, is_default, status, created_at::text, updated_at::text
+        """.trimIndent()
+        return prepareStatement(sql).use { statement ->
+            statement.setString(1, cleanPaymentMethodId)
+            statement.setString(2, workspaceId)
+            statement.executeQuery().use { result ->
+                if (result.next()) result.toWorkspacePaymentMethodResponse() else null
+            }
+        }
+    }
+
+    private fun Connection.clearPaymentMethodDefaults(
+        workspaceId: String,
+        exceptPaymentMethodId: String? = null,
+    ) {
+        val sql = buildString {
+            append("update workspace_payment_methods set is_default = false, updated_at = now() where workspace_id = ?::uuid and status = 'active'")
+            if (exceptPaymentMethodId != null) append(" and id <> ?::uuid")
+        }
+        prepareStatement(sql).use { statement ->
+            statement.setString(1, workspaceId)
+            if (exceptPaymentMethodId != null) statement.setString(2, exceptPaymentMethodId)
+            statement.executeUpdate()
+        }
+    }
+
+    private fun Connection.ensureOneDefaultPaymentMethod(workspaceId: String) {
+        val hasDefault = prepareStatement(
+            "select 1 from workspace_payment_methods where workspace_id = ?::uuid and status = 'active' and type = 'upi' and is_default = true limit 1",
+        ).use { statement ->
+            statement.setString(1, workspaceId)
+            statement.executeQuery().use { it.next() }
+        }
+        if (hasDefault) return
+        prepareStatement(
+            """
+            update workspace_payment_methods
+            set is_default = true, updated_at = now()
+            where id = (
+                select id
+                from workspace_payment_methods
+                where workspace_id = ?::uuid and status = 'active' and type = 'upi'
+                order by created_at desc
+                limit 1
+            )
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setString(1, workspaceId)
+            statement.executeUpdate()
         }
     }
 
@@ -4615,6 +4837,9 @@ class DashboardRepository(
             append("&tn=").append(note.cleanOptional().orEmpty().urlEncoded())
         }
     }
+
+    private fun OrderResponse.paymentBalanceDue(): BigDecimal =
+        (total.moneyOrZero() - paidTotal.moneyOrZero()).coerceAtLeast(BigDecimal.ZERO)
 
     private fun OrderResponse.publicCatalogStatusMessage(): String =
         when (status.normalizedOrderStatus()) {

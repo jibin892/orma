@@ -441,7 +441,45 @@ fun Route.dashboardRoutes(
             call.respondValidation("payment_upi_required", "Enter a UPI ID.")
             return@post
         }
+        if (!request.upiId.contains("@")) {
+            call.respondValidation("payment_upi_invalid", "Enter a valid UPI ID.")
+            return@post
+        }
         call.respondWorkspaceResult(repository.createPaymentMethod(firebaseUser, request))
+    }
+
+    put("/payment-methods/{paymentMethodId}") {
+        val repository = dashboardRepository ?: return@put call.dashboardDatabaseNotConfigured()
+        val firebaseUser = call.verifiedFirebaseUser(config) ?: return@put
+        val paymentMethodId = call.parameters["paymentMethodId"].orEmpty()
+        val request = call.receive<WorkspacePaymentMethodRequest>()
+        if (request.label.isBlank()) {
+            call.respondValidation("payment_label_required", "Enter a payment label.")
+            return@put
+        }
+        if (request.upiId.isBlank()) {
+            call.respondValidation("payment_upi_required", "Enter a UPI ID.")
+            return@put
+        }
+        if (!request.upiId.contains("@")) {
+            call.respondValidation("payment_upi_invalid", "Enter a valid UPI ID.")
+            return@put
+        }
+        call.respondWorkspaceResult(repository.updatePaymentMethod(firebaseUser, paymentMethodId, request))
+    }
+
+    put("/payment-methods/{paymentMethodId}/default") {
+        val repository = dashboardRepository ?: return@put call.dashboardDatabaseNotConfigured()
+        val firebaseUser = call.verifiedFirebaseUser(config) ?: return@put
+        val paymentMethodId = call.parameters["paymentMethodId"].orEmpty()
+        call.respondWorkspaceResult(repository.setDefaultPaymentMethod(firebaseUser, paymentMethodId))
+    }
+
+    put("/payment-methods/{paymentMethodId}/delete") {
+        val repository = dashboardRepository ?: return@put call.dashboardDatabaseNotConfigured()
+        val firebaseUser = call.verifiedFirebaseUser(config) ?: return@put
+        val paymentMethodId = call.parameters["paymentMethodId"].orEmpty()
+        call.respondWorkspaceResult(repository.deletePaymentMethod(firebaseUser, paymentMethodId))
     }
 
     post("/printers") {
