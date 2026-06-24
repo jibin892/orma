@@ -197,6 +197,7 @@ import org.orma.project_90.designsystem.OrmaSwitchRow
 import org.orma.project_90.designsystem.OrmaTextButton
 import org.orma.project_90.designsystem.OrmaTextField
 import org.orma.project_90.designsystem.OrmaUploadImageIcon
+import org.orma.project_90.documents.OrmaPrintTarget
 import org.orma.project_90.documents.rememberOrmaOrderDocumentExporter
 import org.orma.project_90.publiccatalog.currentOrmaPublicCatalogUrl
 
@@ -17149,10 +17150,21 @@ private fun BookingDetailsDocumentsCard(
     }
     fun printReceipt() {
         val document = orderReceiptDocument(state = state, order = order)
-        reportDocumentStatus(if (exporter.printHtml(title = document.title, html = document.html)) {
-            "Receipt print view opened."
+        val printer = state.dashboard.printers.defaultReceiptPrinter()
+        reportDocumentStatus(if (exporter.printReceipt(
+                title = document.title,
+                html = document.html,
+                text = document.text,
+                target = printer?.toPrintTarget(),
+            )
+        ) {
+            if (printer != null) {
+                "Receipt sent to ${printer.name}."
+            } else {
+                "Receipt print view opened."
+            }
         } else {
-            "Receipt printing is not available on this device yet."
+            "Printer is not ready. Check Bluetooth permission, paired printer name, or use system print."
         })
     }
     DashboardRecordCard {
@@ -22756,6 +22768,7 @@ private data class OrderHtmlDocument(
     val title: String,
     val fileName: String,
     val html: String,
+    val text: String = "",
 )
 
 private data class OrderPdfDocument(
@@ -22800,6 +22813,7 @@ private fun orderReceiptDocument(
         title = title,
         fileName = "${orderDocumentFileStem(reference)}-receipt.html",
         html = orderReceiptHtml(state = state, order = order, reference = reference, title = title),
+        text = orderReceiptText(state = state, order = order, reference = reference),
     )
 }
 
@@ -23275,6 +23289,72 @@ private fun orderReceiptHtml(
         </body>
         </html>
     """.trimIndent()
+
+private fun orderReceiptText(
+    state: OnboardingUiState,
+    order: OrmaOrder,
+    reference: String,
+): String {
+    val width = 42
+    return buildString {
+        appendReceiptCentered(invoiceIssuerName(state), width)
+        invoiceIssuerSubLine(state)
+            .lines()
+            .filter { it.isNotBlank() }
+            .forEach { appendReceiptCentered(it, width) }
+        appendReceiptRule(width)
+        appendReceiptRow("Receipt", reference, width)
+        appendReceiptRow("Date", invoiceIssueDateLabel(order), width)
+        appendReceiptRow("Customer", order.customerName?.takeIf { it.isNotBlank() } ?: "Walk-in customer", width)
+        appendReceiptRow("Status", order.status.dashboardStatusLabel(), width)
+        appendReceiptRule(width)
+        invoiceRenderableItems(order).forEach { item ->
+            val description = item.description.ifBlank { item.productName ?: "Line item" }
+            appendLine(description.receiptLine(width))
+            appendReceiptRow(
+                "${orderQuantityText(item.quantity.toDoubleOrNull().orZero())} x ${dashboardMoney(item.unitPrice, order.currency)}",
+                dashboardMoney(item.lineTotal, order.currency),
+                width,
+            )
+        }
+        appendReceiptRule(width)
+        appendReceiptRow("Subtotal", dashboardMoney(order.subtotal, order.currency), width)
+        appendReceiptRow("Tax", dashboardMoney(order.taxTotal, order.currency), width)
+        appendReceiptRow("Paid", dashboardMoney(order.paidTotal, order.currency), width)
+        appendReceiptRow("Balance", order.balanceDueText(), width)
+        appendReceiptRule(width)
+        appendReceiptRow("TOTAL", dashboardMoney(order.total, order.currency), width)
+        appendReceiptRule(width)
+        appendReceiptCentered("Thank you", width)
+        appendLine()
+        appendLine()
+    }
+}
+
+private fun StringBuilder.appendReceiptCentered(value: String, width: Int) {
+    val line = value.receiptLine(width)
+    val padding = ((width - line.length) / 2).coerceAtLeast(0)
+    appendLine("${" ".repeat(padding)}$line")
+}
+
+private fun StringBuilder.appendReceiptRule(width: Int) {
+    appendLine("-".repeat(width))
+}
+
+private fun StringBuilder.appendReceiptRow(label: String, value: String, width: Int) {
+    val cleanLabel = label.receiptLine(width)
+    val cleanValue = value.receiptLine(width)
+    val gap = (width - cleanLabel.length - cleanValue.length).coerceAtLeast(1)
+    appendLine((cleanLabel + " ".repeat(gap) + cleanValue).receiptLine(width))
+}
+
+private fun String.receiptLine(width: Int): String =
+    replace("\r", " ")
+        .replace("\n", " ")
+        .replace("\t", " ")
+        .replace(Regex("\\s+"), " ")
+        .trim()
+        .take(width)
 
 private fun orderDocumentItemsTable(order: OrmaOrder): String {
     val rows = invoiceRenderableItems(order).mapIndexed { index, item ->
