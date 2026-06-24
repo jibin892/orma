@@ -1,0 +1,7 @@
+{
+  "rewrites": [
+    { "source": "/catalog/:workspaceId", "destination": "/" },
+    { "source": "/catalog/:workspaceId/:path*", "destination": "/" },
+    { "source": "/((?!downloads/.*).*)", "destination": "/" }
+  ]
+}

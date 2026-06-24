@@ -1,0 +1,4 @@
+interface:
+  display_name: "KMM Shadcn Component System"
+  short_description: "Build reusable shadcn-inspired Compose Multiplatform components."
+  default_prompt: "Use this skill to design and implement reusable KMM/Compose Multiplatform components with shadcn-inspired composition, atomic structure, responsive behavior, accessibility, theme awareness, and documentation."

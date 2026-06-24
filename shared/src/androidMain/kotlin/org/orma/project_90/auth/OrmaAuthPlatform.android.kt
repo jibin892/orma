@@ -33,6 +33,12 @@ actual suspend fun ormaPostJsonAuthorized(
     bearerToken: String,
 ): OrmaHttpResponse = postJson(url = url, body = body, bearerToken = bearerToken)
 
+actual suspend fun ormaPutJsonAuthorized(
+    url: String,
+    body: String,
+    bearerToken: String,
+): OrmaHttpResponse = putJson(url = url, body = body, bearerToken = bearerToken)
+
 actual suspend fun ormaGetAuthorized(
     url: String,
     bearerToken: String,
@@ -97,6 +103,19 @@ private suspend fun postJson(
     body = body,
     contentType = "application/json",
     bearerToken = bearerToken,
+    method = "POST",
+)
+
+private suspend fun putJson(
+    url: String,
+    body: String,
+    bearerToken: String?,
+): OrmaHttpResponse = postBody(
+    url = url,
+    body = body,
+    contentType = "application/json",
+    bearerToken = bearerToken,
+    method = "PUT",
 )
 
 private suspend fun postBody(
@@ -104,9 +123,10 @@ private suspend fun postBody(
     body: String,
     contentType: String,
     bearerToken: String?,
+    method: String = "POST",
 ): OrmaHttpResponse = withContext(Dispatchers.IO) {
     val connection = (URL(url).openConnection() as HttpURLConnection).apply {
-        requestMethod = "POST"
+        requestMethod = method
         connectTimeout = 15_000
         readTimeout = 15_000
         doOutput = true

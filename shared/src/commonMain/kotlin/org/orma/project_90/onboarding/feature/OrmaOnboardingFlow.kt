@@ -16,16 +16,26 @@ import org.orma.project_90.backend.OrmaBackendResult
 import org.orma.project_90.backend.OrmaGstinLookup
 import org.orma.project_90.backend.OrmaBackendSession
 import org.orma.project_90.backend.OrmaCustomerDraft
+import org.orma.project_90.backend.OrmaDashboardFilters
+import org.orma.project_90.backend.OrmaMetaConnectionDraft
+import org.orma.project_90.backend.OrmaOrder
 import org.orma.project_90.backend.OrmaOrderDraft
+import org.orma.project_90.backend.OrmaPagedList
+import org.orma.project_90.backend.OrmaPrinterDraft
 import org.orma.project_90.backend.OrmaProductDraft
+import org.orma.project_90.backend.OrmaProductCategoryDraft
+import org.orma.project_90.backend.OrmaProductOfferDraft
+import org.orma.project_90.backend.OrmaProductImportResult
 import org.orma.project_90.backend.OrmaStockAdjustmentDraft
 import org.orma.project_90.backend.OrmaSupplierDraft
+import org.orma.project_90.backend.OrmaWorkspacePaymentMethodDraft
 import org.orma.project_90.backend.createOrmaBackendClient
 import org.orma.project_90.auth.OrmaAuthProvider
 import org.orma.project_90.auth.OrmaAuthResult
 import org.orma.project_90.auth.createOrmaAuthGateway
 import org.orma.project_90.designsystem.OrmaAdaptiveSurface
 import org.orma.project_90.designsystem.OrmaWindowClass
+import org.orma.project_90.files.saveOrmaCsvFile
 import org.orma.project_90.media.OrmaLogoPickerResult
 import org.orma.project_90.media.OrmaPickedImage
 import org.orma.project_90.media.rememberOrmaBusinessLogoPicker
@@ -36,17 +46,20 @@ import org.orma.project_90.onboarding.AuthProvider
 import org.orma.project_90.onboarding.BusinessSetupDraft
 import org.orma.project_90.onboarding.BusinessSetupStep
 import org.orma.project_90.onboarding.DashboardDataState
+import org.orma.project_90.onboarding.DashboardPageTarget
 import org.orma.project_90.onboarding.OrmaAuthFeedbackDialog
+import org.orma.project_90.onboarding.OrmaSessionRestoreScreen
 import org.orma.project_90.onboarding.OnboardingActions
 import org.orma.project_90.onboarding.OnboardingStep
 import org.orma.project_90.onboarding.OnboardingUiState
-import org.orma.project_90.onboarding.TeamInviteContactType
 import org.orma.project_90.onboarding.isGstinNumberComplete
 import org.orma.project_90.onboarding.isOtpValid
 import org.orma.project_90.onboarding.normalizeGstinNumber
 import org.orma.project_90.onboarding.desktop.OrmaOnboardingDesktopUi
 import org.orma.project_90.onboarding.mobile.OrmaOnboardingMobileUi
 import org.orma.project_90.notifications.requestOrmaNotificationPermission
+import org.orma.project_90.notifications.currentOrmaNotificationDeviceToken
+import org.orma.project_90.notifications.OrmaNotificationTokenException
 
 @Composable
 fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
@@ -86,14 +99,9 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
         authenticatedState: OnboardingUiState,
         backendSession: OrmaBackendSession,
     ): OnboardingUiState {
-        val resolvedPath = when (backendSession.accessPath) {
-            "team_member" -> AccessPath.TeamMember
-            else -> AccessPath.BusinessOwner
-        }
-        val pendingInvite = backendSession.pendingInvite
-        val workspace = backendSession.workspace ?: pendingInvite?.workspace
+        val resolvedPath = backendSession.resolvedAccessPath()
+        val workspace = backendSession.workspace
         val profileName = authenticatedState.teamProfileName
-            .ifBlank { pendingInvite?.inviteeName.orEmpty() }
             .ifBlank { backendSession.user.displayName.orEmpty() }
             .ifBlank {
                 authenticatedState.identifier
@@ -108,14 +116,10 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
             workspaceLegalName = workspace?.legalName.orEmpty(),
             workspaceLogoFileName = workspace?.logoFileName.orEmpty(),
             workspaceLogoUrl = workspace?.logoUrl.orEmpty(),
+            workspaceCoverFileName = workspace?.coverFileName.orEmpty(),
+            workspaceCoverUrl = workspace?.coverUrl.orEmpty(),
             notificationsEnabled = backendSession.user.notificationsEnabled,
-            teamInviteCode = pendingInvite?.code
-                ?: workspace?.inviteCode
-                ?: if (resolvedPath == AccessPath.BusinessOwner) "" else authenticatedState.teamInviteCode,
             teamProfileName = if (resolvedPath == AccessPath.TeamMember) profileName else "",
-            pendingInviteEmail = pendingInvite?.inviteeEmail.orEmpty(),
-            pendingInvitePhoneNumber = pendingInvite?.inviteePhoneNumber.orEmpty(),
-            pendingInviteRole = pendingInvite?.role.orEmpty(),
             inviteLoading = false,
             inviteStatusMessage = null,
             inviteErrorMessage = null,
@@ -142,6 +146,8 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
     ) {
         val visibleState = if (
             state.step == OnboardingStep.Authentication &&
+            state.authIdToken.isBlank() &&
+            state.authUserId.isBlank() &&
             (state.identifierType != AuthIdentifierType.Phone || state.authProvider != AuthProvider.PhoneOtp)
         ) {
             state.copy(
@@ -163,6 +169,7 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
             authErrorMessage = message,
             authErrorCode = code,
             logoUploadLoading = false,
+            coverUploadLoading = false,
             gstinLookupLoading = false,
             inviteLoading = false,
         )
@@ -361,6 +368,58 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
         }
     }
 
+    fun uploadBusinessCover(image: OrmaPickedImage) {
+        val snapshot = state
+        if (snapshot.coverUploadLoading) return
+        if (image.sizeBytes > MaxLogoUploadBytes) {
+            applyBackendFailure(
+                title = "Cover photo too large",
+                message = "Choose a PNG, JPG, or WebP image up to 5 MB.",
+                code = "COVER_TOO_LARGE",
+            )
+            return
+        }
+        val idToken = backendTokenOrError(snapshot) ?: return
+        state = snapshot.copy(
+            coverUploadLoading = true,
+            authStatusMessage = null,
+            authErrorTitle = null,
+            authErrorMessage = null,
+            authErrorCode = null,
+        )
+        scope.launch {
+            when (val result = backendClient.uploadBusinessCover(idToken, image)) {
+                is OrmaBackendResult.Success -> {
+                    val storagePath = result.value.storagePath.ifBlank { image.fileName }
+                    state = state.copy(
+                        coverUploadLoading = false,
+                        workspaceCoverFileName = storagePath,
+                        workspaceCoverUrl = result.value.downloadUrl.orEmpty(),
+                        authStatusMessage = "Cover photo uploaded.",
+                        authErrorTitle = null,
+                        authErrorMessage = null,
+                        authErrorCode = null,
+                    )
+                }
+                is OrmaBackendResult.Failure -> applyBackendFailure(result.title, result.message, result.code)
+            }
+        }
+    }
+
+    fun handleCoverPickerResult(result: OrmaLogoPickerResult) {
+        when (result) {
+            OrmaLogoPickerResult.Cancelled -> {
+                state = state.copy(coverUploadLoading = false)
+            }
+            is OrmaLogoPickerResult.Failure -> applyBackendFailure(
+                title = result.title,
+                message = result.message,
+                code = result.code,
+            )
+            is OrmaLogoPickerResult.Success -> uploadBusinessCover(result.image)
+        }
+    }
+
     fun BusinessSetupDraft.withGstinLookup(lookup: OrmaGstinLookup): BusinessSetupDraft =
         copy(
             taxNumber = lookup.gstin.ifBlank { taxNumber },
@@ -446,6 +505,76 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
         }
     }
 
+    fun lookupInvoiceGstin(input: String) {
+        val gstin = normalizeGstinNumber(input)
+        val snapshot = state
+        if (!isGstinNumberComplete(gstin)) {
+            state = snapshot.copy(
+                dashboard = snapshot.dashboard.copy(
+                    invoiceGstinLookupLoading = false,
+                    invoiceGstinLookupNumber = gstin,
+                    invoiceGstinLookupStatusMessage = null,
+                    invoiceGstinLookupErrorMessage = if (gstin.isBlank()) {
+                        null
+                    } else {
+                        "Enter a valid 15-character GSTIN."
+                    },
+                    invoiceGstinLookup = null,
+                ),
+            )
+            return
+        }
+        if (snapshot.dashboard.invoiceGstinLookupLoading && snapshot.dashboard.invoiceGstinLookupNumber == gstin) return
+        if (snapshot.dashboard.invoiceGstinLookupStatusMessage != null && snapshot.dashboard.invoiceGstinLookupNumber == gstin) return
+        val idToken = backendTokenOrError(snapshot) ?: return
+        state = snapshot.copy(
+            dashboard = snapshot.dashboard.copy(
+                invoiceGstinLookupLoading = true,
+                invoiceGstinLookupNumber = gstin,
+                invoiceGstinLookupStatusMessage = null,
+                invoiceGstinLookupErrorMessage = null,
+                invoiceGstinLookup = null,
+            ),
+            authErrorTitle = null,
+            authErrorMessage = null,
+            authErrorCode = null,
+        )
+        scope.launch {
+            when (val result = backendClient.lookupGstin(idToken, gstin)) {
+                is OrmaBackendResult.Success -> {
+                    if (state.dashboard.invoiceGstinLookupNumber != gstin) return@launch
+                    val lookup = result.value
+                    val statusMessage = if (lookup.found) {
+                        lookup.message.ifBlank { "GSTIN verified." }
+                    } else {
+                        lookup.message.ifBlank { "GSTIN was not found." }
+                    }
+                    state = state.copy(
+                        dashboard = state.dashboard.copy(
+                            invoiceGstinLookupLoading = false,
+                            invoiceGstinLookupNumber = lookup.gstin.ifBlank { gstin },
+                            invoiceGstinLookupStatusMessage = if (lookup.found) statusMessage else null,
+                            invoiceGstinLookupErrorMessage = if (lookup.found) null else statusMessage,
+                            invoiceGstinLookup = lookup.takeIf { it.found },
+                        ),
+                    )
+                }
+                is OrmaBackendResult.Failure -> {
+                    if (state.dashboard.invoiceGstinLookupNumber != gstin) return@launch
+                    state = state.copy(
+                        dashboard = state.dashboard.copy(
+                            invoiceGstinLookupLoading = false,
+                            invoiceGstinLookupNumber = gstin,
+                            invoiceGstinLookupStatusMessage = null,
+                            invoiceGstinLookupErrorMessage = result.message,
+                            invoiceGstinLookup = null,
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
     fun saveBusinessSetup() {
         val snapshot = state
         if (snapshot.onboardingLoading) return
@@ -470,142 +599,10 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
 
     fun finishTeamAccess() {
         val snapshot = state
-        if (snapshot.teamInviteCode.isBlank() || snapshot.onboardingLoading) return
-        val profileName = snapshot.teamProfileName.trim()
-        if (profileName.length < 2) {
-            state = snapshot.copy(
-                inviteStatusMessage = null,
-                inviteErrorMessage = "Enter your name before joining this workspace.",
-            )
-            return
-        }
-        val idToken = backendTokenOrError(snapshot) ?: return
         state = snapshot.copy(
-            onboardingLoading = true,
             inviteStatusMessage = null,
-            inviteErrorMessage = null,
-            authErrorTitle = null,
-            authErrorMessage = null,
-            authErrorCode = null,
+            inviteErrorMessage = "Team invite setup is no longer available.",
         )
-        scope.launch {
-            when (
-                val result = backendClient.joinTeamInvite(
-                    idToken = idToken,
-                    code = snapshot.teamInviteCode,
-                    displayName = profileName,
-                )
-            ) {
-                is OrmaBackendResult.Success -> {
-                    state = applyBackendSessionMutation(state, result.value, OnboardingStep.Notification)
-                }
-                is OrmaBackendResult.Failure -> applyBackendFailure(result.title, result.message, result.code)
-            }
-        }
-    }
-
-    fun refreshTeamInvite() {
-        val snapshot = state
-        if (snapshot.inviteLoading || snapshot.accessPath != AccessPath.BusinessOwner) return
-        val idToken = backendTokenOrError(snapshot) ?: return
-        state = snapshot.copy(
-            inviteLoading = true,
-            inviteStatusMessage = null,
-            inviteErrorMessage = null,
-            authErrorTitle = null,
-            authErrorMessage = null,
-            authErrorCode = null,
-        )
-        scope.launch {
-            when (val result = backendClient.getActiveTeamInvite(idToken)) {
-                is OrmaBackendResult.Success -> {
-                    val invite = result.value
-                    state = state.copy(
-                        inviteLoading = false,
-                        inviteStatusMessage = "Invite code ready.",
-                        inviteErrorMessage = null,
-                        teamInviteCode = invite.code.ifBlank { invite.workspace.inviteCode.orEmpty() },
-                        workspaceId = invite.workspace.id.ifBlank { state.workspaceId },
-                        workspaceName = invite.workspace.businessName.ifBlank { state.workspaceName },
-                        workspaceLegalName = invite.workspace.legalName.ifBlank { state.workspaceLegalName },
-                        workspaceLogoFileName = invite.workspace.logoFileName.orEmpty().ifBlank { state.workspaceLogoFileName },
-                        workspaceLogoUrl = invite.workspace.logoUrl.orEmpty().ifBlank { state.workspaceLogoUrl },
-                    )
-                }
-                is OrmaBackendResult.Failure -> {
-                    state = state.copy(
-                        inviteLoading = false,
-                        inviteStatusMessage = null,
-                        inviteErrorMessage = result.message,
-                    )
-                }
-            }
-        }
-    }
-
-    fun createTeamInvite() {
-        val snapshot = state
-        if (snapshot.inviteLoading || snapshot.accessPath != AccessPath.BusinessOwner) return
-        val inviteeName = snapshot.teamInviteName.trim()
-        val contact = snapshot.teamInviteContact.trim()
-        if (inviteeName.length < 2) {
-            state = snapshot.copy(
-                inviteStatusMessage = null,
-                inviteErrorMessage = "Enter the team member name.",
-            )
-            return
-        }
-        if (contact.isBlank()) {
-            state = snapshot.copy(
-                inviteStatusMessage = null,
-                inviteErrorMessage = "Enter a phone number or email for this team member.",
-            )
-            return
-        }
-        val email = if (snapshot.teamInviteContactType == TeamInviteContactType.Email) contact else null
-        val phoneNumber = if (snapshot.teamInviteContactType == TeamInviteContactType.Phone) contact else null
-        val idToken = backendTokenOrError(snapshot) ?: return
-        state = snapshot.copy(
-            inviteLoading = true,
-            inviteStatusMessage = null,
-            inviteErrorMessage = null,
-            authErrorTitle = null,
-            authErrorMessage = null,
-            authErrorCode = null,
-        )
-        scope.launch {
-            when (
-                val result = backendClient.createTeamInvite(
-                    idToken = idToken,
-                    name = inviteeName,
-                    email = email,
-                    phoneNumber = phoneNumber,
-                    role = snapshot.teamInviteRole,
-                )
-            ) {
-                is OrmaBackendResult.Success -> {
-                    val invite = result.value
-                    state = state.copy(
-                        inviteLoading = false,
-                        inviteStatusMessage = "Invite created for ${invite.inviteeName ?: inviteeName}.",
-                        inviteErrorMessage = null,
-                        teamInviteCode = invite.code.ifBlank { invite.workspace.inviteCode.orEmpty() },
-                        workspaceId = invite.workspace.id.ifBlank { state.workspaceId },
-                        workspaceName = invite.workspace.businessName.ifBlank { state.workspaceName },
-                        workspaceLegalName = invite.workspace.legalName.ifBlank { state.workspaceLegalName },
-                        workspaceLogoFileName = invite.workspace.logoFileName.orEmpty().ifBlank { state.workspaceLogoFileName },
-                        workspaceLogoUrl = invite.workspace.logoUrl.orEmpty().ifBlank { state.workspaceLogoUrl },
-                    )
-                }
-                is OrmaBackendResult.Failure -> {
-                    state = state.copy(
-                        inviteLoading = false,
-                        inviteStatusMessage = null,
-                        inviteErrorMessage = result.message,
-                    )
-                }
-            }
-        }
     }
 
     fun saveNotificationDecision(enabled: Boolean) {
@@ -620,6 +617,7 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
             authErrorCode = null,
         )
         scope.launch {
+            var notificationDeviceToken: org.orma.project_90.notifications.OrmaNotificationDeviceToken? = null
             val requestedEnabled = if (enabled) {
                 val permission = requestOrmaNotificationPermission()
                 if (!permission.enabled) {
@@ -632,12 +630,32 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
                     )
                     return@launch
                 }
+                val tokenResult = runCatching { currentOrmaNotificationDeviceToken() }
+                notificationDeviceToken = tokenResult.getOrNull()
+                if (notificationDeviceToken == null) {
+                    val tokenError = tokenResult.exceptionOrNull() as? OrmaNotificationTokenException
+                    state = state.copy(
+                        notificationsEnabled = false,
+                        onboardingLoading = false,
+                        authErrorTitle = tokenError?.title ?: "Notifications are not connected",
+                        authErrorMessage = tokenError?.message
+                            ?: "ORMA could not create a notification token for this device. Try again after checking browser or device notification settings.",
+                        authErrorCode = tokenError?.code ?: "NOTIFICATION_DEVICE_TOKEN_MISSING",
+                    )
+                    return@launch
+                }
                 true
             } else {
                 false
             }
 
-            when (val result = backendClient.updateNotificationPreference(idToken, requestedEnabled)) {
+            when (val result = backendClient.updateNotificationPreference(
+                idToken = idToken,
+                enabled = requestedEnabled,
+                deviceToken = notificationDeviceToken?.token,
+                platform = notificationDeviceToken?.platform,
+                deviceName = notificationDeviceToken?.deviceName,
+            )) {
                 is OrmaBackendResult.Success -> {
                     state = routeAfterBackendSession(
                         state.copy(
@@ -673,54 +691,140 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
         )
     }
 
+    suspend fun freshDashboardTokenOrError(snapshot: OnboardingUiState): String? {
+        return when (val result = authGateway.refreshSession()) {
+            is OrmaAuthResult.Success -> {
+                val session = result.session
+                state = state.copy(
+                    authUserId = session.uid,
+                    authIdToken = session.idToken,
+                    authProvider = session.provider.toOnboardingProvider(),
+                )
+                session.idToken
+            }
+            is OrmaAuthResult.Failure -> {
+                applyDashboardFailure(
+                    title = result.title,
+                    message = result.message,
+                    code = result.code,
+                )
+                null
+            }
+            is OrmaAuthResult.OtpSent -> {
+                applyDashboardFailure(
+                    title = "Session check failed",
+                    message = "Sign in again so ORMA can continue securely.",
+                    code = "SESSION_REFRESH_INTERRUPTED",
+                )
+                null
+            }
+            null -> {
+                val token = snapshot.authIdToken.takeIf(String::isNotBlank)
+                if (token == null) {
+                    applyDashboardFailure(
+                        title = "Session expired",
+                        message = "Sign in again so ORMA can reopen your workspace securely.",
+                        code = "MISSING_ID_TOKEN",
+                    )
+                }
+                token
+            }
+        }
+    }
+
+    suspend fun listOrdersWithPageRecovery(
+        idToken: String,
+        filters: OrmaDashboardFilters,
+        page: Int,
+    ): OrmaBackendResult<OrmaPagedList<OrmaOrder>> = when (val result = backendClient.listOrders(idToken, filters.copy(page = page.coerceAtLeast(1)))) {
+        is OrmaBackendResult.Success -> {
+            if (page > 1 && result.value.items.isEmpty()) {
+                backendClient.listOrders(idToken, filters.copy(page = 1))
+            } else {
+                result
+            }
+        }
+        is OrmaBackendResult.Failure -> result
+    }
+
     fun refreshDashboard(statusMessage: String? = null) {
         val snapshot = state
         if (snapshot.step != OnboardingStep.Dashboard) return
         if (snapshot.dashboard.loading) return
-        val idToken = backendTokenOrError(snapshot) ?: return
         state = snapshot.copy(
             dashboard = snapshot.dashboard.copy(
                 loading = true,
                 errorTitle = null,
                 errorMessage = null,
                 statusMessage = statusMessage,
+                customerOrderHistory = emptyMap(),
+                customerOrderHistoryPagination = emptyMap(),
+                customerOrderHistoryLoading = emptySet(),
+                customerOrderHistoryErrors = emptyMap(),
             ),
         )
         scope.launch {
-            val summary = when (val result = backendClient.getDashboardSummary(idToken)) {
+            val idToken = freshDashboardTokenOrError(snapshot) ?: return@launch
+            val rawFilters = snapshot.dashboard.filters
+            val summary = when (val result = backendClient.getDashboardSummary(idToken, rawFilters)) {
                 is OrmaBackendResult.Success -> result.value
                 is OrmaBackendResult.Failure -> {
                     applyDashboardFailure(result.title, result.message, result.code)
                     return@launch
                 }
             }
-            val customers = when (val result = backendClient.listCustomers(idToken)) {
+            val filters = rawFilters.forBusinessMode(summary.businessMode.ifBlank { snapshot.draft.businessMode })
+            val customers = when (val result = backendClient.listCustomers(idToken, filters.copy(page = snapshot.dashboard.customerPagination.page))) {
                 is OrmaBackendResult.Success -> result.value
                 is OrmaBackendResult.Failure -> {
                     applyDashboardFailure(result.title, result.message, result.code)
                     return@launch
                 }
             }
-            val suppliers = when (val result = backendClient.listSuppliers(idToken)) {
+            val suppliers = when (val result = backendClient.listSuppliers(idToken, filters.copy(page = snapshot.dashboard.supplierPagination.page))) {
                 is OrmaBackendResult.Success -> result.value
                 is OrmaBackendResult.Failure -> {
                     applyDashboardFailure(result.title, result.message, result.code)
                     return@launch
                 }
             }
-            val products = when (val result = backendClient.listProducts(idToken)) {
+            val categories = when (val result = backendClient.listProductCategories(idToken, filters.copy(page = snapshot.dashboard.categoryPagination.page))) {
+                is OrmaBackendResult.Success -> result.value
+                is OrmaBackendResult.Failure -> null
+            }
+            val offers = when (val result = backendClient.listProductOffers(idToken, filters.copy(page = snapshot.dashboard.offerPagination.page))) {
+                is OrmaBackendResult.Success -> result.value
+                is OrmaBackendResult.Failure -> null
+            }
+            val products = when (val result = backendClient.listProducts(idToken, filters.copy(page = snapshot.dashboard.productPagination.page))) {
                 is OrmaBackendResult.Success -> result.value
                 is OrmaBackendResult.Failure -> {
                     applyDashboardFailure(result.title, result.message, result.code)
                     return@launch
                 }
             }
-            val orders = when (val result = backendClient.listOrders(idToken)) {
+            val orders = when (val result = listOrdersWithPageRecovery(idToken, filters, snapshot.dashboard.orderPagination.page)) {
                 is OrmaBackendResult.Success -> result.value
                 is OrmaBackendResult.Failure -> {
                     applyDashboardFailure(result.title, result.message, result.code)
                     return@launch
                 }
+            }
+            val printers = when (val result = backendClient.listPrinters(idToken, filters.copy(page = snapshot.dashboard.printerPagination.page))) {
+                is OrmaBackendResult.Success -> result.value
+                is OrmaBackendResult.Failure -> null
+            }
+            val paymentMethods = when (val result = backendClient.listPaymentMethods(idToken, filters.copy(page = snapshot.dashboard.paymentMethodPagination.page))) {
+                is OrmaBackendResult.Success -> result.value
+                is OrmaBackendResult.Failure -> null
+            }
+            val teamOverview = when (val result = backendClient.getTeamOverview(idToken)) {
+                is OrmaBackendResult.Success -> result.value
+                is OrmaBackendResult.Failure -> null
+            }
+            val metaConnection = when (val result = backendClient.getMetaConnectionStatus(idToken)) {
+                is OrmaBackendResult.Success -> result.value
+                is OrmaBackendResult.Failure -> null
             }
             state = state.copy(
                 dashboard = state.dashboard.copy(
@@ -731,13 +835,110 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
                     errorMessage = null,
                     statusMessage = statusMessage,
                     summary = summary,
-                    customers = customers,
-                    suppliers = suppliers,
-                    products = products,
-                    orders = orders,
+                    customers = customers.items,
+                    suppliers = suppliers.items,
+                    categories = categories?.items.orEmpty(),
+                    offers = offers?.items.orEmpty(),
+                    products = products.items,
+                    orders = orders.items,
+                    customerPagination = customers.pagination,
+                    supplierPagination = suppliers.pagination,
+                    categoryPagination = categories?.pagination ?: state.dashboard.categoryPagination.copy(page = 1),
+                    offerPagination = offers?.pagination ?: state.dashboard.offerPagination.copy(page = 1),
+                    productPagination = products.pagination,
+                    orderPagination = orders.pagination,
+                    printerPagination = printers?.pagination ?: state.dashboard.printerPagination.copy(page = 1),
+                    paymentMethodPagination = paymentMethods?.pagination ?: state.dashboard.paymentMethodPagination.copy(page = 1),
+                    printers = printers?.items.orEmpty(),
+                    teamMembers = teamOverview?.members.orEmpty(),
+                    paymentMethods = paymentMethods?.items.orEmpty(),
+                    metaConnection = metaConnection,
+                    metaActionLoading = false,
+                    filters = filters,
                 ),
             )
         }
+    }
+
+    fun resetDashboardOrderPage() {
+        state = state.copy(
+            dashboard = state.dashboard.copy(
+                orderPagination = state.dashboard.orderPagination.copy(page = 1),
+            ),
+        )
+    }
+
+    fun loadDashboardCustomerOrders(customerId: String) {
+        val normalizedCustomerId = customerId.trim()
+        if (normalizedCustomerId.isBlank()) return
+        val snapshot = state
+        if (
+            snapshot.dashboard.customerOrderHistory.containsKey(normalizedCustomerId) ||
+            normalizedCustomerId in snapshot.dashboard.customerOrderHistoryLoading
+        ) {
+            return
+        }
+        state = state.copy(
+            dashboard = state.dashboard.copy(
+                customerOrderHistoryLoading = state.dashboard.customerOrderHistoryLoading + normalizedCustomerId,
+                customerOrderHistoryErrors = state.dashboard.customerOrderHistoryErrors - normalizedCustomerId,
+            ),
+        )
+        scope.launch {
+            val idToken = freshDashboardTokenOrError(snapshot)
+            if (idToken == null) {
+                state = state.copy(
+                    dashboard = state.dashboard.copy(
+                        customerOrderHistoryLoading = state.dashboard.customerOrderHistoryLoading - normalizedCustomerId,
+                        customerOrderHistoryErrors = state.dashboard.customerOrderHistoryErrors +
+                            (normalizedCustomerId to "Sign in again to load this customer's booking history."),
+                    ),
+                )
+                return@launch
+            }
+            when (val result = backendClient.listCustomerOrders(idToken, normalizedCustomerId)) {
+                is OrmaBackendResult.Success -> {
+                    state = state.copy(
+                        dashboard = state.dashboard.copy(
+                            customerOrderHistory = state.dashboard.customerOrderHistory + (normalizedCustomerId to result.value.items),
+                            customerOrderHistoryPagination = state.dashboard.customerOrderHistoryPagination +
+                                (normalizedCustomerId to result.value.pagination),
+                            customerOrderHistoryLoading = state.dashboard.customerOrderHistoryLoading - normalizedCustomerId,
+                            customerOrderHistoryErrors = state.dashboard.customerOrderHistoryErrors - normalizedCustomerId,
+                        ),
+                    )
+                }
+                is OrmaBackendResult.Failure -> {
+                    state = state.copy(
+                        dashboard = state.dashboard.copy(
+                            customerOrderHistoryLoading = state.dashboard.customerOrderHistoryLoading - normalizedCustomerId,
+                            customerOrderHistoryErrors = state.dashboard.customerOrderHistoryErrors +
+                                (normalizedCustomerId to "Could not load this customer's booking history."),
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    fun changeDashboardPage(target: DashboardPageTarget, page: Int) {
+        val nextPage = page.coerceAtLeast(1)
+        val snapshot = state
+        if (snapshot.step != OnboardingStep.Dashboard || snapshot.dashboard.loading) return
+        state = snapshot.copy(
+            dashboard = when (target) {
+                DashboardPageTarget.Orders -> snapshot.dashboard.copy(
+                    orderPagination = snapshot.dashboard.orderPagination.copy(page = nextPage),
+                )
+                DashboardPageTarget.Customers -> snapshot.dashboard.copy(
+                    customerPagination = snapshot.dashboard.customerPagination.copy(page = nextPage),
+                )
+                DashboardPageTarget.Products -> snapshot.dashboard.copy(
+                    productPagination = snapshot.dashboard.productPagination.copy(page = nextPage),
+                )
+            },
+        )
+        refreshDashboard()
     }
 
     fun markDashboardActionLoading() {
@@ -754,9 +955,9 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
     fun createDashboardCustomer(draft: OrmaCustomerDraft) {
         val snapshot = state
         if (snapshot.dashboard.actionLoading || draft.name.trim().length < 2) return
-        val idToken = backendTokenOrError(snapshot) ?: return
         markDashboardActionLoading()
         scope.launch {
+            val idToken = freshDashboardTokenOrError(snapshot) ?: return@launch
             when (val result = backendClient.createCustomer(idToken, draft)) {
                 is OrmaBackendResult.Success -> refreshDashboard("Customer created.")
                 is OrmaBackendResult.Failure -> applyDashboardFailure(result.title, result.message, result.code)
@@ -767,11 +968,37 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
     fun createDashboardSupplier(draft: OrmaSupplierDraft) {
         val snapshot = state
         if (snapshot.dashboard.actionLoading || draft.name.trim().length < 2) return
-        val idToken = backendTokenOrError(snapshot) ?: return
         markDashboardActionLoading()
         scope.launch {
+            val idToken = freshDashboardTokenOrError(snapshot) ?: return@launch
             when (val result = backendClient.createSupplier(idToken, draft)) {
                 is OrmaBackendResult.Success -> refreshDashboard("Supplier created.")
+                is OrmaBackendResult.Failure -> applyDashboardFailure(result.title, result.message, result.code)
+            }
+        }
+    }
+
+    fun createDashboardProductCategory(draft: OrmaProductCategoryDraft) {
+        val snapshot = state
+        if (snapshot.dashboard.actionLoading || draft.name.trim().length < 2) return
+        markDashboardActionLoading()
+        scope.launch {
+            val idToken = freshDashboardTokenOrError(snapshot) ?: return@launch
+            when (val result = backendClient.createProductCategory(idToken, draft)) {
+                is OrmaBackendResult.Success -> refreshDashboard("Category created.")
+                is OrmaBackendResult.Failure -> applyDashboardFailure(result.title, result.message, result.code)
+            }
+        }
+    }
+
+    fun createDashboardProductOffer(draft: OrmaProductOfferDraft) {
+        val snapshot = state
+        if (snapshot.dashboard.actionLoading || draft.name.trim().length < 2) return
+        markDashboardActionLoading()
+        scope.launch {
+            val idToken = freshDashboardTokenOrError(snapshot) ?: return@launch
+            when (val result = backendClient.createProductOffer(idToken, draft)) {
+                is OrmaBackendResult.Success -> refreshDashboard("Offer created.")
                 is OrmaBackendResult.Failure -> applyDashboardFailure(result.title, result.message, result.code)
             }
         }
@@ -780,22 +1007,221 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
     fun createDashboardProduct(draft: OrmaProductDraft) {
         val snapshot = state
         if (snapshot.dashboard.actionLoading || draft.name.trim().length < 2) return
-        val idToken = backendTokenOrError(snapshot) ?: return
         markDashboardActionLoading()
         scope.launch {
+            val idToken = freshDashboardTokenOrError(snapshot) ?: return@launch
             when (val result = backendClient.createProduct(idToken, draft.copy(currency = draft.currency.ifBlank { snapshot.dashboard.summary.currency }))) {
-                is OrmaBackendResult.Success -> refreshDashboard("Product created.")
+                is OrmaBackendResult.Success -> {
+                    val image = draft.image
+                    if (image != null) {
+                        when (val upload = backendClient.uploadProductImage(idToken, result.value.id, image)) {
+                            is OrmaBackendResult.Success -> refreshDashboard("Product created with image.")
+                            is OrmaBackendResult.Failure -> applyDashboardFailure(upload.title, "Product was created, but the image could not be uploaded. ${upload.message}", upload.code)
+                        }
+                    } else {
+                        refreshDashboard("Product created.")
+                    }
+                }
                 is OrmaBackendResult.Failure -> applyDashboardFailure(result.title, result.message, result.code)
             }
         }
     }
 
+    fun updateDashboardProduct(productId: String, draft: OrmaProductDraft) {
+        val snapshot = state
+        if (snapshot.dashboard.actionLoading || productId.isBlank() || draft.name.trim().length < 2) return
+        markDashboardActionLoading()
+        scope.launch {
+            val idToken = freshDashboardTokenOrError(snapshot) ?: return@launch
+            when (val result = backendClient.updateProduct(idToken, productId, draft.copy(currency = draft.currency.ifBlank { snapshot.dashboard.summary.currency }))) {
+                is OrmaBackendResult.Success -> {
+                    val image = draft.image
+                    if (image != null) {
+                        when (val upload = backendClient.uploadProductImage(idToken, result.value.id, image)) {
+                            is OrmaBackendResult.Success -> refreshDashboard("${result.value.itemType.sellableItemTypeLabel()} updated with image.")
+                            is OrmaBackendResult.Failure -> applyDashboardFailure(upload.title, "${result.value.itemType.sellableItemTypeLabel()} was updated, but the image could not be uploaded. ${upload.message}", upload.code)
+                        }
+                    } else {
+                        refreshDashboard("${result.value.itemType.sellableItemTypeLabel()} updated.")
+                    }
+                }
+                is OrmaBackendResult.Failure -> applyDashboardFailure(result.title, result.message, result.code)
+            }
+        }
+    }
+
+    fun uploadDashboardProductImage(productId: String, image: OrmaPickedImage) {
+        val snapshot = state
+        if (snapshot.dashboard.actionLoading || productId.isBlank()) return
+        if (image.sizeBytes > MaxLogoUploadBytes) {
+            applyDashboardFailure(
+                title = "Image too large",
+                message = "Choose a PNG, JPG, or WebP image up to 5 MB.",
+                code = "PRODUCT_IMAGE_TOO_LARGE",
+            )
+            return
+        }
+        markDashboardActionLoading()
+        scope.launch {
+            val idToken = freshDashboardTokenOrError(snapshot) ?: return@launch
+            when (val result = backendClient.uploadProductImage(idToken, productId, image)) {
+                is OrmaBackendResult.Success -> refreshDashboard("Product image updated.")
+                is OrmaBackendResult.Failure -> applyDashboardFailure(result.title, result.message, result.code)
+            }
+        }
+    }
+
+    fun importDashboardProductsCsv(csv: String) {
+        val snapshot = state
+        if (snapshot.dashboard.actionLoading || csv.trim().isBlank()) return
+        markDashboardActionLoading()
+        scope.launch {
+            val idToken = freshDashboardTokenOrError(snapshot) ?: return@launch
+            when (
+                val result = backendClient.importProductsCsv(
+                    idToken = idToken,
+                    csv = csv,
+                )
+            ) {
+                is OrmaBackendResult.Success -> {
+                    val importMessage = result.value.dashboardImportMessage()
+                    state = state.copy(
+                        dashboard = state.dashboard.copy(
+                            productImportResult = result.value,
+                            productExport = null,
+                            statusMessage = importMessage,
+                        ),
+                    )
+                    refreshDashboard(importMessage)
+                }
+                is OrmaBackendResult.Failure -> applyDashboardFailure(result.title, result.message, result.code)
+            }
+        }
+    }
+
+    fun loadDashboardProductImportTemplate() {
+        val snapshot = state
+        if (snapshot.dashboard.actionLoading) return
+        markDashboardActionLoading()
+        scope.launch {
+            val idToken = freshDashboardTokenOrError(snapshot) ?: return@launch
+            when (val result = backendClient.getProductImportTemplate(idToken)) {
+                is OrmaBackendResult.Success -> {
+                    state = state.copy(
+                        dashboard = state.dashboard.copy(
+                            actionLoading = false,
+                            errorTitle = null,
+                            errorMessage = null,
+                            productImportTemplate = result.value,
+                            statusMessage = "Product template ready.",
+                        ),
+                    )
+                }
+                is OrmaBackendResult.Failure -> applyDashboardFailure(result.title, result.message, result.code)
+            }
+        }
+    }
+
+    fun downloadDashboardProductImportTemplate() {
+        val snapshot = state
+        if (snapshot.dashboard.actionLoading) return
+        val existingTemplate = snapshot.dashboard.productImportTemplate
+        markDashboardActionLoading()
+        scope.launch {
+            val template = existingTemplate ?: when (
+                val result = backendClient.getProductImportTemplate(
+                    freshDashboardTokenOrError(snapshot) ?: return@launch,
+                )
+            ) {
+                is OrmaBackendResult.Success -> result.value
+                is OrmaBackendResult.Failure -> {
+                    applyDashboardFailure(result.title, result.message, result.code)
+                    return@launch
+                }
+            }
+            val saveResult = saveOrmaCsvFile(template.fileName, template.csv)
+            state = state.copy(
+                dashboard = state.dashboard.copy(
+                    actionLoading = false,
+                    errorTitle = if (saveResult.saved) null else "Template download failed",
+                    errorMessage = if (saveResult.saved) null else saveResult.message,
+                    productImportTemplate = template,
+                    statusMessage = if (saveResult.saved) saveResult.message else null,
+                ),
+            )
+        }
+    }
+
+    fun exportDashboardProductsCsv() {
+        val snapshot = state
+        if (snapshot.dashboard.actionLoading) return
+        markDashboardActionLoading()
+        scope.launch {
+            val idToken = freshDashboardTokenOrError(snapshot) ?: return@launch
+            when (val result = backendClient.exportProductsCsv(idToken, snapshot.dashboard.filters)) {
+                is OrmaBackendResult.Success -> {
+                    state = state.copy(
+                        dashboard = state.dashboard.copy(
+                            actionLoading = false,
+                            errorTitle = null,
+                            errorMessage = null,
+                            productExport = result.value,
+                            productImportResult = null,
+                            statusMessage = "Export ready with ${result.value.count} products.",
+                        ),
+                    )
+                }
+                is OrmaBackendResult.Failure -> applyDashboardFailure(result.title, result.message, result.code)
+            }
+        }
+    }
+
+    fun downloadDashboardProductExport() {
+        val snapshot = state
+        if (snapshot.dashboard.actionLoading) return
+        val export = snapshot.dashboard.productExport
+        if (export == null || export.csv.isBlank()) {
+            state = snapshot.copy(
+                dashboard = snapshot.dashboard.copy(
+                    errorTitle = "Export not ready",
+                    errorMessage = "Prepare the product export first, then download the CSV.",
+                    statusMessage = null,
+                ),
+            )
+            return
+        }
+        markDashboardActionLoading()
+        scope.launch {
+            val saveResult = saveOrmaCsvFile(export.fileName, export.csv)
+            state = state.copy(
+                dashboard = state.dashboard.copy(
+                    actionLoading = false,
+                    errorTitle = if (saveResult.saved) null else "Export download failed",
+                    errorMessage = if (saveResult.saved) null else saveResult.message,
+                    statusMessage = if (saveResult.saved) saveResult.message else null,
+                ),
+            )
+        }
+    }
+
+    fun clearDashboardProductTransfer() {
+        state = state.copy(
+            dashboard = state.dashboard.copy(
+                productExport = null,
+                productImportResult = null,
+                statusMessage = null,
+                errorTitle = null,
+                errorMessage = null,
+            ),
+        )
+    }
+
     fun adjustDashboardProductStock(productId: String, draft: OrmaStockAdjustmentDraft) {
         val snapshot = state
         if (snapshot.dashboard.actionLoading || productId.isBlank() || draft.quantityDelta.trim().isBlank()) return
-        val idToken = backendTokenOrError(snapshot) ?: return
         markDashboardActionLoading()
         scope.launch {
+            val idToken = freshDashboardTokenOrError(snapshot) ?: return@launch
             when (val result = backendClient.adjustProductStock(idToken, productId, draft)) {
                 is OrmaBackendResult.Success -> refreshDashboard("Stock updated.")
                 is OrmaBackendResult.Failure -> applyDashboardFailure(result.title, result.message, result.code)
@@ -806,25 +1232,170 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
     fun createDashboardOrder(draft: OrmaOrderDraft) {
         val snapshot = state
         if (snapshot.dashboard.actionLoading || draft.items.none { it.description.isNotBlank() || it.productId.isNotBlank() }) return
-        val idToken = backendTokenOrError(snapshot) ?: return
         markDashboardActionLoading()
         scope.launch {
+            val idToken = freshDashboardTokenOrError(snapshot) ?: return@launch
             when (val result = backendClient.createOrder(idToken, draft.copy(currency = draft.currency.ifBlank { snapshot.dashboard.summary.currency }))) {
-                is OrmaBackendResult.Success -> refreshDashboard("Order created.")
+                is OrmaBackendResult.Success -> {
+                    resetDashboardOrderPage()
+                    refreshDashboard("Order created.")
+                }
                 is OrmaBackendResult.Failure -> applyDashboardFailure(result.title, result.message, result.code)
             }
         }
     }
 
-    fun updateDashboardOrderStatus(orderId: String, status: String) {
+    fun updateDashboardOrder(orderId: String, draft: OrmaOrderDraft) {
         val snapshot = state
-        if (snapshot.dashboard.actionLoading || orderId.isBlank() || status.isBlank()) return
-        val idToken = backendTokenOrError(snapshot) ?: return
+        if (
+            snapshot.dashboard.actionLoading ||
+            orderId.isBlank() ||
+            draft.items.none { it.description.isNotBlank() || it.productId.isNotBlank() }
+        ) {
+            return
+        }
         markDashboardActionLoading()
         scope.launch {
-            when (val result = backendClient.updateOrderStatus(idToken, orderId, status)) {
-                is OrmaBackendResult.Success -> refreshDashboard("Order updated.")
+            val idToken = freshDashboardTokenOrError(snapshot) ?: return@launch
+            when (val result = backendClient.updateOrder(idToken, orderId, draft.copy(currency = draft.currency.ifBlank { snapshot.dashboard.summary.currency }))) {
+                is OrmaBackendResult.Success -> {
+                    resetDashboardOrderPage()
+                    refreshDashboard("Booking details saved.")
+                }
                 is OrmaBackendResult.Failure -> applyDashboardFailure(result.title, result.message, result.code)
+            }
+        }
+    }
+
+    fun updateDashboardOrderStatus(orderId: String, status: String, paidTotal: String? = null) {
+        val snapshot = state
+        if (snapshot.dashboard.actionLoading || orderId.isBlank() || status.isBlank()) return
+        markDashboardActionLoading()
+        scope.launch {
+            val idToken = freshDashboardTokenOrError(snapshot) ?: return@launch
+            when (val result = backendClient.updateOrderStatus(idToken, orderId, status, paidTotal)) {
+                is OrmaBackendResult.Success -> {
+                    resetDashboardOrderPage()
+                    refreshDashboard("Order updated.")
+                }
+                is OrmaBackendResult.Failure -> applyDashboardFailure(result.title, result.message, result.code)
+            }
+        }
+    }
+
+    fun createDashboardPrinter(draft: OrmaPrinterDraft) {
+        val snapshot = state
+        if (snapshot.dashboard.actionLoading || draft.name.trim().length < 2) return
+        markDashboardActionLoading()
+        scope.launch {
+            val idToken = freshDashboardTokenOrError(snapshot) ?: return@launch
+            when (val result = backendClient.createPrinter(idToken, draft)) {
+                is OrmaBackendResult.Success -> refreshDashboard("Printer saved.")
+                is OrmaBackendResult.Failure -> applyDashboardFailure(result.title, result.message, result.code)
+            }
+        }
+    }
+
+    fun createDashboardPaymentMethod(draft: OrmaWorkspacePaymentMethodDraft) {
+        val snapshot = state
+        if (snapshot.dashboard.actionLoading || draft.label.trim().length < 2 || !draft.upiId.contains("@")) return
+        markDashboardActionLoading()
+        scope.launch {
+            val idToken = freshDashboardTokenOrError(snapshot) ?: return@launch
+            when (val result = backendClient.createPaymentMethod(idToken, draft)) {
+                is OrmaBackendResult.Success -> refreshDashboard("UPI saved.")
+                is OrmaBackendResult.Failure -> applyDashboardFailure(result.title, result.message, result.code)
+            }
+        }
+    }
+
+    fun syncDashboardMetaCatalog() {
+        val snapshot = state
+        if (snapshot.dashboard.actionLoading || snapshot.dashboard.metaActionLoading) return
+        state = snapshot.copy(
+            dashboard = snapshot.dashboard.copy(
+                actionLoading = true,
+                metaActionLoading = true,
+                errorTitle = null,
+                errorMessage = null,
+                statusMessage = null,
+            ),
+        )
+        scope.launch {
+            val idToken = freshDashboardTokenOrError(snapshot) ?: return@launch
+            when (val result = backendClient.syncMetaCatalog(idToken)) {
+                is OrmaBackendResult.Success -> {
+                    val status = when (val statusResult = backendClient.getMetaConnectionStatus(idToken)) {
+                        is OrmaBackendResult.Success -> statusResult.value
+                        is OrmaBackendResult.Failure -> state.dashboard.metaConnection
+                    }
+                    state = state.copy(
+                        dashboard = state.dashboard.copy(
+                            actionLoading = false,
+                            metaActionLoading = false,
+                            errorTitle = null,
+                            errorMessage = null,
+                            statusMessage = result.value.message,
+                            metaConnection = status,
+                        ),
+                    )
+                }
+                is OrmaBackendResult.Failure -> {
+                    state = state.copy(
+                        dashboard = state.dashboard.copy(
+                            actionLoading = false,
+                            metaActionLoading = false,
+                            errorTitle = result.title,
+                            errorMessage = result.message,
+                            statusMessage = null,
+                        ),
+                        authErrorCode = result.code,
+                    )
+                }
+            }
+        }
+    }
+
+    fun updateDashboardMetaConnection(draft: OrmaMetaConnectionDraft) {
+        val snapshot = state
+        if (snapshot.dashboard.actionLoading || snapshot.dashboard.metaActionLoading) return
+        val hasWorkspaceSetup = draft.businessDisplayName.trim().length >= 2 ||
+            draft.businessId.trim().isNotBlank() ||
+            draft.whatsappBusinessAccountId.trim().isNotBlank() ||
+            draft.phoneNumberId.trim().isNotBlank()
+        if (!hasWorkspaceSetup) return
+        state = snapshot.copy(
+            dashboard = snapshot.dashboard.copy(
+                actionLoading = true,
+                metaActionLoading = true,
+                errorTitle = null,
+                errorMessage = null,
+                statusMessage = null,
+            ),
+        )
+        scope.launch {
+            val idToken = freshDashboardTokenOrError(snapshot) ?: return@launch
+            when (val result = backendClient.updateMetaConnection(idToken, draft)) {
+                is OrmaBackendResult.Success -> state = state.copy(
+                    dashboard = state.dashboard.copy(
+                        actionLoading = false,
+                        metaActionLoading = false,
+                        errorTitle = null,
+                        errorMessage = null,
+                        statusMessage = "WhatsApp setup saved. Backend credentials can be connected next.",
+                        metaConnection = result.value,
+                    ),
+                )
+                is OrmaBackendResult.Failure -> state = state.copy(
+                    dashboard = state.dashboard.copy(
+                        actionLoading = false,
+                        metaActionLoading = false,
+                        errorTitle = result.title,
+                        errorMessage = result.message,
+                        statusMessage = null,
+                    ),
+                    authErrorCode = result.code,
+                )
             }
         }
     }
@@ -945,10 +1516,9 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
                     workspaceLegalName = "",
                     workspaceLogoFileName = "",
                     workspaceLogoUrl = "",
+                    workspaceCoverFileName = "",
+                    workspaceCoverUrl = "",
                     teamProfileName = "",
-                    pendingInviteEmail = "",
-                    pendingInvitePhoneNumber = "",
-                    pendingInviteRole = "",
                     onboardingLoading = false,
                     authStatusMessage = null,
                 )
@@ -998,6 +1568,7 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
     }
 
     val logoPicker = rememberOrmaBusinessLogoPicker(::handleLogoPickerResult)
+    val coverPicker = rememberOrmaBusinessLogoPicker(::handleCoverPickerResult)
 
     LaunchedEffect(Unit) {
         restoreSavedSession()
@@ -1070,23 +1641,12 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
         onAccessPathChange = { path ->
             state = state.copy(
                 accessPath = path,
-                teamInviteCode = if (path == AccessPath.BusinessOwner) "" else state.teamInviteCode,
                 inviteStatusMessage = null,
                 inviteErrorMessage = null,
                 step = when (path) {
                     AccessPath.BusinessOwner -> OnboardingStep.Owner
                     AccessPath.TeamMember -> OnboardingStep.Team
                 },
-            )
-        },
-        onTeamInviteCodeChange = {
-            state = state.copy(
-                teamInviteCode = it.uppercase().filter(Char::isLetterOrDigit).take(16),
-                authErrorTitle = null,
-                authErrorMessage = null,
-                authErrorCode = null,
-                inviteStatusMessage = null,
-                inviteErrorMessage = null,
             )
         },
         onGoogleSignIn = ::startGoogleSignIn,
@@ -1134,44 +1694,14 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
             if (backendTokenOrError(snapshot) == null) return@OnboardingActions
             logoPicker.launch()
         },
+        onCoverUploadRequest = {
+            val snapshot = state
+            if (snapshot.coverUploadLoading || snapshot.onboardingLoading) return@OnboardingActions
+            if (backendTokenOrError(snapshot) == null) return@OnboardingActions
+            coverPicker.launch()
+        },
         onSetupStepChange = { state = state.copy(setupStep = it) },
         onNotificationDecision = ::saveNotificationDecision,
-        onRefreshTeamInvite = ::refreshTeamInvite,
-        onTeamInviteNameChange = {
-            state = state.copy(
-                teamInviteName = it.take(120),
-                inviteStatusMessage = null,
-                inviteErrorMessage = null,
-            )
-        },
-        onTeamInviteContactTypeChange = {
-            state = state.copy(
-                teamInviteContactType = it,
-                teamInviteContact = "",
-                inviteStatusMessage = null,
-                inviteErrorMessage = null,
-            )
-        },
-        onTeamInviteContactChange = {
-            val value = if (state.teamInviteContactType == TeamInviteContactType.Phone) {
-                it.filter { character -> character.isDigit() || character == '+' }.take(24)
-            } else {
-                it.trim().take(160)
-            }
-            state = state.copy(
-                teamInviteContact = value,
-                inviteStatusMessage = null,
-                inviteErrorMessage = null,
-            )
-        },
-        onTeamInviteRoleChange = {
-            state = state.copy(
-                teamInviteRole = it,
-                inviteStatusMessage = null,
-                inviteErrorMessage = null,
-            )
-        },
-        onCreateTeamInvite = ::createTeamInvite,
         onTeamProfileNameChange = {
             state = state.copy(
                 teamProfileName = it.take(120),
@@ -1189,29 +1719,105 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
                 ),
             )
         },
+        onClearDashboardStatusMessage = {
+            state = state.copy(
+                dashboard = state.dashboard.copy(statusMessage = null),
+            )
+        },
+        onShowDashboardStatusMessage = { message ->
+            state = state.copy(
+                dashboard = state.dashboard.copy(
+                    errorTitle = null,
+                    errorMessage = null,
+                    statusMessage = message,
+                ),
+            )
+        },
+        onDashboardSearchChange = {
+            state = state.copy(
+                dashboard = state.dashboard.withResetPagination(
+                    filters = state.dashboard.filters.copy(query = it.take(80)),
+                ),
+            )
+        },
+        onOrderStatusFilterChange = {
+            state = state.copy(
+                dashboard = state.dashboard.withResetPagination(
+                    filters = state.dashboard.filters.copy(orderStatus = it),
+                ),
+            )
+        },
+        onOrderTypeFilterChange = {
+            state = state.copy(
+                dashboard = state.dashboard.withResetPagination(
+                    filters = state.dashboard.filters.copy(orderType = it),
+                ),
+            )
+        },
+        onDashboardDateFilterChange = { dateFrom, dateTo ->
+            state = state.copy(
+                dashboard = state.dashboard.withResetPagination(
+                    filters = state.dashboard.filters.copy(
+                        dateFrom = dateFrom.take(10),
+                        dateTo = dateTo.take(10),
+                    ),
+                ),
+            )
+        },
+        onProductItemTypeFilterChange = {
+            state = state.copy(
+                dashboard = state.dashboard.withResetPagination(
+                    filters = state.dashboard.filters.copy(itemType = it),
+                ),
+            )
+        },
+        onProductLowStockFilterChange = {
+            state = state.copy(
+                dashboard = state.dashboard.withResetPagination(
+                    filters = state.dashboard.filters.copy(lowStockOnly = it),
+                ),
+            )
+        },
+        onDashboardPageChange = ::changeDashboardPage,
+        onLoadCustomerOrders = ::loadDashboardCustomerOrders,
         onCreateCustomer = ::createDashboardCustomer,
         onCreateSupplier = ::createDashboardSupplier,
+        onCreateProductCategory = ::createDashboardProductCategory,
+        onCreateProductOffer = ::createDashboardProductOffer,
         onCreateProduct = ::createDashboardProduct,
+        onUpdateProduct = ::updateDashboardProduct,
+        onUploadProductImage = ::uploadDashboardProductImage,
+        onLoadProductImportTemplate = ::loadDashboardProductImportTemplate,
+        onDownloadProductImportTemplate = ::downloadDashboardProductImportTemplate,
+        onImportProductsCsv = ::importDashboardProductsCsv,
+        onExportProductsCsv = ::exportDashboardProductsCsv,
+        onDownloadProductExport = ::downloadDashboardProductExport,
+        onClearProductTransfer = ::clearDashboardProductTransfer,
         onAdjustProductStock = ::adjustDashboardProductStock,
         onCreateOrder = ::createDashboardOrder,
-        onUpdateOrderStatus = ::updateDashboardOrderStatus,
+        onUpdateOrder = ::updateDashboardOrder,
+        onUpdateOrderStatus = { orderId, status -> updateDashboardOrderStatus(orderId, status) },
+        onUpdateOrderStatusWithPayment = { orderId, status, paidTotal ->
+            updateDashboardOrderStatus(orderId, status, paidTotal)
+        },
+        onInvoiceGstinLookupRequest = ::lookupInvoiceGstin,
+        onCreatePrinter = ::createDashboardPrinter,
+        onCreatePaymentMethod = ::createDashboardPaymentMethod,
+        onUpdateMetaConnection = ::updateDashboardMetaConnection,
+        onSyncMetaCatalog = ::syncDashboardMetaCatalog,
         onCreateBusiness = {
             state = state.copy(
                 accessPath = AccessPath.BusinessOwner,
-                teamInviteCode = "",
                 inviteStatusMessage = null,
                 inviteErrorMessage = null,
-                teamInviteName = "",
-                teamInviteContact = "",
                 workspaceId = "",
                 workspaceName = "",
                 workspaceLegalName = "",
                 workspaceLogoFileName = "",
                 workspaceLogoUrl = "",
+                workspaceCoverFileName = "",
+                workspaceCoverUrl = "",
                 teamProfileName = "",
-                pendingInviteEmail = "",
-                pendingInvitePhoneNumber = "",
-                pendingInviteRole = "",
                 step = OnboardingStep.Owner,
             )
         },
@@ -1243,17 +1849,41 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
 
     OrmaAdaptiveSurface(modifier = modifier) {
         val windowClass = this
+        val isOpeningWorkspace = state.step == OnboardingStep.Authentication &&
+            (
+                state.authLoadingKind == AuthLoadingKind.RestoringSession ||
+                    (
+                        state.authLoadingKind == AuthLoadingKind.ResolvingWorkspace &&
+                            state.authIdToken.isNotBlank()
+                        )
+                )
         Box(modifier = Modifier.fillMaxSize()) {
-            when (windowClass) {
-                OrmaWindowClass.Mobile -> OrmaOnboardingMobileUi(
-                    state = state,
-                    actions = actions,
+            if (isOpeningWorkspace) {
+                OrmaSessionRestoreScreen(
+                    wide = windowClass == OrmaWindowClass.Wide,
+                    title = if (state.authLoadingKind == AuthLoadingKind.ResolvingWorkspace) {
+                        "Checking workspace"
+                    } else {
+                        "Opening workspace"
+                    },
+                    body = if (state.authLoadingKind == AuthLoadingKind.ResolvingWorkspace) {
+                        "Your sign-in is valid. ORMA is opening the right business workspace."
+                    } else {
+                        "Checking your saved sign-in and workspace access."
+                    },
                 )
-                OrmaWindowClass.Wide -> OrmaOnboardingDesktopUi(
-                    state = state,
-                    actions = actions,
-                    platformName = getPlatform().name,
-                )
+            } else {
+                when (windowClass) {
+                    OrmaWindowClass.Mobile -> OrmaOnboardingMobileUi(
+                        state = state,
+                        actions = actions,
+                    )
+                    OrmaWindowClass.Wide -> OrmaOnboardingDesktopUi(
+                        state = state,
+                        actions = actions,
+                        platformName = getPlatform().name,
+                    )
+                }
             }
             OrmaAuthFeedbackDialog(
                 state = state,
@@ -1269,15 +1899,125 @@ private fun OrmaAuthProvider.toOnboardingProvider(): AuthProvider = when (this) 
     OrmaAuthProvider.Google -> AuthProvider.Google
 }
 
+private fun OrmaBackendSession.resolvedAccessPath(): AccessPath {
+    val membershipRole = workspace?.role?.takeIf { it.isNotBlank() } ?: user.role
+    return when {
+        membershipRole.isOrmaOwnerRole() -> AccessPath.BusinessOwner
+        membershipRole.isOrmaTeamRole() -> AccessPath.TeamMember
+        accessPath.isOrmaTeamRole() -> AccessPath.TeamMember
+        else -> AccessPath.BusinessOwner
+    }
+}
+
+private fun String?.isOrmaOwnerRole(): Boolean =
+    this
+        ?.trim()
+        ?.lowercase() in setOf("business_owner", "owner", "admin", "administrator")
+
+private fun String?.isOrmaTeamRole(): Boolean =
+    this
+        ?.trim()
+        ?.lowercase() in setOf(
+            "team_member",
+            "staff",
+            "manager",
+            "cashier",
+            "accountant",
+            "inventory",
+            "inventory_manager",
+            "sales",
+            "sales_staff",
+            "delivery",
+            "delivery_staff",
+        )
+
 private fun OrmaBackendSession.shouldOpenDashboard(): Boolean {
     val hasWorkspace = workspace?.id?.isNotBlank() == true
     val role = workspace?.role ?: user.role
     return when {
         requiredStep == "complete" -> true
         onboardingStatus == "complete" -> true
-        hasWorkspace && role == "team_member" && onboardingStatus == "team_member_ready" -> true
+        hasWorkspace && role.isOrmaTeamRole() && onboardingStatus == "team_member_ready" -> true
         else -> false
     }
 }
+
+private fun OrmaProductImportResult.dashboardImportMessage(): String =
+    when {
+        created > 0 && skipped > 0 -> "Imported $created products. Skipped $skipped rows."
+        created > 0 -> "Imported $created products."
+        skipped > 0 -> "No new products imported. Skipped $skipped rows."
+        else -> "No product rows were imported."
+    }
+
+private fun OrmaDashboardFilters.forBusinessMode(businessMode: String): OrmaDashboardFilters {
+    val normalizedMode = businessMode.normalizedDashboardBusinessMode()
+    val allowedOrderTypes = normalizedMode.allowedDashboardOrderTypes()
+    val allowedItemTypes = normalizedMode.allowedDashboardItemTypes()
+    val normalizedOrderType = orderType.trim().lowercase()
+    val normalizedItemType = itemType.trim().lowercase()
+    return copy(
+        orderType = when {
+            allowedOrderTypes.size > 1 && normalizedOrderType == "all" -> "all"
+            normalizedOrderType in allowedOrderTypes -> normalizedOrderType
+            allowedOrderTypes.size > 1 -> "all"
+            else -> allowedOrderTypes.first()
+        },
+        itemType = when {
+            allowedItemTypes.size > 1 && normalizedItemType == "all" -> "all"
+            normalizedItemType in allowedItemTypes -> normalizedItemType
+            allowedItemTypes.size > 1 -> "all"
+            else -> allowedItemTypes.first()
+        },
+    )
+}
+
+private fun DashboardDataState.withResetPagination(filters: OrmaDashboardFilters): DashboardDataState =
+    copy(
+        filters = filters.copy(page = 1),
+        customerPagination = customerPagination.copy(page = 1),
+        supplierPagination = supplierPagination.copy(page = 1),
+        categoryPagination = categoryPagination.copy(page = 1),
+        offerPagination = offerPagination.copy(page = 1),
+        productPagination = productPagination.copy(page = 1),
+        orderPagination = orderPagination.copy(page = 1),
+        printerPagination = printerPagination.copy(page = 1),
+        paymentMethodPagination = paymentMethodPagination.copy(page = 1),
+        customerOrderHistory = emptyMap(),
+        customerOrderHistoryPagination = emptyMap(),
+        customerOrderHistoryErrors = emptyMap(),
+        customerOrderHistoryLoading = emptySet(),
+    )
+
+private fun String.normalizedDashboardBusinessMode(): String =
+    when (trim().lowercase()) {
+        "service_selling", "service" -> "service_selling"
+        "appointment", "appointments" -> "appointment"
+        "mixed" -> "mixed"
+        else -> "product_selling"
+    }
+
+private fun String.allowedDashboardOrderTypes(): List<String> =
+    when (normalizedDashboardBusinessMode()) {
+        "service_selling" -> listOf("service")
+        "appointment" -> listOf("appointment")
+        "mixed" -> listOf("sale", "service", "appointment")
+        else -> listOf("sale")
+    }
+
+private fun String.allowedDashboardItemTypes(): List<String> =
+    when (normalizedDashboardBusinessMode()) {
+        "service_selling" -> listOf("service")
+        "appointment" -> listOf("appointment")
+        "mixed" -> listOf("product", "service", "appointment")
+        else -> listOf("product")
+    }
+
+private fun String.sellableItemTypeLabel(): String =
+    when (this) {
+        "service" -> "Service"
+        "appointment" -> "Appointment"
+        else -> "Product"
+    }
 
 private const val MaxLogoUploadBytes = 5 * 1024 * 1024

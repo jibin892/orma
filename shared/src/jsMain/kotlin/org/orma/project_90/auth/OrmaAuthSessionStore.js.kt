@@ -7,12 +7,12 @@ import kotlinx.coroutines.await
 private const val OrmaAuthStorePrefix = "orma.auth.session."
 
 internal actual suspend fun loadOrmaStoredAuthSession(): OrmaAuthSession? {
-    localOrmaStoredAuthSession()?.let { return it }
     val firebaseSession = restoreWebFirebaseSession().await().toOrmaAuthSessionOrNull()
     if (firebaseSession != null) {
         saveOrmaStoredAuthSession(firebaseSession)
+        return firebaseSession
     }
-    return firebaseSession
+    return localOrmaStoredAuthSession()
 }
 
 private fun localOrmaStoredAuthSession(): OrmaAuthSession? {

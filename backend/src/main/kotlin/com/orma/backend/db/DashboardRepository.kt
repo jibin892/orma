@@ -63,6 +63,9 @@ data class DashboardWorkspaceAccess(
     val role: String,
     val currency: String,
     val businessMode: String,
+    val displayName: String? = null,
+    val email: String? = null,
+    val phoneNumber: String? = null,
 )
 
 data class DashboardQueryFilters(
@@ -195,17 +198,33 @@ class DashboardRepository(
                     connection.rollback()
                     return@withContext PublicCatalogOrderSubmitResult.AppointmentTimeRequired
                 }
-                val customer = connection.findCustomerByPhone(
+                val existingCustomer = connection.findCustomerByPhone(
                     workspaceId = access.workspaceId,
                     phoneNumber = request.phoneNumber,
-                ) ?: connection.insertCustomer(
+                )
+                val customer = existingCustomer ?: connection.insertCustomer(
                     workspaceId = access.workspaceId,
                     request = CustomerRequest(
                         name = request.customerName,
                         phoneNumber = request.phoneNumber,
                         notes = "Created from public catalog.",
                     ),
-                )
+                ).also { createdCustomer ->
+                    connection.insertWorkspaceActivity(
+                        access = access,
+                        activityType = "customer_created",
+                        entityType = "customer",
+                        entityId = createdCustomer.id,
+                        entityLabel = createdCustomer.name,
+                        title = "Customer created",
+                        body = createdCustomer.name,
+                        tone = "success",
+                        actorUserId = null,
+                        actorDisplayName = request.customerName,
+                        actorPhoneNumber = request.phoneNumber,
+                        actorRole = "public_catalog",
+                    )
+                }
                 val fulfillment = when (orderType) {
                     "appointment" -> "booking"
                     "service" -> if (request.scheduledAt.cleanOptional() != null) "scheduled" else "standard"
@@ -233,6 +252,20 @@ class DashboardRepository(
                         source = "public_catalog",
                         items = publicItems.map { it.orderItem },
                     ),
+                )
+                connection.insertWorkspaceActivity(
+                    access = access,
+                    activityType = "${order.orderType.cleanActivityType()}_created",
+                    entityType = "order",
+                    entityId = order.id,
+                    entityLabel = order.orderNumber,
+                    title = order.activityCreatedTitle(),
+                    body = order.activitySummaryBody(),
+                    tone = order.status.dashboardTone(),
+                    actorUserId = null,
+                    actorDisplayName = request.customerName,
+                    actorPhoneNumber = request.phoneNumber,
+                    actorRole = "public_catalog",
                 )
                 val paymentMethod = if (paymentMode == "upi") {
                     connection.defaultPublicCatalogPaymentMethod(access.workspaceId)
@@ -434,8 +467,31 @@ class DashboardRepository(
         request: CustomerRequest,
     ): CustomerResponse? = withContext(Dispatchers.IO) {
         dataSource.connection.use { connection ->
-            val access = connection.resolveWorkspaceAccess(firebaseUser) ?: return@withContext null
-            connection.insertCustomer(access.workspaceId, request)
+            connection.autoCommit = false
+            try {
+                val access = connection.resolveWorkspaceAccess(firebaseUser) ?: run {
+                    connection.rollback()
+                    return@withContext null
+                }
+                val customer = connection.insertCustomer(access.workspaceId, request)
+                connection.insertWorkspaceActivity(
+                    access = access,
+                    activityType = "customer_created",
+                    entityType = "customer",
+                    entityId = customer.id,
+                    entityLabel = customer.name,
+                    title = "Customer created",
+                    body = customer.name,
+                    tone = "success",
+                )
+                connection.commit()
+                customer
+            } catch (error: Throwable) {
+                connection.rollback()
+                throw error
+            } finally {
+                connection.autoCommit = true
+            }
         }
     }
 
@@ -445,8 +501,32 @@ class DashboardRepository(
         request: CustomerRequest,
     ): CustomerResponse? = withContext(Dispatchers.IO) {
         dataSource.connection.use { connection ->
-            val access = connection.resolveWorkspaceAccess(firebaseUser) ?: return@withContext null
-            connection.updateCustomer(access.workspaceId, customerId, request)
+            connection.autoCommit = false
+            try {
+                val access = connection.resolveWorkspaceAccess(firebaseUser) ?: run {
+                    connection.rollback()
+                    return@withContext null
+                }
+                val customer = connection.updateCustomer(access.workspaceId, customerId, request)
+                if (customer != null) {
+                    connection.insertWorkspaceActivity(
+                        access = access,
+                        activityType = "customer_updated",
+                        entityType = "customer",
+                        entityId = customer.id,
+                        entityLabel = customer.name,
+                        title = "Customer updated",
+                        body = customer.name,
+                    )
+                }
+                connection.commit()
+                customer
+            } catch (error: Throwable) {
+                connection.rollback()
+                throw error
+            } finally {
+                connection.autoCommit = true
+            }
         }
     }
 
@@ -465,8 +545,31 @@ class DashboardRepository(
         request: SupplierRequest,
     ): SupplierResponse? = withContext(Dispatchers.IO) {
         dataSource.connection.use { connection ->
-            val access = connection.resolveWorkspaceAccess(firebaseUser) ?: return@withContext null
-            connection.insertSupplier(access.workspaceId, request)
+            connection.autoCommit = false
+            try {
+                val access = connection.resolveWorkspaceAccess(firebaseUser) ?: run {
+                    connection.rollback()
+                    return@withContext null
+                }
+                val supplier = connection.insertSupplier(access.workspaceId, request)
+                connection.insertWorkspaceActivity(
+                    access = access,
+                    activityType = "supplier_created",
+                    entityType = "supplier",
+                    entityId = supplier.id,
+                    entityLabel = supplier.name,
+                    title = "Supplier created",
+                    body = supplier.name,
+                    tone = "success",
+                )
+                connection.commit()
+                supplier
+            } catch (error: Throwable) {
+                connection.rollback()
+                throw error
+            } finally {
+                connection.autoCommit = true
+            }
         }
     }
 
@@ -476,8 +579,32 @@ class DashboardRepository(
         request: SupplierRequest,
     ): SupplierResponse? = withContext(Dispatchers.IO) {
         dataSource.connection.use { connection ->
-            val access = connection.resolveWorkspaceAccess(firebaseUser) ?: return@withContext null
-            connection.updateSupplier(access.workspaceId, supplierId, request)
+            connection.autoCommit = false
+            try {
+                val access = connection.resolveWorkspaceAccess(firebaseUser) ?: run {
+                    connection.rollback()
+                    return@withContext null
+                }
+                val supplier = connection.updateSupplier(access.workspaceId, supplierId, request)
+                if (supplier != null) {
+                    connection.insertWorkspaceActivity(
+                        access = access,
+                        activityType = "supplier_updated",
+                        entityType = "supplier",
+                        entityId = supplier.id,
+                        entityLabel = supplier.name,
+                        title = "Supplier updated",
+                        body = supplier.name,
+                    )
+                }
+                connection.commit()
+                supplier
+            } catch (error: Throwable) {
+                connection.rollback()
+                throw error
+            } finally {
+                connection.autoCommit = true
+            }
         }
     }
 
@@ -496,8 +623,31 @@ class DashboardRepository(
         request: ProductCategoryRequest,
     ): ProductCategoryResponse? = withContext(Dispatchers.IO) {
         dataSource.connection.use { connection ->
-            val access = connection.resolveWorkspaceAccess(firebaseUser) ?: return@withContext null
-            connection.insertProductCategory(access.workspaceId, request)
+            connection.autoCommit = false
+            try {
+                val access = connection.resolveWorkspaceAccess(firebaseUser) ?: run {
+                    connection.rollback()
+                    return@withContext null
+                }
+                val category = connection.insertProductCategory(access.workspaceId, request)
+                connection.insertWorkspaceActivity(
+                    access = access,
+                    activityType = "category_created",
+                    entityType = "product_category",
+                    entityId = category.id,
+                    entityLabel = category.name,
+                    title = "Category created",
+                    body = category.name,
+                    tone = "success",
+                )
+                connection.commit()
+                category
+            } catch (error: Throwable) {
+                connection.rollback()
+                throw error
+            } finally {
+                connection.autoCommit = true
+            }
         }
     }
 
@@ -516,8 +666,31 @@ class DashboardRepository(
         request: ProductOfferRequest,
     ): ProductOfferResponse? = withContext(Dispatchers.IO) {
         dataSource.connection.use { connection ->
-            val access = connection.resolveWorkspaceAccess(firebaseUser) ?: return@withContext null
-            connection.insertProductOffer(access.workspaceId, request)
+            connection.autoCommit = false
+            try {
+                val access = connection.resolveWorkspaceAccess(firebaseUser) ?: run {
+                    connection.rollback()
+                    return@withContext null
+                }
+                val offer = connection.insertProductOffer(access.workspaceId, request)
+                connection.insertWorkspaceActivity(
+                    access = access,
+                    activityType = "offer_created",
+                    entityType = "product_offer",
+                    entityId = offer.id,
+                    entityLabel = offer.name,
+                    title = "Offer created",
+                    body = offer.name,
+                    tone = "success",
+                )
+                connection.commit()
+                offer
+            } catch (error: Throwable) {
+                connection.rollback()
+                throw error
+            } finally {
+                connection.autoCommit = true
+            }
         }
     }
 
@@ -543,6 +716,16 @@ class DashboardRepository(
                     return@withContext null
                 }
                 val method = connection.insertPaymentMethod(access.workspaceId, request)
+                connection.insertWorkspaceActivity(
+                    access = access,
+                    activityType = "payment_method_created",
+                    entityType = "payment_method",
+                    entityId = method.id,
+                    entityLabel = method.label,
+                    title = "Payment method created",
+                    body = method.label,
+                    tone = "success",
+                )
                 connection.commit()
                 method
             } catch (error: Throwable) {
@@ -629,6 +812,16 @@ class DashboardRepository(
                     )
                 }
                 val response = connection.importProductRows(access, request)
+                if (response.created > 0 || response.skipped > 0) {
+                    connection.insertWorkspaceActivity(
+                        access = access,
+                        activityType = "catalog_imported",
+                        entityType = "product_import",
+                        title = "Catalog import",
+                        body = "${response.created} created, ${response.skipped} skipped",
+                        tone = if (response.errors.isEmpty()) "success" else "warning",
+                    )
+                }
                 connection.commit()
                 response
             } catch (error: Throwable) {
@@ -652,6 +845,16 @@ class DashboardRepository(
                     return@withContext null
                 }
                 val response = connection.importProductRows(access, request)
+                if (response.created > 0 || response.skipped > 0) {
+                    connection.insertWorkspaceActivity(
+                        access = access,
+                        activityType = "catalog_imported",
+                        entityType = "product_import",
+                        title = "Catalog import",
+                        body = "${response.created} created, ${response.skipped} skipped",
+                        tone = if (response.errors.isEmpty()) "success" else "warning",
+                    )
+                }
                 connection.commit()
                 response
             } catch (error: Throwable) {
@@ -770,6 +973,16 @@ class DashboardRepository(
                         note = "Opening stock",
                     )
                 }
+                connection.insertWorkspaceActivity(
+                    access = access,
+                    activityType = "${product.itemType.cleanActivityType()}_created",
+                    entityType = product.itemType.cleanItemType(),
+                    entityId = product.id,
+                    entityLabel = product.name,
+                    title = "${product.itemType.sellableActivityLabel()} created",
+                    body = product.catalogActivityBody(),
+                    tone = "success",
+                )
                 connection.commit()
                 product
             } catch (error: Throwable) {
@@ -787,9 +1000,33 @@ class DashboardRepository(
         request: ProductRequest,
     ): ProductResponse? = withContext(Dispatchers.IO) {
         dataSource.connection.use { connection ->
-            val access = connection.resolveWorkspaceAccess(firebaseUser) ?: return@withContext null
-            request.validateCatalogItemForSave()
-            connection.updateProduct(access, productId, request)
+            connection.autoCommit = false
+            try {
+                val access = connection.resolveWorkspaceAccess(firebaseUser) ?: run {
+                    connection.rollback()
+                    return@withContext null
+                }
+                request.validateCatalogItemForSave()
+                val product = connection.updateProduct(access, productId, request)
+                if (product != null) {
+                    connection.insertWorkspaceActivity(
+                        access = access,
+                        activityType = "${product.itemType.cleanActivityType()}_updated",
+                        entityType = product.itemType.cleanItemType(),
+                        entityId = product.id,
+                        entityLabel = product.name,
+                        title = "${product.itemType.sellableActivityLabel()} updated",
+                        body = product.catalogActivityBody(),
+                    )
+                }
+                connection.commit()
+                product
+            } catch (error: Throwable) {
+                connection.rollback()
+                throw error
+            } finally {
+                connection.autoCommit = true
+            }
         }
     }
 
@@ -806,6 +1043,18 @@ class DashboardRepository(
                     return@withContext null
                 }
                 val product = connection.adjustProductStock(access, productId, request)
+                if (product != null) {
+                    connection.insertWorkspaceActivity(
+                        access = access,
+                        activityType = "stock_adjusted",
+                        entityType = "product",
+                        entityId = product.id,
+                        entityLabel = product.name,
+                        title = "Stock adjusted",
+                        body = "${product.name} · ${request.quantityDelta} ${product.unit} · balance ${product.stockQuantity}",
+                        tone = "warning",
+                    )
+                }
                 connection.commit()
                 product
             } catch (error: Throwable) {
@@ -849,6 +1098,16 @@ class DashboardRepository(
                     return@withContext null
                 }
                 val printer = connection.insertPrinter(access.workspaceId, request)
+                connection.insertWorkspaceActivity(
+                    access = access,
+                    activityType = "printer_created",
+                    entityType = "printer",
+                    entityId = printer.id,
+                    entityLabel = printer.name,
+                    title = "Printer created",
+                    body = printer.name,
+                    tone = "success",
+                )
                 connection.commit()
                 printer
             } catch (error: Throwable) {
@@ -873,6 +1132,17 @@ class DashboardRepository(
                     return@withContext null
                 }
                 val printer = connection.updatePrinter(access.workspaceId, printerId, request)
+                if (printer != null) {
+                    connection.insertWorkspaceActivity(
+                        access = access,
+                        activityType = "printer_updated",
+                        entityType = "printer",
+                        entityId = printer.id,
+                        entityLabel = printer.name,
+                        title = "Printer updated",
+                        body = printer.name,
+                    )
+                }
                 connection.commit()
                 printer
             } catch (error: Throwable) {
@@ -906,6 +1176,30 @@ class DashboardRepository(
                     return@withContext null
                 }
                 val order = connection.insertOrder(access, request)
+                if (request.customerId.cleanUuidOrNull() == null && !request.customerName.cleanOptional().isNullOrBlank()) {
+                    order.customerId?.let { customerId ->
+                        connection.insertWorkspaceActivity(
+                            access = access,
+                            activityType = "customer_created",
+                            entityType = "customer",
+                            entityId = customerId,
+                            entityLabel = order.customerName,
+                            title = "Customer created",
+                            body = order.customerName ?: "Customer profile",
+                            tone = "success",
+                        )
+                    }
+                }
+                connection.insertWorkspaceActivity(
+                    access = access,
+                    activityType = "${order.orderType.cleanActivityType()}_created",
+                    entityType = "order",
+                    entityId = order.id,
+                    entityLabel = order.orderNumber,
+                    title = order.activityCreatedTitle(),
+                    body = order.activitySummaryBody(),
+                    tone = order.status.dashboardTone(),
+                )
                 connection.commit()
                 order
             } catch (error: Throwable) {
@@ -930,6 +1224,32 @@ class DashboardRepository(
                     return@withContext null
                 }
                 val updated = connection.updateOrder(access, orderId, request)
+                if (updated != null) {
+                    if (request.customerId.cleanUuidOrNull() == null && !request.customerName.cleanOptional().isNullOrBlank()) {
+                        updated.customerId?.let { customerId ->
+                            connection.insertWorkspaceActivity(
+                                access = access,
+                                activityType = "customer_created",
+                                entityType = "customer",
+                                entityId = customerId,
+                                entityLabel = updated.customerName,
+                                title = "Customer created",
+                                body = updated.customerName ?: "Customer profile",
+                                tone = "success",
+                            )
+                        }
+                    }
+                    connection.insertWorkspaceActivity(
+                        access = access,
+                        activityType = "${updated.orderType.cleanActivityType()}_updated",
+                        entityType = "order",
+                        entityId = updated.id,
+                        entityLabel = updated.orderNumber,
+                        title = updated.activityUpdatedTitle(),
+                        body = updated.activitySummaryBody(),
+                        tone = updated.status.dashboardTone(),
+                    )
+                }
                 connection.commit()
                 updated
             } catch (error: Throwable) {
@@ -955,6 +1275,18 @@ class DashboardRepository(
                     return@withContext null
                 }
                 val updated = connection.updateOrderStatus(access, orderId, status, paidTotal)
+                if (updated != null) {
+                    connection.insertWorkspaceActivity(
+                        access = access,
+                        activityType = "${updated.orderType.cleanActivityType()}_status_updated",
+                        entityType = "order",
+                        entityId = updated.id,
+                        entityLabel = updated.orderNumber,
+                        title = updated.activityStatusTitle(),
+                        body = updated.activityStatusBody(),
+                        tone = updated.status.dashboardTone(),
+                    )
+                }
                 connection.commit()
                 updated
             } catch (error: Throwable) {
@@ -1024,16 +1356,17 @@ class DashboardRepository(
                 if (!result.next()) {
                     null
                 } else {
-                    DashboardWorkspaceAccess(
-                        userId = result.getString("user_id"),
-                        workspaceId = result.getString("workspace_id"),
-                        role = "public_catalog",
-                        currency = result.getString("currency") ?: "INR",
-                        businessMode = result.getString("business_mode") ?: "product_selling",
-                    )
-                }
+                DashboardWorkspaceAccess(
+                    userId = result.getString("user_id"),
+                    workspaceId = result.getString("workspace_id"),
+                    role = "public_catalog",
+                    currency = result.getString("currency") ?: "INR",
+                    businessMode = result.getString("business_mode") ?: "product_selling",
+                    displayName = "Public catalog",
+                )
             }
         }
+    }
     }
 
     private fun Connection.listPublicCatalogProducts(workspaceId: String): List<PublicCatalogProductResponse> {
@@ -1304,7 +1637,10 @@ class DashboardRepository(
                 bw.id::text as workspace_id,
                 wm.role,
                 bw.currency,
-                bw.business_mode
+                bw.business_mode,
+                au.display_name,
+                au.email,
+                au.phone_number
             from app_users au
             join workspace_members wm on wm.user_id = au.id and wm.status = 'active'
             join business_workspaces bw on bw.id = wm.workspace_id
@@ -1324,6 +1660,9 @@ class DashboardRepository(
                         role = result.getString("role"),
                         currency = result.getString("currency") ?: "INR",
                         businessMode = result.getString("business_mode") ?: "product_selling",
+                        displayName = result.getString("display_name"),
+                        email = result.getString("email"),
+                        phoneNumber = result.getString("phone_number"),
                     )
                 }
             }
@@ -1512,6 +1851,65 @@ class DashboardRepository(
         workspaceId: String,
         filters: DashboardQueryFilters,
     ): List<DashboardActivityResponse> {
+        val recorded = listRecordedDashboardActivity(workspaceId, filters)
+        if (recorded.isNotEmpty()) return recorded
+        return listLegacyDashboardActivity(workspaceId, filters)
+    }
+
+    private fun Connection.listRecordedDashboardActivity(
+        workspaceId: String,
+        filters: DashboardQueryFilters,
+    ): List<DashboardActivityResponse> {
+        val params = filters.withCreatedDateParams(workspaceId)
+        val sql = """
+            select
+                id::text,
+                activity_type,
+                title,
+                body,
+                created_at::text as occurred_at,
+                tone,
+                actor_user_id::text,
+                actor_display_name,
+                actor_email,
+                actor_phone_number,
+                actor_role
+            from workspace_activity
+            where workspace_id = ?::uuid
+              ${filters.createdDateWhereSql("created_at")}
+            order by created_at desc
+            limit 12
+        """.trimIndent()
+        return prepareStatement(sql).use { statement ->
+            statement.bindStringParams(params)
+            statement.executeQuery().use { result ->
+                buildList {
+                    while (result.next()) {
+                        add(
+                            DashboardActivityResponse(
+                                id = result.getString("id"),
+                                type = result.getString("activity_type") ?: "activity",
+                                title = result.getString("title"),
+                                body = result.getString("body"),
+                                occurredAt = result.getString("occurred_at"),
+                                tone = result.getString("tone") ?: "info",
+                                performedByUserId = result.getString("actor_user_id"),
+                                performedByDisplayName = result.getString("actor_display_name"),
+                                performedByEmail = result.getString("actor_email"),
+                                performedByPhoneNumber = result.getString("actor_phone_number"),
+                                performedByRole = result.getString("actor_role"),
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private fun Connection.listLegacyDashboardActivity(
+        workspaceId: String,
+        filters: DashboardQueryFilters,
+    ): List<DashboardActivityResponse> {
         val params = filters.withOrderDateParams(workspaceId)
         val sql = """
             select
@@ -1550,6 +1948,49 @@ class DashboardRepository(
                     }
                 }
             }
+        }
+    }
+
+    private fun Connection.insertWorkspaceActivity(
+        access: DashboardWorkspaceAccess,
+        activityType: String,
+        entityType: String,
+        entityId: String? = null,
+        entityLabel: String? = null,
+        title: String,
+        body: String,
+        tone: String = "info",
+        actorUserId: String? = access.userId,
+        actorDisplayName: String? = access.displayName,
+        actorEmail: String? = access.email,
+        actorPhoneNumber: String? = access.phoneNumber,
+        actorRole: String? = access.role,
+    ) {
+        val sql = """
+            insert into workspace_activity (
+                workspace_id, actor_user_id, actor_display_name, actor_email, actor_phone_number,
+                actor_role, activity_type, entity_type, entity_id, entity_label, title, body, tone
+            )
+            values (
+                ?::uuid, ?::uuid, ?, ?, ?,
+                ?, ?, ?, ?::uuid, ?, ?, ?, ?
+            )
+        """.trimIndent()
+        prepareStatement(sql).use { statement ->
+            statement.setString(1, access.workspaceId)
+            statement.setNullableUuid(2, actorUserId)
+            statement.setNullableString(3, actorDisplayName.cleanOptional())
+            statement.setNullableString(4, actorEmail.cleanOptional()?.lowercase())
+            statement.setNullableString(5, actorPhoneNumber.cleanOptional())
+            statement.setNullableString(6, actorRole.cleanOptional())
+            statement.setString(7, activityType.cleanActivityType())
+            statement.setString(8, entityType.cleanActivityType())
+            statement.setNullableUuid(9, entityId)
+            statement.setNullableString(10, entityLabel.cleanOptional())
+            statement.setString(11, title.cleanName())
+            statement.setString(12, body.cleanOptional() ?: "Workspace action completed.")
+            statement.setString(13, tone.cleanActivityTone())
+            statement.executeUpdate()
         }
     }
 
@@ -3809,6 +4250,73 @@ class DashboardRepository(
             "paid", "completed", "sent", "ready", "synced" -> "success"
             else -> "info"
         }
+
+    private fun String.cleanActivityType(): String =
+        trim()
+            .lowercase()
+            .replace("-", "_")
+            .filter { it.isLetterOrDigit() || it == '_' }
+            .take(60)
+            .ifBlank { "activity" }
+
+    private fun String.cleanActivityTone(): String =
+        trim().lowercase().takeIf { it in setOf("info", "success", "warning", "danger") } ?: "info"
+
+    private fun String.sellableActivityLabel(): String =
+        when (cleanItemType()) {
+            "service" -> "Service"
+            "appointment" -> "Appointment"
+            else -> "Product"
+        }
+
+    private fun ProductResponse.catalogActivityBody(): String = buildList {
+        add(name)
+        add(itemType.sellableActivityLabel())
+        add("$currency $sellingPrice")
+        if (itemType.cleanItemType() == "product" && trackStock) {
+            add("stock $stockQuantity $unit")
+        }
+        if (itemType.cleanItemType() == "appointment" && durationMinutes != null) {
+            add("$durationMinutes min")
+        }
+    }.joinToString(" · ")
+
+    private fun OrderResponse.activityCreatedTitle(): String =
+        when (orderType.cleanOrderType()) {
+            "appointment" -> "Appointment booked"
+            "service" -> "Service order created"
+            else -> "Sale created"
+        }
+
+    private fun OrderResponse.activityUpdatedTitle(): String =
+        when (orderType.cleanOrderType()) {
+            "appointment" -> "Appointment updated"
+            "service" -> "Service order updated"
+            else -> "Sale updated"
+        }
+
+    private fun OrderResponse.activityStatusTitle(): String =
+        when (status.normalizedOrderStatus()) {
+            "part_paid" -> "Part payment recorded"
+            "paid" -> "Payment recorded"
+            "completed" -> "${orderType.cleanOrderType().dashboardLabel()} completed"
+            "cancelled" -> "${orderType.cleanOrderType().dashboardLabel()} cancelled"
+            else -> "${orderType.cleanOrderType().dashboardLabel()} status updated"
+        }
+
+    private fun OrderResponse.activitySummaryBody(): String = buildList {
+        add(orderNumber)
+        add(customerName?.cleanOptional() ?: "Walk-in customer")
+        add("$currency $total")
+        add(status.dashboardLabel())
+    }.joinToString(" · ")
+
+    private fun OrderResponse.activityStatusBody(): String = buildList {
+        add(orderNumber)
+        add(customerName?.cleanOptional() ?: "Walk-in customer")
+        add(status.dashboardLabel())
+        add("paid $currency $paidTotal of $currency $total")
+    }.joinToString(" · ")
 
     private fun String.cleanPrinterConnectionType(): String {
         val normalized = trim().lowercase().filter { it.isLetterOrDigit() || it == '_' }

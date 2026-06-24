@@ -5,11 +5,12 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -20,8 +21,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import org.orma.project_90.designsystem.OrmaBadge
+import org.orma.project_90.designsystem.OrmaBrandRow
 import org.orma.project_90.designsystem.OrmaColors
 import org.orma.project_90.designsystem.OrmaShapes
+import org.orma.project_90.designsystem.OrmaSkeleton
 import org.orma.project_90.designsystem.OrmaStatusTone
 import org.orma.project_90.designsystem.OrmaTextButton
 import org.orma.project_90.designsystem.ormaStatusColors
@@ -34,7 +37,10 @@ internal fun OrmaAuthFeedbackDialog(
     val errorTitle = state.authErrorTitle
     val errorMessage = state.authErrorMessage
     when {
-        state.isAuthLoading && state.authLoadingKind != AuthLoadingKind.VerifyingOtp -> {
+        state.isAuthLoading &&
+            state.authLoadingKind != AuthLoadingKind.VerifyingOtp &&
+            state.authLoadingKind != AuthLoadingKind.RestoringSession &&
+            state.authLoadingKind != AuthLoadingKind.ResolvingWorkspace -> {
             OrmaAuthLoadingDialog(kind = state.authLoadingKind)
         }
         errorTitle != null && errorMessage != null -> OrmaAuthErrorDialog(
@@ -43,6 +49,77 @@ internal fun OrmaAuthFeedbackDialog(
             code = state.authErrorCode,
             onDismiss = onDismissError,
         )
+    }
+}
+
+@Composable
+internal fun OrmaSessionRestoreScreen(
+    wide: Boolean,
+    title: String = "Opening workspace",
+    body: String = "Checking your saved sign-in and workspace access.",
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier.fillMaxSize(),
+        color = OrmaColors.ScreenBackground,
+        contentColor = OrmaColors.TextPrimary,
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = if (wide) 48.dp else 28.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Column(
+                modifier = Modifier.widthIn(max = if (wide) 420.dp else 330.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(22.dp),
+            ) {
+                OrmaBrandRow()
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = title,
+                        style = if (wide) {
+                            MaterialTheme.typography.displayMedium
+                        } else {
+                            MaterialTheme.typography.headlineMedium
+                        },
+                        color = OrmaColors.TextPrimary,
+                        textAlign = TextAlign.Center,
+                    )
+                    Text(
+                        text = body,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = OrmaColors.TextSecondary,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    OrmaSkeleton(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(14.dp),
+                    )
+                    OrmaSkeleton(
+                        modifier = Modifier
+                            .fillMaxWidth(0.78f)
+                            .height(14.dp),
+                    )
+                    OrmaSkeleton(
+                        modifier = Modifier
+                            .fillMaxWidth(0.52f)
+                            .height(14.dp),
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -65,10 +142,9 @@ private fun OrmaAuthLoadingDialog(kind: AuthLoadingKind) {
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
-                CircularProgressIndicator(
+                OrmaSkeleton(
                     modifier = Modifier.size(34.dp),
-                    color = OrmaColors.Accent,
-                    strokeWidth = 3.dp,
+                    shape = OrmaShapes.Capsule,
                 )
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,

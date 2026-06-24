@@ -20,7 +20,19 @@ internal class OrmaFirebaseRestAuthGateway(
                 code = "RESTORE_REFRESH_TOKEN_MISSING",
             )
         }
-        return refreshStoredSession(storedSession)
+        return refreshStoredSession(storedSession, allowStoredFallback = true)
+    }
+
+    override suspend fun refreshSession(): OrmaAuthResult? {
+        val storedSession = loadOrmaStoredAuthSession() ?: return null
+        if (storedSession.refreshToken.isBlank()) {
+            return OrmaAuthResult.Failure(
+                title = "Session expired",
+                message = "Sign in again so ORMA can continue securely.",
+                code = "REFRESH_TOKEN_MISSING",
+            )
+        }
+        return refreshStoredSession(storedSession, allowStoredFallback = false)
     }
 
     override suspend fun clearStoredSession() {
@@ -193,7 +205,10 @@ internal class OrmaFirebaseRestAuthGateway(
         }
     }
 
-    private suspend fun refreshStoredSession(storedSession: OrmaAuthSession): OrmaAuthResult {
+    private suspend fun refreshStoredSession(
+        storedSession: OrmaAuthSession,
+        allowStoredFallback: Boolean,
+    ): OrmaAuthResult {
         val url = "https://securetoken.googleapis.com/v1/token?key=${config.apiKey}"
         return try {
             val response = ormaPostFormUrlEncoded(
@@ -204,7 +219,7 @@ internal class OrmaFirebaseRestAuthGateway(
                 val code = response.body.firebaseErrorCode()
                     ?: response.body.firebaseErrorMessage()
                     ?: "RESTORE_SESSION_FAILED"
-                if (storedSession.idToken.isNotBlank()) {
+                if (allowStoredFallback && storedSession.idToken.isNotBlank()) {
                     return storedSession.toRestoredResult()
                 }
                 return OrmaAuthResult.Failure(
@@ -234,7 +249,7 @@ internal class OrmaFirebaseRestAuthGateway(
                 message = "Session restored.",
             )
         } catch (error: Throwable) {
-            if (storedSession.idToken.isNotBlank()) {
+            if (allowStoredFallback && storedSession.idToken.isNotBlank()) {
                 storedSession.toRestoredResult()
             } else {
                 OrmaAuthResult.Failure(

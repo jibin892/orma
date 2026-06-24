@@ -7,6 +7,7 @@ import io.ktor.client.request.forms.MultiPartFormDataContent
 import io.ktor.client.request.forms.formData
 import io.ktor.client.request.get
 import io.ktor.client.request.post
+import io.ktor.client.request.put
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
@@ -44,6 +45,22 @@ actual suspend fun ormaPostJsonAuthorized(
     body: String,
     bearerToken: String,
 ): OrmaHttpResponse = postJson(url = url, body = body, bearerToken = bearerToken)
+
+actual suspend fun ormaPutJsonAuthorized(
+    url: String,
+    body: String,
+    bearerToken: String,
+): OrmaHttpResponse {
+    val response = ormaIosHttpClient.put(url) {
+        contentType(ContentType.Application.Json)
+        header(HttpHeaders.Authorization, "Bearer $bearerToken")
+        setBody(body)
+    }
+    return OrmaHttpResponse(
+        statusCode = response.status.value,
+        body = response.bodyAsText(),
+    )
+}
 
 actual suspend fun ormaGetAuthorized(
     url: String,

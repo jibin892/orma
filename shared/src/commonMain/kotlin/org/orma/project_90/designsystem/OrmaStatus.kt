@@ -39,28 +39,28 @@ fun ormaStatusToneFor(value: String): OrmaStatusTone {
 
 fun ormaStatusColors(tone: OrmaStatusTone): OrmaStatusColors = when (tone) {
     OrmaStatusTone.Neutral -> OrmaStatusColors(
-        container = OrmaColors.Accent.copy(alpha = 0.06f),
-        content = OrmaColors.Accent.copy(alpha = 0.64f),
-        border = OrmaColors.Accent.copy(alpha = 0.12f),
+        container = OrmaColors.TextAndIconInk.copy(alpha = 0.06f),
+        content = OrmaColors.TextAndIconInk.copy(alpha = 0.64f),
+        border = OrmaColors.TextAndIconInk.copy(alpha = 0.12f),
     )
     OrmaStatusTone.Info -> OrmaStatusColors(
-        container = Color(0xFF315E7D).copy(alpha = 0.10f),
-        content = Color(0xFF315E7D),
-        border = Color(0xFF315E7D).copy(alpha = 0.16f),
+        container = OrmaColors.Info.copy(alpha = 0.10f),
+        content = OrmaColors.Info,
+        border = OrmaColors.Info.copy(alpha = 0.16f),
     )
     OrmaStatusTone.Success -> OrmaStatusColors(
-        container = Color(0xFF2F6F5E).copy(alpha = 0.10f),
-        content = Color(0xFF2F6F5E),
-        border = Color(0xFF2F6F5E).copy(alpha = 0.16f),
+        container = OrmaColors.Success.copy(alpha = 0.10f),
+        content = OrmaColors.Success,
+        border = OrmaColors.Success.copy(alpha = 0.16f),
     )
     OrmaStatusTone.Warning -> OrmaStatusColors(
-        container = Color(0xFF9A6B21).copy(alpha = 0.12f),
-        content = Color(0xFF7A5417),
-        border = Color(0xFF9A6B21).copy(alpha = 0.18f),
+        container = OrmaColors.Warning.copy(alpha = 0.12f),
+        content = OrmaColors.Warning,
+        border = OrmaColors.Warning.copy(alpha = 0.18f),
     )
     OrmaStatusTone.Danger -> OrmaStatusColors(
-        container = Color(0xFFA54435).copy(alpha = 0.10f),
-        content = Color(0xFFA54435),
-        border = Color(0xFFA54435).copy(alpha = 0.18f),
+        container = OrmaColors.Danger.copy(alpha = 0.10f),
+        content = OrmaColors.Danger,
+        border = OrmaColors.Danger.copy(alpha = 0.18f),
     )
 }

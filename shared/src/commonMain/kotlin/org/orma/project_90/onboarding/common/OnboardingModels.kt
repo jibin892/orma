@@ -529,6 +529,55 @@ private fun country(
 fun ormaCountryById(id: String): OrmaCountryUi =
     OrmaSupportedCountries.firstOrNull { it.id == id } ?: OrmaDefaultCountry
 
+fun ormaCountryForPhoneNumber(value: String): OrmaCountryUi {
+    val trimmed = value.trim()
+    if (!trimmed.startsWith("+")) return OrmaDefaultCountry
+    val digits = trimmed.filter(Char::isDigit)
+    return OrmaSupportedCountries
+        .sortedByDescending { it.dialCode.filter(Char::isDigit).length }
+        .firstOrNull { country -> digits.startsWith(country.dialCode.filter(Char::isDigit)) }
+        ?: OrmaDefaultCountry
+}
+
+fun OrmaCountryUi.nationalPhoneDigits(value: String): String {
+    val digits = value.filter(Char::isDigit)
+    val dialDigits = dialCode.filter(Char::isDigit)
+    val nationalDigits = if (value.trim().startsWith("+") && digits.startsWith(dialDigits)) {
+        digits.removePrefix(dialDigits)
+    } else {
+        digits
+    }
+    return nationalDigits.take(maxDigits)
+}
+
+fun OrmaCountryUi.formatInternationalPhone(value: String): String {
+    val nationalDigits = nationalPhoneDigits(value)
+    return if (nationalDigits.isBlank()) "" else dialCode + nationalDigits
+}
+
+fun isOrmaInternationalPhoneValid(value: String): Boolean {
+    val trimmed = value.trim()
+    if (!trimmed.startsWith("+")) return false
+    val country = ormaCountryForPhoneNumber(trimmed)
+    return country.acceptsNationalNumber(country.nationalPhoneDigits(trimmed))
+}
+
+fun isOrmaEmailValid(value: String): Boolean {
+    val trimmed = value.trim()
+    val localPart = trimmed.substringBefore("@", "")
+    val domain = trimmed.substringAfter("@", "")
+    return localPart.isNotBlank() &&
+        domain.contains(".") &&
+        !trimmed.contains(" ") &&
+        trimmed.count { it == '@' } == 1
+}
+
+fun optionalOrmaEmailError(value: String): String? =
+    if (value.isBlank() || isOrmaEmailValid(value)) null else "Enter a valid email address."
+
+fun optionalOrmaPhoneError(value: String): String? =
+    if (value.isBlank() || isOrmaInternationalPhoneValid(value)) null else "Enter a valid phone number with country code."
+
 enum class AccessPath(
     val title: String,
     val description: String,
@@ -578,6 +627,7 @@ data class BusinessSetupDraft(
     val businessName: String = "",
     val legalName: String = "",
     val industry: String = "Retail",
+    val businessMode: String = ormaBusinessModeForIndustry("Retail"),
     val website: String = "",
     val isTaxRegistered: Boolean = true,
     val taxNumber: String = "",
@@ -601,12 +651,58 @@ data class BusinessSetupDraft(
 
 val OrmaSupportedIndustries = listOf(
     "Retail",
+    "Bakery",
+    "Grocery",
+    "Pharmacy",
     "Restaurant",
     "Services",
+    "Repair",
+    "Professional services",
     "Wholesale",
+    "Salon",
     "Healthcare",
+    "Clinic",
+    "Fitness",
+    "Education",
     "B2B",
 )
+
+data class OrmaBusinessModeOption(
+    val id: String,
+    val title: String,
+    val body: String,
+)
+
+val OrmaBusinessModeOptions = listOf(
+    OrmaBusinessModeOption(
+        id = "product_selling",
+        title = "Product sales",
+        body = "Retail, food, stock, billing, and delivery.",
+    ),
+    OrmaBusinessModeOption(
+        id = "service_selling",
+        title = "Services",
+        body = "Repairs, professional work, and service requests.",
+    ),
+    OrmaBusinessModeOption(
+        id = "appointment",
+        title = "Appointments",
+        body = "Bookings with preferred date, time, and duration.",
+    ),
+    OrmaBusinessModeOption(
+        id = "mixed",
+        title = "Mixed",
+        body = "Products, services, and appointments together.",
+    ),
+)
+
+fun ormaBusinessModeForIndustry(industry: String): String =
+    when (industry.trim().lowercase()) {
+        "services", "service", "repair", "professional services", "professional service" -> "service_selling"
+        "salon", "healthcare", "clinic", "fitness", "education" -> "appointment"
+        "b2b" -> "mixed"
+        else -> "product_selling"
+    }
 
 val OrmaSupportedCurrencies = listOf(
     "INR",

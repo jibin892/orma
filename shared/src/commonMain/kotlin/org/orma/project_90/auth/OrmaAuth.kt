@@ -46,6 +46,8 @@ sealed interface OrmaAuthResult {
 interface OrmaAuthGateway {
     suspend fun restoreSession(): OrmaAuthResult?
 
+    suspend fun refreshSession(): OrmaAuthResult?
+
     suspend fun clearStoredSession()
 
     suspend fun signInOrCreateWithEmail(
@@ -78,6 +80,12 @@ expect suspend fun ormaPostFormUrlEncoded(
 ): OrmaHttpResponse
 
 expect suspend fun ormaPostJsonAuthorized(
+    url: String,
+    body: String,
+    bearerToken: String,
+): OrmaHttpResponse
+
+expect suspend fun ormaPutJsonAuthorized(
     url: String,
     body: String,
     bearerToken: String,

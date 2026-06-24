@@ -45,6 +45,19 @@ actual suspend fun ormaPostJsonAuthorized(
     )
 }
 
+actual suspend fun ormaPutJsonAuthorized(
+    url: String,
+    body: String,
+    bearerToken: String,
+): OrmaHttpResponse {
+    val response = fetchPutAuthorized(url, body, bearerToken).await()
+    val text = response.text().await()
+    return OrmaHttpResponse(
+        statusCode = response.status,
+        body = text,
+    )
+}
+
 actual suspend fun ormaGetAuthorized(
     url: String,
     bearerToken: String,
@@ -113,6 +126,15 @@ private fun fetchPostAuthorized(
     bearerToken: String,
 ): Promise<JsFetchResponse> = js(
     "fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + bearerToken }, body: body })",
+)
+
+@Suppress("UNUSED_PARAMETER")
+private fun fetchPutAuthorized(
+    url: String,
+    body: String,
+    bearerToken: String,
+): Promise<JsFetchResponse> = js(
+    "fetch(url, { method: 'PUT', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + bearerToken }, body: body })",
 )
 
 @Suppress("UNUSED_PARAMETER")

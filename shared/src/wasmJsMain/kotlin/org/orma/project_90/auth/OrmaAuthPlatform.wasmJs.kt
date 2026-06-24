@@ -31,6 +31,15 @@ actual suspend fun ormaPostJsonAuthorized(
     body = """{"error":{"message":"WASM_HTTP_BRIDGE_REQUIRED: ORMA backend calls are available in Android, iOS, Desktop, and Kotlin/JS web. The Kotlin/Wasm web target still needs a JS fetch bridge."}}""",
 )
 
+actual suspend fun ormaPutJsonAuthorized(
+    url: String,
+    body: String,
+    bearerToken: String,
+): OrmaHttpResponse = OrmaHttpResponse(
+    statusCode = 0,
+    body = """{"error":{"message":"WASM_HTTP_BRIDGE_REQUIRED: ORMA backend updates are available in Android, iOS, Desktop, and Kotlin/JS web. The Kotlin/Wasm web target still needs a JS fetch bridge."}}""",
+)
+
 actual suspend fun ormaGetAuthorized(
     url: String,
     bearerToken: String,

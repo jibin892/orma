@@ -223,6 +223,11 @@ data class DashboardActivityResponse(
     val body: String,
     val occurredAt: String,
     val tone: String = "info",
+    val performedByUserId: String? = null,
+    val performedByDisplayName: String? = null,
+    val performedByEmail: String? = null,
+    val performedByPhoneNumber: String? = null,
+    val performedByRole: String? = null,
 )
 
 @Serializable
@@ -338,6 +343,7 @@ data class ProductCategoryListResponse(
 @Serializable
 data class ProductCategoryRequest(
     val name: String,
+    val itemType: String = "all",
     val sortOrder: Int = 0,
 )
 
@@ -345,6 +351,7 @@ data class ProductCategoryRequest(
 data class ProductCategoryResponse(
     val id: String,
     val name: String,
+    val itemType: String = "all",
     val sortOrder: Int,
     val status: String,
     val createdAt: String,
@@ -418,6 +425,7 @@ data class ProductRequest(
     val name: String,
     val itemType: String = "product",
     val categoryId: String? = null,
+    val categoryName: String? = null,
     val sku: String? = null,
     val barcode: String? = null,
     val description: String? = null,

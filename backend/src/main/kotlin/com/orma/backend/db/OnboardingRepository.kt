@@ -64,6 +64,13 @@ data class ProductImageRecord(
     val sizeBytes: Long,
 )
 
+private data class ActivityActorRecord(
+    val displayName: String?,
+    val email: String?,
+    val phoneNumber: String?,
+    val role: String?,
+)
+
 class OnboardingRepository(
     private val dataSource: DataSource,
 ) {
@@ -195,15 +202,30 @@ class OnboardingRepository(
         sizeBytes: Long,
     ): ProductImageRecord = withContext(Dispatchers.IO) {
         dataSource.connection.use { connection ->
-            connection.insertProductImage(
-                workspaceId = workspaceId,
-                userId = userId,
-                productId = productId,
-                storagePath = storagePath,
-                originalFileName = originalFileName,
-                contentType = contentType,
-                sizeBytes = sizeBytes,
-            )
+            connection.autoCommit = false
+            try {
+                val record = connection.insertProductImage(
+                    workspaceId = workspaceId,
+                    userId = userId,
+                    productId = productId,
+                    storagePath = storagePath,
+                    originalFileName = originalFileName,
+                    contentType = contentType,
+                    sizeBytes = sizeBytes,
+                )
+                connection.insertProductImageActivity(
+                    workspaceId = workspaceId,
+                    userId = userId,
+                    productId = productId,
+                )
+                connection.commit()
+                record
+            } catch (error: Throwable) {
+                connection.rollback()
+                throw error
+            } finally {
+                connection.autoCommit = true
+            }
         }
     }
 
@@ -647,6 +669,96 @@ class OnboardingRepository(
         }
     }
 
+    private fun Connection.insertProductImageActivity(
+        workspaceId: String,
+        userId: String,
+        productId: String,
+    ) {
+        val product = findProductActivityTarget(workspaceId, productId)
+        val actor = findActivityActor(workspaceId, userId)
+        val productName = product?.first ?: "Catalog item"
+        val itemType = product?.second ?: "product"
+        val sql = """
+            insert into workspace_activity (
+                workspace_id, actor_user_id, actor_display_name, actor_email, actor_phone_number,
+                actor_role, activity_type, entity_type, entity_id, entity_label, title, body, tone
+            )
+            values (
+                ?::uuid, ?::uuid, ?, ?, ?,
+                ?, 'product_image_uploaded', ?, ?::uuid, ?, ?, ?, 'success'
+            )
+        """.trimIndent()
+        prepareStatement(sql).use { statement ->
+            statement.setString(1, workspaceId)
+            statement.setString(2, userId)
+            statement.setNullableString(3, actor?.displayName)
+            statement.setNullableString(4, actor?.email?.lowercase())
+            statement.setNullableString(5, actor?.phoneNumber)
+            statement.setNullableString(6, actor?.role)
+            statement.setString(7, itemType.cleanActivityType())
+            statement.setNullableUuid(8, productId)
+            statement.setString(9, productName)
+            statement.setString(10, "${itemType.sellableActivityLabel()} image uploaded")
+            statement.setString(11, productName)
+            statement.executeUpdate()
+        }
+    }
+
+    private fun Connection.findProductActivityTarget(
+        workspaceId: String,
+        productId: String,
+    ): Pair<String, String>? {
+        val sql = """
+            select name, item_type
+            from products
+            where workspace_id = ?::uuid
+              and id::text = ?
+            limit 1
+        """.trimIndent()
+        return prepareStatement(sql).use { statement ->
+            statement.setString(1, workspaceId)
+            statement.setString(2, productId.trim())
+            statement.executeQuery().use { result ->
+                if (result.next()) result.getString("name") to (result.getString("item_type") ?: "product") else null
+            }
+        }
+    }
+
+    private fun Connection.findActivityActor(
+        workspaceId: String,
+        userId: String,
+    ): ActivityActorRecord? {
+        val sql = """
+            select
+                au.display_name,
+                au.email,
+                au.phone_number,
+                wm.role
+            from app_users au
+            left join workspace_members wm on wm.user_id = au.id
+                and wm.workspace_id = ?::uuid
+                and wm.status = 'active'
+            where au.id = ?::uuid
+            limit 1
+        """.trimIndent()
+        return prepareStatement(sql).use { statement ->
+            statement.setString(1, workspaceId)
+            statement.setString(2, userId)
+            statement.executeQuery().use { result ->
+                if (!result.next()) {
+                    null
+                } else {
+                    ActivityActorRecord(
+                        displayName = result.getString("display_name"),
+                        email = result.getString("email"),
+                        phoneNumber = result.getString("phone_number"),
+                        role = result.getString("role")?.normalizedTeamRole(),
+                    )
+                }
+            }
+        }
+    }
+
     private fun PreparedStatement.bindBusinessSetup(
         userId: String,
         request: BusinessSetupRequest,
@@ -785,6 +897,30 @@ class OnboardingRepository(
             setString(index, value)
         }
     }
+
+    private fun PreparedStatement.setNullableUuid(index: Int, value: String?) {
+        val cleanValue = value?.trim()?.takeIf { it.isNotBlank() }
+        if (cleanValue == null || runCatching { java.util.UUID.fromString(cleanValue) }.isFailure) {
+            setString(index, null)
+        } else {
+            setString(index, cleanValue)
+        }
+    }
+
+    private fun String.cleanActivityType(): String =
+        trim()
+            .lowercase()
+            .replace("-", "_")
+            .filter { it.isLetterOrDigit() || it == '_' }
+            .take(60)
+            .ifBlank { "activity" }
+
+    private fun String.sellableActivityLabel(): String =
+        when (cleanActivityType()) {
+            "service" -> "Service"
+            "appointment" -> "Appointment"
+            else -> "Product"
+        }
 
     private fun String.normalizedTeamRole(): String {
         val normalized = trim()

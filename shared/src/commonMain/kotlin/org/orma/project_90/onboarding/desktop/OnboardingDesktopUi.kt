@@ -22,6 +22,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -48,6 +49,7 @@ import org.orma.project_90.designsystem.OrmaColors
 import org.orma.project_90.designsystem.OrmaGoogleBrandIcon
 import org.orma.project_90.designsystem.OrmaOtpCells
 import org.orma.project_90.designsystem.OrmaShapes
+import org.orma.project_90.downloads.isOrmaWebDownloadSurface
 import org.orma.project_90.onboarding.AccessPath
 import org.orma.project_90.onboarding.AuthLoadingKind
 import org.orma.project_90.onboarding.AuthIdentifierType
@@ -57,6 +59,7 @@ import org.orma.project_90.onboarding.OnboardingStageContent
 import org.orma.project_90.onboarding.OnboardingActions
 import org.orma.project_90.onboarding.OnboardingStep
 import org.orma.project_90.onboarding.OnboardingUiState
+import org.orma.project_90.onboarding.OrmaDesktopDownloadPanel
 import org.orma.project_90.onboarding.OrmaCountryUi
 import org.orma.project_90.onboarding.isOtpValid
 import org.orma.project_90.onboarding.loginIdentifierError
@@ -124,7 +127,7 @@ private fun WebOwnerProfileScreen(
     ) {
         Column(
             modifier = Modifier
-                .widthIn(max = 760.dp)
+                .widthIn(max = 640.dp)
                 .fillMaxWidth()
                 .padding(horizontal = 48.dp)
                 .verticalScroll(rememberScrollState()),
@@ -137,7 +140,7 @@ private fun WebOwnerProfileScreen(
             ) {
                 Text(
                     text = "Create the workspace owner",
-                    style = MaterialTheme.typography.displayLarge,
+                    style = MaterialTheme.typography.displayMedium,
                     color = OrmaColors.TextPrimary,
                     textAlign = TextAlign.Center,
                 )
@@ -181,11 +184,6 @@ private fun WebOwnerProfileScreen(
                     enabled = !state.onboardingLoading,
                     onClick = actions.onBack,
                 )
-                WebTextAuthButton(
-                    text = "Join existing workspace",
-                    enabled = !state.onboardingLoading,
-                    onClick = { actions.onAccessPathChange(AccessPath.TeamMember) },
-                )
             }
         }
     }
@@ -197,11 +195,6 @@ private fun WebTeamAccessScreen(
     actions: OnboardingActions,
     modifier: Modifier = Modifier,
 ) {
-    val hasMatchedInvite = state.workspaceId.isNotBlank() && state.teamInviteCode.isNotBlank()
-    val contactLabel = state.pendingInviteEmail
-        .ifBlank { state.pendingInvitePhoneNumber }
-        .ifBlank { state.identifier.trim() }
-        .ifBlank { "Signed-in account" }
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -212,7 +205,7 @@ private fun WebTeamAccessScreen(
     ) {
         Column(
             modifier = Modifier
-                .widthIn(max = 760.dp)
+                .widthIn(max = 640.dp)
                 .fillMaxWidth()
                 .padding(horizontal = 48.dp)
                 .verticalScroll(rememberScrollState()),
@@ -224,66 +217,26 @@ private fun WebTeamAccessScreen(
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
                 Text(
-                    text = if (hasMatchedInvite) "Complete team profile" else "Join your workspace",
-                    style = MaterialTheme.typography.displayLarge,
+                    text = "Use an active workspace account",
+                    style = MaterialTheme.typography.displayMedium,
                     color = OrmaColors.TextPrimary,
                     textAlign = TextAlign.Center,
                 )
                 Text(
-                    text = if (hasMatchedInvite) {
-                        "Confirm the invited business and add the name your team will see."
-                    } else {
-                        "Enter the invite code from the business owner, then finish your team profile."
-                    },
+                    text = "Team access is managed by the workspace. Sign in with an account that already has access, or set up a new business.",
                     style = MaterialTheme.typography.titleSmall,
                     color = OrmaColors.TextSecondary,
                     textAlign = TextAlign.Center,
                 )
             }
 
-            if (hasMatchedInvite) {
-                WebInviteSummaryCard(
-                    rows = buildList {
-                        add("Business" to state.workspaceName.ifBlank { "Workspace" })
-                        state.workspaceLegalName.takeIf { it.isNotBlank() }?.let { add("Legal name" to it) }
-                        add("Role" to webTeamRoleLabel(state.pendingInviteRole.ifBlank { "team_member" }))
-                        add("Invited account" to contactLabel)
-                    },
-                )
-            } else {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(16.dp),
-                ) {
-                    Text(
-                        text = "INVITE CODE",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = OrmaColors.TextSecondary,
-                    )
-                    WebTextInputField(
-                        value = state.teamInviteCode,
-                        onValueChange = actions.onTeamInviteCodeChange,
-                        placeholder = "Code from owner",
-                        enabled = !state.onboardingLoading,
-                    )
-                }
-            }
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
-            ) {
-                Text(
-                    text = "TEAM PROFILE",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = OrmaColors.TextSecondary,
-                )
-                WebTextInputField(
-                    value = state.teamProfileName,
-                    onValueChange = actions.onTeamProfileNameChange,
-                    placeholder = state.teamProfileName.ifBlank { "Full name" },
-                    enabled = !state.onboardingLoading,
-                )
-            }
+            WebInviteSummaryCard(
+                rows = listOf(
+                    "Signed in as" to state.identifier.trim().ifBlank { "Authenticated user" },
+                    "Workspace" to state.workspaceName.ifBlank { "Not linked" },
+                    "Access" to "No active workspace access",
+                ),
+            )
 
             val inviteErrorMessage = state.inviteErrorMessage
             if (!inviteErrorMessage.isNullOrBlank()) {
@@ -301,15 +254,15 @@ private fun WebTeamAccessScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
-                WebSendCodeButton(
-                    text = if (state.onboardingLoading) "Joining..." else "Continue",
-                    enabled = !state.onboardingLoading && state.teamProfileReady,
-                    onClick = actions.onContinue,
-                )
                 WebTextAuthButton(
                     text = "Set up a business instead",
                     enabled = !state.onboardingLoading,
                     onClick = actions.onCreateBusiness,
+                )
+                WebTextAuthButton(
+                    text = "Use a different account",
+                    enabled = !state.onboardingLoading,
+                    onClick = actions.onRestart,
                 )
             }
         }
@@ -325,17 +278,18 @@ private fun WebInviteSummaryCard(
         shape = OrmaShapes.StandardCell,
         color = OrmaColors.CellBackground,
         contentColor = OrmaColors.TextPrimary,
-        border = BorderStroke(1.dp, OrmaColors.Hairline),
+        border = null,
         tonalElevation = 0.dp,
         shadowElevation = 0.dp,
     ) {
         Column(
-            modifier = Modifier.padding(horizontal = 26.dp, vertical = 20.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
         ) {
-            rows.forEach { row ->
+            rows.forEachIndexed { index, row ->
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 14.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -350,6 +304,9 @@ private fun WebInviteSummaryCard(
                         color = OrmaColors.TextPrimary,
                         textAlign = TextAlign.End,
                     )
+                }
+                if (index != rows.lastIndex) {
+                    HorizontalDivider(color = OrmaColors.Divider)
                 }
             }
         }
@@ -445,7 +402,7 @@ private fun WebPhoneAuthenticationScreen(
     ) {
         Column(
             modifier = Modifier
-                .widthIn(max = 800.dp)
+                .widthIn(max = 640.dp)
                 .fillMaxWidth()
                 .padding(horizontal = 48.dp)
                 .verticalScroll(rememberScrollState()),
@@ -458,7 +415,7 @@ private fun WebPhoneAuthenticationScreen(
             ) {
                 Text(
                     text = "Sign in to continue",
-                    style = MaterialTheme.typography.displayLarge,
+                    style = MaterialTheme.typography.displayMedium,
                     color = OrmaColors.TextPrimary,
                     textAlign = TextAlign.Center,
                 )
@@ -537,6 +494,9 @@ private fun WebPhoneAuthenticationScreen(
                 color = OrmaColors.TextSecondary,
                 textAlign = TextAlign.Center,
             )
+            if (isOrmaWebDownloadSurface()) {
+                OrmaDesktopDownloadPanel(wide = true)
+            }
         }
 
         if (showCountryPicker) {
@@ -575,7 +535,7 @@ private fun WebOtpVerificationScreen(
     ) {
         Column(
             modifier = Modifier
-                .widthIn(max = 800.dp)
+                .widthIn(max = 640.dp)
                 .fillMaxWidth()
                 .padding(horizontal = 48.dp)
                 .verticalScroll(rememberScrollState()),
@@ -588,7 +548,7 @@ private fun WebOtpVerificationScreen(
             ) {
                 Text(
                     text = "Enter verification code",
-                    style = MaterialTheme.typography.displayLarge,
+                    style = MaterialTheme.typography.displayMedium,
                     color = OrmaColors.TextPrimary,
                     textAlign = TextAlign.Center,
                 )
@@ -893,7 +853,7 @@ private fun WebSendCodeButton(
             ),
         shape = OrmaShapes.Capsule,
         color = if (enabled) OrmaColors.Accent else OrmaColors.Accent.copy(alpha = 0.35f),
-        contentColor = OrmaColors.ScreenBackground,
+        contentColor = OrmaColors.OnAccent,
         tonalElevation = 0.dp,
         shadowElevation = 0.dp,
     ) {

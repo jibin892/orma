@@ -5,6 +5,7 @@
   "apiKey": "AIzaSyCGglHuAEx0e1xz6o-A5FqSRAAWepffXlk",
   "authDomain": "orma-project-90.firebaseapp.com",
   "messagingSenderId": "469264683998",
+  "vapidKey": "",
   "projectNumber": "469264683998",
   "version": "2"
 }

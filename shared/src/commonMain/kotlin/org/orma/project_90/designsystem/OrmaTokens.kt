@@ -28,12 +28,12 @@ object OrmaSpacing {
 
 object OrmaRadii {
     val Skeleton = 6.dp
-    val CheckoutButton = 14.dp
-    val SmallCard = 16.dp
-    val Field = 18.dp
-    val StandardCell = 20.dp
-    val PremiumCard = 24.dp
-    val Sheet = 28.dp
+    val CheckoutButton = 12.dp
+    val SmallCard = 12.dp
+    val Field = 10.dp
+    val StandardCell = 14.dp
+    val PremiumCard = 18.dp
+    val Sheet = 22.dp
     val Capsule = 999.dp
 }
 
@@ -58,15 +58,15 @@ object OrmaMotion {
 
 object OrmaElevation {
     val None: Dp = 0.dp
-    val Subtle: Dp = 3.dp
-    val Medium: Dp = 6.dp
-    val Prominent: Dp = 10.dp
+    val Subtle: Dp = 0.dp
+    val Medium: Dp = 2.dp
+    val Prominent: Dp = 4.dp
 }
 
 internal val OrmaMaterialShapes = Shapes(
-    extraSmall = RoundedCornerShape(8.dp),
+    extraSmall = RoundedCornerShape(6.dp),
     small = OrmaShapes.SmallCard,
     medium = OrmaShapes.StandardCell,
     large = OrmaShapes.PremiumCard,
-    extraLarge = OrmaShapes.PremiumCard,
+    extraLarge = OrmaShapes.Sheet,
 )

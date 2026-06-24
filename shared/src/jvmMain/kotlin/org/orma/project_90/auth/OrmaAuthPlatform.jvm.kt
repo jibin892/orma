@@ -14,11 +14,13 @@ import java.io.IOException
 import java.io.OutputStream
 import java.net.InetSocketAddress
 import java.net.URI
+import java.net.URLEncoder
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.nio.charset.StandardCharsets
 import java.time.Duration
+import java.util.UUID
 
 private val ormaJvmHttpClient: HttpClient =
     HttpClient.newBuilder()
@@ -26,6 +28,8 @@ private val ormaJvmHttpClient: HttpClient =
         .build()
 
 private const val DesktopGoogleAuthPreferredPort = 8754
+private const val DesktopGoogleAuthWebUrl = "https://orma-web-dist-dev-api.vercel.app/"
+private const val DesktopGoogleAuthCallbackPath = "/desktop-auth-complete"
 
 actual fun currentFirebaseClientConfig(): OrmaFirebaseClientConfig =
     OrmaFirebaseConfig.desktop
@@ -50,6 +54,12 @@ actual suspend fun ormaPostJsonAuthorized(
     body: String,
     bearerToken: String,
 ): OrmaHttpResponse = postJson(url = url, body = body, bearerToken = bearerToken)
+
+actual suspend fun ormaPutJsonAuthorized(
+    url: String,
+    body: String,
+    bearerToken: String,
+): OrmaHttpResponse = putJson(url = url, body = body, bearerToken = bearerToken)
 
 actual suspend fun ormaGetAuthorized(
     url: String,
@@ -105,6 +115,19 @@ private suspend fun postJson(
     body = body,
     contentType = "application/json",
     bearerToken = bearerToken,
+    method = "POST",
+)
+
+private suspend fun putJson(
+    url: String,
+    body: String,
+    bearerToken: String?,
+): OrmaHttpResponse = postBody(
+    url = url,
+    body = body,
+    contentType = "application/json",
+    bearerToken = bearerToken,
+    method = "PUT",
 )
 
 private suspend fun postBody(
@@ -112,6 +135,7 @@ private suspend fun postBody(
     body: String,
     contentType: String,
     bearerToken: String?,
+    method: String = "POST",
 ): OrmaHttpResponse = withContext(Dispatchers.IO) {
     val requestBuilder = HttpRequest.newBuilder(URI.create(url))
         .timeout(Duration.ofSeconds(15))
@@ -119,9 +143,12 @@ private suspend fun postBody(
     if (!bearerToken.isNullOrBlank()) {
         requestBuilder.header("Authorization", "Bearer $bearerToken")
     }
-    val request = requestBuilder
-        .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
-        .build()
+    val bodyPublisher = HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8)
+    val request = if (method == "PUT") {
+        requestBuilder.PUT(bodyPublisher).build()
+    } else {
+        requestBuilder.POST(bodyPublisher).build()
+    }
     val response = ormaJvmHttpClient.send(
         request,
         HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8),
@@ -177,16 +204,36 @@ actual suspend fun requestGoogleIdToken(
     }
 
     val deferred = CompletableDeferred<OrmaGoogleSignInResult>()
-    val server = createDesktopGoogleAuthServer()
-    val authUrl = "http://localhost:${server.address.port}/"
+    val server = try {
+        createDesktopGoogleAuthServer()
+    } catch (error: Throwable) {
+        return@withContext OrmaGoogleSignInResult.Failure(
+            title = "Google sign-in cannot open",
+            message = "ORMA could not start the local desktop sign-in callback. Close any other ORMA sign-in window, restart the desktop app, and try again.",
+            code = "GOOGLE_DESKTOP_LOCALHOST_UNAVAILABLE",
+        )
+    }
+    val state = UUID.randomUUID().toString()
+    val authUrl = desktopGoogleAuthUrl(
+        port = server.address.port,
+        state = state,
+    )
 
     server.createContext("/") { exchange ->
         when {
             exchange.requestMethod == "GET" && exchange.requestURI.path == "/" -> {
-                exchange.writeHtml(desktopGoogleAuthPage(config))
+                exchange.writeHtml(desktopGoogleRedirectPage(authUrl))
+            }
+            exchange.requestMethod == "GET" && exchange.requestURI.path == DesktopGoogleAuthCallbackPath -> {
+                exchange.writeHtml(desktopGoogleCallbackPage(expectedState = state))
             }
             exchange.requestMethod == "POST" && exchange.requestURI.path == "/complete" -> {
                 val body = exchange.requestBody.bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
+                if (body.jsonStringValue("state") != state) {
+                    exchange.sendResponseHeaders(403, -1)
+                    exchange.close()
+                    return@createContext
+                }
                 val idToken = body.jsonStringValue("idToken")
                 val firebaseIdToken = body.jsonStringValue("firebaseIdToken")
                 val errorMessage = body.jsonStringValue("errorMessage")
@@ -255,14 +302,47 @@ private fun createDesktopGoogleAuthServer(): HttpServer =
         HttpServer.create(InetSocketAddress("localhost", 0), 0)
     }
 
-private fun desktopGoogleAuthPage(config: OrmaFirebaseClientConfig): String =
+private fun desktopGoogleAuthUrl(
+    port: Int,
+    state: String,
+): String {
+    val callbackUrl = "http://localhost:$port$DesktopGoogleAuthCallbackPath"
+    val query = listOf(
+        "desktopAuthCallback" to callbackUrl,
+        "desktopAuthState" to state,
+    ).joinToString("&") { (name, value) ->
+        "${name.urlEncoded()}=${value.urlEncoded()}"
+    }
+    return "$DesktopGoogleAuthWebUrl?$query"
+}
+
+private fun String.urlEncoded(): String =
+    URLEncoder.encode(this, StandardCharsets.UTF_8)
+
+private fun desktopGoogleRedirectPage(authUrl: String): String =
+    """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="utf-8">
+      <title>ORMA Google sign-in</title>
+      <meta http-equiv="refresh" content="0; url=$authUrl">
+    </head>
+    <body>
+      <p>Opening ORMA Google sign-in...</p>
+      <script>window.location.replace("$authUrl");</script>
+    </body>
+    </html>
+    """.trimIndent()
+
+private fun desktopGoogleCallbackPage(expectedState: String): String =
     """
     <!DOCTYPE html>
     <html lang="en">
     <head>
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1">
-      <title>ORMA Google sign-in</title>
+      <title>ORMA Google sign-in complete</title>
       <style>
         :root { color-scheme: light; }
         body {
@@ -270,17 +350,17 @@ private fun desktopGoogleAuthPage(config: OrmaFirebaseClientConfig): String =
           margin: 0;
           display: grid;
           place-items: center;
-          background: #fffaf0;
-          color: #103d40;
+          background: #FCFDFE;
+          color: #173B3D;
           font-family: -apple-system, BlinkMacSystemFont, "Google Sans", "Segoe UI", sans-serif;
         }
         main {
           width: min(420px, calc(100vw - 40px));
-          border: 1px solid #dfe4df;
+          border: 1px solid #EEF2FF;
           border-radius: 28px;
-          background: #fffefa;
+          background: #FFFFFF;
           padding: 32px;
-          box-shadow: 0 24px 70px rgba(16, 61, 64, 0.12);
+          box-shadow: 0 24px 70px rgba(79, 70, 229, 0.14);
         }
         h1 {
           margin: 0 0 10px;
@@ -290,7 +370,7 @@ private fun desktopGoogleAuthPage(config: OrmaFirebaseClientConfig): String =
         }
         p {
           margin: 0 0 24px;
-          color: #78918c;
+          color: rgba(23, 59, 61, 0.56);
           font-size: 16px;
           line-height: 1.55;
         }
@@ -299,8 +379,8 @@ private fun desktopGoogleAuthPage(config: OrmaFirebaseClientConfig): String =
           height: 56px;
           border: 0;
           border-radius: 18px;
-          background: #113f42;
-          color: #fffefa;
+          background: #4F46E5;
+          color: #FFFFFF;
           font: inherit;
           font-size: 16px;
           font-weight: 650;
@@ -313,41 +393,32 @@ private fun desktopGoogleAuthPage(config: OrmaFirebaseClientConfig): String =
         #status {
           margin-top: 18px;
           min-height: 22px;
-          color: #b04436;
+          color: #EF4444;
         }
       </style>
     </head>
     <body>
-      <main id="fallback" hidden>
-        <h1>Google sign-in</h1>
-        <p id="message">Opening Google account chooser...</p>
-        <button id="googleButton" type="button">Try again</button>
-        <p id="status" role="status"></p>
+      <main>
+        <h1>Signed in</h1>
+        <p id="message">Finishing ORMA desktop sign-in...</p>
       </main>
-      <script type="module">
-        import { initializeApp, getApps } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-app.js";
-        import { getAuth, GoogleAuthProvider, getRedirectResult, onAuthStateChanged, signInWithRedirect } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-auth.js";
-
-        const firebaseConfig = {
-          apiKey: "${config.apiKey}",
-          authDomain: "${config.authDomain}",
-          projectId: "${config.projectId}",
-          storageBucket: "${config.storageBucket}",
-          messagingSenderId: "${config.projectNumber}",
-          appId: "${config.appId}"
-        };
-        const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
-        const auth = getAuth(app);
-        const provider = new GoogleAuthProvider();
-        provider.setCustomParameters({ prompt: "select_account" });
-
-        const redirectKey = "orma-google-redirect-${config.appId}";
-        const fallback = document.getElementById("fallback");
-        const button = document.getElementById("googleButton");
+      <script>
+        const expectedState = "$expectedState";
         const message = document.getElementById("message");
-        const status = document.getElementById("status");
+
+        function decodePayload(encoded) {
+          const base64 = encoded.replace(/-/g, "+").replace(/_/g, "/");
+          const padded = base64 + "=".repeat((4 - base64.length % 4) % 4);
+          const binary = atob(padded);
+          const bytes = new Uint8Array(binary.length);
+          for (let index = 0; index < binary.length; index += 1) {
+            bytes[index] = binary.charCodeAt(index);
+          }
+          return JSON.parse(new TextDecoder().decode(bytes));
+        }
 
         async function complete(payload) {
+          payload.state = payload.state || expectedState;
           await fetch("/complete", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -355,111 +426,30 @@ private fun desktopGoogleAuthPage(config: OrmaFirebaseClientConfig): String =
           });
         }
 
-        function currentUserWhenReady() {
-          if (auth.currentUser) {
-            return Promise.resolve(auth.currentUser);
-          }
-          return new Promise((resolve) => {
-            let settled = false;
-            let unsubscribe = () => {};
-            const timeout = setTimeout(() => {
-              if (!settled) {
-                settled = true;
-                unsubscribe();
-                resolve(null);
-              }
-            }, 900);
-            unsubscribe = onAuthStateChanged(auth, (user) => {
-              if (!settled) {
-                settled = true;
-                clearTimeout(timeout);
-                unsubscribe();
-                resolve(user || null);
-              }
-            });
-          });
-        }
-
-        async function completeWithUser(user) {
-          const firebaseIdToken = await user.getIdToken(true);
-          if (!firebaseIdToken) {
-            throw new Error("Firebase did not return an ID token for the signed-in user.");
-          }
-          const providerId = user.providerData && user.providerData.length
-            ? user.providerData[0].providerId
-            : "google.com";
-          await complete({
-            firebaseIdToken,
-            refreshToken: user.refreshToken || "",
-            uid: user.uid || "",
-            email: user.email || "",
-            phoneNumber: user.phoneNumber || "",
-            displayName: user.displayName || "",
-            providerId
-          });
-          document.body.innerHTML = "<main><h1>Signed in</h1><p>You can return to ORMA now.</p></main>";
-          window.close();
-        }
-
-        async function openGoogle() {
-          button.disabled = true;
-          status.textContent = "";
-          try {
-            sessionStorage.setItem(redirectKey, String(Date.now()));
-            await signInWithRedirect(auth, provider);
-          } catch (error) {
-            showFallback(error && error.message ? error.message : "Could not open Google account chooser.");
-          }
-        }
-
-        function showFallback(text) {
-          fallback.hidden = false;
-          message.textContent = "Google account chooser did not open automatically.";
-          status.textContent = text;
-          button.disabled = false;
-        }
-
         async function finishWithError(error) {
-          const message = error && error.message ? error.message : "Google sign-in did not complete.";
           await complete({
             errorTitle: "Google sign-in failed",
-            errorMessage: message,
+            errorMessage: error && error.message ? error.message : "ORMA could not complete desktop sign-in.",
             errorCode: error && error.code ? error.code : "GOOGLE_DESKTOP_FAILED"
           });
-          document.body.innerHTML = "<main><h1>Sign-in failed</h1><p>You can return to ORMA and try again.</p></main>";
         }
 
         async function start() {
-          fallback.hidden = true;
           try {
-            const result = await getRedirectResult(auth);
-            if (result) {
-              sessionStorage.removeItem(redirectKey);
-              const credential = GoogleAuthProvider.credentialFromResult(result);
-              if (!credential || !credential.idToken) {
-                throw new Error("Google did not return an ID token.");
-              }
-              await complete({ idToken: credential.idToken });
-              document.body.innerHTML = "<main><h1>Signed in</h1><p>You can return to ORMA now.</p></main>";
-              window.close();
-              return;
-            }
-
-            const startedAt = Number(sessionStorage.getItem(redirectKey) || "0");
-            const redirectIsRecent = startedAt > 0 && Date.now() - startedAt < 180000;
-            if (redirectIsRecent) {
-              sessionStorage.removeItem(redirectKey);
-              throw new Error("Google returned without an account token.");
-            }
-
-            await openGoogle();
+            const fragment = new URLSearchParams(window.location.hash.slice(1));
+            const encodedPayload = fragment.get("payload");
+            if (!encodedPayload) throw new Error("Desktop sign-in returned without an account token.");
+            const payload = decodePayload(encodedPayload);
+            if (payload.state !== expectedState) throw new Error("Desktop sign-in state did not match.");
+            await complete(payload);
+            message.textContent = "You can return to ORMA now.";
+            window.close();
           } catch (error) {
-            sessionStorage.removeItem(redirectKey);
             await finishWithError(error);
+            message.textContent = "Sign-in failed. You can return to ORMA and try again.";
           }
         }
 
-        button.addEventListener("click", openGoogle);
         start();
       </script>
     </body>

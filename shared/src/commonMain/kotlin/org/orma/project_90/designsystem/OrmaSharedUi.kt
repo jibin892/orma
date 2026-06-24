@@ -35,6 +35,10 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -48,12 +52,26 @@ import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import org.jetbrains.compose.resources.DrawableResource
+import org.jetbrains.compose.resources.painterResource
+import org.orma.project_90.calendar.ormaCurrentIsoDate
+import orma.shared.generated.resources.Res
+import orma.shared.generated.resources.orma_icon_back
+import orma.shared.generated.resources.orma_icon_download
+import orma.shared.generated.resources.orma_icon_edit
+import orma.shared.generated.resources.orma_icon_image
+import orma.shared.generated.resources.orma_icon_next
+import orma.shared.generated.resources.orma_icon_print
+import orma.shared.generated.resources.orma_icon_refresh
+import orma.shared.generated.resources.orma_icon_stock
+import orma.shared.generated.resources.orma_icon_view
 
 enum class OrmaWindowClass {
     Mobile,
@@ -125,112 +143,322 @@ fun OrmaBrandMark(
     }
 }
 
+enum class OrmaFlatIconKind {
+    Refresh,
+    Calendar,
+    ChevronDown,
+    ChevronLeft,
+    ChevronRight,
+    Close,
+    Search,
+    Plus,
+    Edit,
+    View,
+    Image,
+    Stock,
+    Download,
+    Upload,
+    Print,
+    Category,
+    Back,
+}
+
+@Composable
+fun OrmaFlatIcon(
+    kind: OrmaFlatIconKind,
+    modifier: Modifier = Modifier.size(18.dp),
+    color: Color = OrmaColors.IconPrimary,
+) {
+    val resource = ormaFlatIconResource(kind)
+    if (resource != null) {
+        Icon(
+            painter = painterResource(resource),
+            contentDescription = null,
+            modifier = modifier,
+            tint = color,
+        )
+    } else {
+        Canvas(modifier = modifier) {
+            drawOrmaFlatIcon(kind = kind, color = color)
+        }
+    }
+}
+
+private fun ormaFlatIconResource(kind: OrmaFlatIconKind): DrawableResource? = when (kind) {
+    OrmaFlatIconKind.Refresh -> Res.drawable.orma_icon_refresh
+    OrmaFlatIconKind.ChevronLeft,
+    OrmaFlatIconKind.Back -> Res.drawable.orma_icon_back
+    OrmaFlatIconKind.ChevronRight -> Res.drawable.orma_icon_next
+    OrmaFlatIconKind.Edit -> Res.drawable.orma_icon_edit
+    OrmaFlatIconKind.View -> Res.drawable.orma_icon_view
+    OrmaFlatIconKind.Image -> Res.drawable.orma_icon_image
+    OrmaFlatIconKind.Stock -> Res.drawable.orma_icon_stock
+    OrmaFlatIconKind.Download -> Res.drawable.orma_icon_download
+    OrmaFlatIconKind.Print -> Res.drawable.orma_icon_print
+    else -> null
+}
+
 @Composable
 fun OrmaChevronDownIcon(
     modifier: Modifier = Modifier.size(16.dp),
     color: Color = OrmaColors.TextSecondary,
 ) {
-    Canvas(modifier = modifier) {
-        val strokeWidth = (size.minDimension * 0.13f).coerceAtLeast(1.6f)
-        val path = Path().apply {
-            moveTo(size.width * 0.24f, size.height * 0.40f)
-            lineTo(size.width * 0.50f, size.height * 0.64f)
-            lineTo(size.width * 0.76f, size.height * 0.40f)
-        }
-        drawPath(
-            path = path,
-            color = color,
-            style = Stroke(
-                width = strokeWidth,
-                cap = StrokeCap.Round,
-                join = StrokeJoin.Round,
-            ),
-        )
-    }
+    OrmaFlatIcon(
+        kind = OrmaFlatIconKind.ChevronDown,
+        modifier = modifier,
+        color = color,
+    )
 }
 
 @Composable
 fun OrmaCloseIcon(
     modifier: Modifier = Modifier.size(18.dp),
-    color: Color = OrmaColors.Accent,
+    color: Color = OrmaColors.IconPrimary,
 ) {
-    Canvas(modifier = modifier) {
-        val strokeWidth = (size.minDimension * 0.12f).coerceAtLeast(1.8f)
-        drawLine(
-            color = color,
-            start = Offset(size.width * 0.30f, size.height * 0.30f),
-            end = Offset(size.width * 0.70f, size.height * 0.70f),
-            strokeWidth = strokeWidth,
-            cap = StrokeCap.Round,
-        )
-        drawLine(
-            color = color,
-            start = Offset(size.width * 0.70f, size.height * 0.30f),
-            end = Offset(size.width * 0.30f, size.height * 0.70f),
-            strokeWidth = strokeWidth,
-            cap = StrokeCap.Round,
-        )
-    }
+    OrmaFlatIcon(
+        kind = OrmaFlatIconKind.Close,
+        modifier = modifier,
+        color = color,
+    )
 }
 
 @Composable
 fun OrmaUploadImageIcon(
     modifier: Modifier = Modifier.size(34.dp),
-    color: Color = OrmaColors.Accent,
+    color: Color = OrmaColors.IconPrimary,
 ) {
-    Canvas(modifier = modifier) {
-        val strokeWidth = (size.minDimension * 0.07f).coerceAtLeast(1.4f)
-        val frameTopLeft = Offset(size.width * 0.14f, size.height * 0.22f)
-        val frameSize = Size(size.width * 0.72f, size.height * 0.58f)
-        drawRoundRect(
-            color = color.copy(alpha = 0.60f),
-            topLeft = frameTopLeft,
-            size = frameSize,
-            cornerRadius = CornerRadius(size.minDimension * 0.10f, size.minDimension * 0.10f),
-            style = Stroke(width = strokeWidth),
-        )
-        drawCircle(
-            color = color.copy(alpha = 0.72f),
-            radius = size.minDimension * 0.055f,
-            center = Offset(size.width * 0.34f, size.height * 0.39f),
-        )
-        val mountain = Path().apply {
-            moveTo(size.width * 0.24f, size.height * 0.68f)
-            lineTo(size.width * 0.43f, size.height * 0.52f)
-            lineTo(size.width * 0.55f, size.height * 0.63f)
-            lineTo(size.width * 0.66f, size.height * 0.50f)
-            lineTo(size.width * 0.80f, size.height * 0.68f)
-        }
-        drawPath(
-            path = mountain,
-            color = color,
-            style = Stroke(
-                width = strokeWidth,
+    OrmaFlatIcon(
+        kind = OrmaFlatIconKind.Upload,
+        modifier = modifier,
+        color = color,
+    )
+}
+
+private fun DrawScope.drawOrmaFlatIcon(
+    kind: OrmaFlatIconKind,
+    color: Color,
+) {
+    val width = size.width
+    val height = size.height
+    val unit = size.minDimension
+    val strokeWidth = (unit * 0.12f).coerceAtLeast(1.6f)
+    val stroke = Stroke(
+        width = strokeWidth,
+        cap = StrokeCap.Round,
+        join = StrokeJoin.Round,
+    )
+    when (kind) {
+        OrmaFlatIconKind.Refresh -> {
+            val arcBounds = Size(width * 0.64f, height * 0.64f)
+            val arcTopLeft = Offset(width * 0.18f, height * 0.18f)
+            drawArc(
+                color = color,
+                startAngle = 42f,
+                sweepAngle = 286f,
+                useCenter = false,
+                topLeft = arcTopLeft,
+                size = arcBounds,
+                style = stroke,
+            )
+            drawLine(
+                color = color,
+                start = Offset(width * 0.79f, height * 0.18f),
+                end = Offset(width * 0.86f, height * 0.36f),
+                strokeWidth = strokeWidth,
                 cap = StrokeCap.Round,
-                join = StrokeJoin.Round,
-            ),
-        )
-        drawLine(
-            color = color,
-            start = Offset(size.width * 0.50f, size.height * 0.12f),
-            end = Offset(size.width * 0.50f, size.height * 0.34f),
-            strokeWidth = strokeWidth,
-            cap = StrokeCap.Round,
-        )
-        drawLine(
-            color = color,
-            start = Offset(size.width * 0.39f, size.height * 0.23f),
-            end = Offset(size.width * 0.50f, size.height * 0.12f),
-            strokeWidth = strokeWidth,
-            cap = StrokeCap.Round,
-        )
-        drawLine(
-            color = color,
-            start = Offset(size.width * 0.61f, size.height * 0.23f),
-            end = Offset(size.width * 0.50f, size.height * 0.12f),
-            strokeWidth = strokeWidth,
-            cap = StrokeCap.Round,
-        )
+            )
+            drawLine(
+                color = color,
+                start = Offset(width * 0.79f, height * 0.18f),
+                end = Offset(width * 0.60f, height * 0.23f),
+                strokeWidth = strokeWidth,
+                cap = StrokeCap.Round,
+            )
+            drawArc(
+                color = color.copy(alpha = 0.42f),
+                startAngle = 222f,
+                sweepAngle = 74f,
+                useCenter = false,
+                topLeft = arcTopLeft,
+                size = arcBounds,
+                style = stroke,
+            )
+        }
+        OrmaFlatIconKind.Calendar -> {
+            drawRoundRect(
+                color = color,
+                topLeft = Offset(width * 0.16f, height * 0.20f),
+                size = Size(width * 0.68f, height * 0.64f),
+                cornerRadius = CornerRadius(unit * 0.12f, unit * 0.12f),
+                style = stroke,
+            )
+            drawRoundRect(
+                color = color.copy(alpha = 0.18f),
+                topLeft = Offset(width * 0.16f, height * 0.30f),
+                size = Size(width * 0.68f, height * 0.18f),
+                cornerRadius = CornerRadius(unit * 0.06f, unit * 0.06f),
+            )
+            drawLine(color, Offset(width * 0.32f, height * 0.14f), Offset(width * 0.32f, height * 0.30f), strokeWidth, StrokeCap.Round)
+            drawLine(color, Offset(width * 0.68f, height * 0.14f), Offset(width * 0.68f, height * 0.30f), strokeWidth, StrokeCap.Round)
+            drawCircle(color = color, radius = unit * 0.035f, center = Offset(width * 0.36f, height * 0.60f))
+            drawCircle(color = color, radius = unit * 0.035f, center = Offset(width * 0.50f, height * 0.60f))
+            drawCircle(color = color, radius = unit * 0.035f, center = Offset(width * 0.64f, height * 0.60f))
+        }
+        OrmaFlatIconKind.ChevronDown -> {
+            val arrow = Path().apply {
+                moveTo(width * 0.22f, height * 0.36f)
+                lineTo(width * 0.50f, height * 0.66f)
+                lineTo(width * 0.78f, height * 0.36f)
+                lineTo(width * 0.68f, height * 0.28f)
+                lineTo(width * 0.50f, height * 0.48f)
+                lineTo(width * 0.32f, height * 0.28f)
+                close()
+            }
+            drawPath(path = arrow, color = color)
+        }
+        OrmaFlatIconKind.ChevronLeft -> {
+            drawLine(color, Offset(width * 0.62f, height * 0.22f), Offset(width * 0.38f, height * 0.50f), strokeWidth, StrokeCap.Round)
+            drawLine(color, Offset(width * 0.38f, height * 0.50f), Offset(width * 0.62f, height * 0.78f), strokeWidth, StrokeCap.Round)
+        }
+        OrmaFlatIconKind.ChevronRight -> {
+            drawLine(color, Offset(width * 0.38f, height * 0.22f), Offset(width * 0.62f, height * 0.50f), strokeWidth, StrokeCap.Round)
+            drawLine(color, Offset(width * 0.62f, height * 0.50f), Offset(width * 0.38f, height * 0.78f), strokeWidth, StrokeCap.Round)
+        }
+        OrmaFlatIconKind.Close -> {
+            drawLine(color, Offset(width * 0.30f, height * 0.30f), Offset(width * 0.70f, height * 0.70f), strokeWidth, StrokeCap.Round)
+            drawLine(color, Offset(width * 0.70f, height * 0.30f), Offset(width * 0.30f, height * 0.70f), strokeWidth, StrokeCap.Round)
+        }
+        OrmaFlatIconKind.Search -> {
+            drawCircle(
+                color = color,
+                radius = unit * 0.25f,
+                center = Offset(width * 0.44f, height * 0.42f),
+                style = stroke,
+            )
+            drawLine(color, Offset(width * 0.62f, height * 0.62f), Offset(width * 0.80f, height * 0.80f), strokeWidth, StrokeCap.Round)
+        }
+        OrmaFlatIconKind.Plus -> {
+            drawLine(color, Offset(width * 0.50f, height * 0.24f), Offset(width * 0.50f, height * 0.76f), strokeWidth, StrokeCap.Round)
+            drawLine(color, Offset(width * 0.24f, height * 0.50f), Offset(width * 0.76f, height * 0.50f), strokeWidth, StrokeCap.Round)
+        }
+        OrmaFlatIconKind.Edit -> {
+            drawLine(color, Offset(width * 0.27f, height * 0.72f), Offset(width * 0.68f, height * 0.31f), strokeWidth, StrokeCap.Round)
+            drawLine(color, Offset(width * 0.62f, height * 0.25f), Offset(width * 0.75f, height * 0.38f), strokeWidth, StrokeCap.Round)
+            drawLine(color, Offset(width * 0.24f, height * 0.78f), Offset(width * 0.40f, height * 0.74f), strokeWidth, StrokeCap.Round)
+        }
+        OrmaFlatIconKind.View -> {
+            val eye = Path().apply {
+                moveTo(width * 0.12f, height * 0.50f)
+                cubicTo(width * 0.30f, height * 0.25f, width * 0.70f, height * 0.25f, width * 0.88f, height * 0.50f)
+                cubicTo(width * 0.70f, height * 0.75f, width * 0.30f, height * 0.75f, width * 0.12f, height * 0.50f)
+                close()
+            }
+            drawPath(path = eye, color = color.copy(alpha = 0.20f))
+            drawPath(path = eye, color = color, style = stroke)
+            drawCircle(color = color, radius = unit * 0.10f, center = Offset(width * 0.50f, height * 0.50f))
+        }
+        OrmaFlatIconKind.Image -> {
+            drawRoundRect(
+                color = color,
+                topLeft = Offset(width * 0.16f, height * 0.22f),
+                size = Size(width * 0.68f, height * 0.58f),
+                cornerRadius = CornerRadius(unit * 0.10f, unit * 0.10f),
+                style = stroke,
+            )
+            drawCircle(color = color, radius = unit * 0.045f, center = Offset(width * 0.36f, height * 0.40f))
+            val mountain = Path().apply {
+                moveTo(width * 0.24f, height * 0.68f)
+                lineTo(width * 0.43f, height * 0.52f)
+                lineTo(width * 0.55f, height * 0.63f)
+                lineTo(width * 0.66f, height * 0.50f)
+                lineTo(width * 0.79f, height * 0.68f)
+            }
+            drawPath(path = mountain, color = color, style = stroke)
+        }
+        OrmaFlatIconKind.Stock -> {
+            val boxPath = Path().apply {
+                moveTo(width * 0.20f, height * 0.36f)
+                lineTo(width * 0.50f, height * 0.20f)
+                lineTo(width * 0.80f, height * 0.36f)
+                lineTo(width * 0.80f, height * 0.68f)
+                lineTo(width * 0.50f, height * 0.84f)
+                lineTo(width * 0.20f, height * 0.68f)
+                close()
+            }
+            drawPath(path = boxPath, color = color.copy(alpha = 0.18f))
+            drawPath(path = boxPath, color = color, style = stroke)
+            drawLine(color, Offset(width * 0.50f, height * 0.20f), Offset(width * 0.50f, height * 0.52f), strokeWidth, StrokeCap.Round)
+        }
+        OrmaFlatIconKind.Download,
+        OrmaFlatIconKind.Upload -> {
+            val up = kind == OrmaFlatIconKind.Upload
+            val arrowStartY = if (up) height * 0.76f else height * 0.22f
+            val arrowEndY = if (up) height * 0.28f else height * 0.70f
+            drawLine(color, Offset(width * 0.50f, arrowStartY), Offset(width * 0.50f, arrowEndY), strokeWidth, StrokeCap.Round)
+            val arrowTipY = arrowEndY
+            val wingY = if (up) arrowTipY + height * 0.16f else arrowTipY - height * 0.16f
+            drawLine(color, Offset(width * 0.50f, arrowTipY), Offset(width * 0.34f, wingY), strokeWidth, StrokeCap.Round)
+            drawLine(color, Offset(width * 0.50f, arrowTipY), Offset(width * 0.66f, wingY), strokeWidth, StrokeCap.Round)
+            drawLine(color, Offset(width * 0.26f, height * 0.82f), Offset(width * 0.74f, height * 0.82f), strokeWidth, StrokeCap.Round)
+        }
+        OrmaFlatIconKind.Print -> {
+            drawRoundRect(
+                color = color,
+                topLeft = Offset(width * 0.23f, height * 0.15f),
+                size = Size(width * 0.54f, height * 0.24f),
+                cornerRadius = CornerRadius(unit * 0.06f, unit * 0.06f),
+                style = stroke,
+            )
+            drawRoundRect(
+                color = color.copy(alpha = 0.18f),
+                topLeft = Offset(width * 0.15f, height * 0.34f),
+                size = Size(width * 0.70f, height * 0.34f),
+                cornerRadius = CornerRadius(unit * 0.10f, unit * 0.10f),
+            )
+            drawRoundRect(
+                color = color,
+                topLeft = Offset(width * 0.15f, height * 0.34f),
+                size = Size(width * 0.70f, height * 0.34f),
+                cornerRadius = CornerRadius(unit * 0.10f, unit * 0.10f),
+                style = stroke,
+            )
+            drawRoundRect(
+                color = color,
+                topLeft = Offset(width * 0.28f, height * 0.58f),
+                size = Size(width * 0.44f, height * 0.26f),
+                cornerRadius = CornerRadius(unit * 0.05f, unit * 0.05f),
+                style = stroke,
+            )
+            drawCircle(color = color, radius = unit * 0.035f, center = Offset(width * 0.72f, height * 0.46f))
+        }
+        OrmaFlatIconKind.Category -> {
+            val box = unit * 0.22f
+            listOf(
+                Offset(width * 0.22f, height * 0.22f),
+                Offset(width * 0.56f, height * 0.22f),
+                Offset(width * 0.22f, height * 0.56f),
+                Offset(width * 0.56f, height * 0.56f),
+            ).forEach { topLeft ->
+                drawRoundRect(
+                    color = color.copy(alpha = 0.22f),
+                    topLeft = topLeft,
+                    size = Size(box, box),
+                    cornerRadius = CornerRadius(unit * 0.06f, unit * 0.06f),
+                )
+                drawRoundRect(
+                    color = color,
+                    topLeft = topLeft,
+                    size = Size(box, box),
+                    cornerRadius = CornerRadius(unit * 0.06f, unit * 0.06f),
+                    style = Stroke(width = strokeWidth * 0.72f),
+                )
+            }
+        }
+        OrmaFlatIconKind.Back -> {
+            drawLine(color, Offset(width * 0.72f, height * 0.50f), Offset(width * 0.26f, height * 0.50f), strokeWidth, StrokeCap.Round)
+            drawLine(color, Offset(width * 0.26f, height * 0.50f), Offset(width * 0.46f, height * 0.30f), strokeWidth, StrokeCap.Round)
+            drawLine(color, Offset(width * 0.26f, height * 0.50f), Offset(width * 0.46f, height * 0.70f), strokeWidth, StrokeCap.Round)
+        }
     }
 }
 
@@ -328,6 +556,43 @@ fun OrmaAdaptiveSurface(
 }
 
 @Composable
+fun OrmaScreen(
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    OrmaTheme {
+        Surface(
+            modifier = modifier.fillMaxSize(),
+            color = OrmaColors.ScreenBackground,
+            contentColor = OrmaColors.TextPrimary,
+            tonalElevation = 0.dp,
+            shadowElevation = 0.dp,
+            content = content,
+        )
+    }
+}
+
+@Composable
+fun OrmaMobileScreen(
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    OrmaScreen(modifier = modifier) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .navigationBarsPadding()
+                .imePadding()
+                .padding(horizontal = OrmaSpacing.ScreenPadding)
+                .padding(top = 16.dp, bottom = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+            content = content,
+        )
+    }
+}
+
+@Composable
 fun OrmaMobileShell(
     header: @Composable ColumnScope.() -> Unit,
     content: @Composable ColumnScope.() -> Unit,
@@ -339,8 +604,8 @@ fun OrmaMobileShell(
             .statusBarsPadding()
             .navigationBarsPadding()
             .imePadding()
-            .padding(horizontal = 24.dp)
-            .padding(top = 20.dp, bottom = 16.dp),
+            .padding(horizontal = OrmaSpacing.ScreenPadding)
+            .padding(top = 16.dp, bottom = 16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         header()
@@ -357,6 +622,19 @@ fun OrmaMobileShell(
 }
 
 @Composable
+fun OrmaWebDesktopShell(
+    rail: @Composable () -> Unit,
+    content: @Composable () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    OrmaWideShell(
+        rail = rail,
+        content = content,
+        modifier = modifier,
+    )
+}
+
+@Composable
 fun OrmaWideShell(
     rail: @Composable () -> Unit,
     content: @Composable () -> Unit,
@@ -367,12 +645,12 @@ fun OrmaWideShell(
         modifier = modifier
             .fillMaxSize()
             .safeContentPadding()
-            .padding(24.dp),
-        horizontalArrangement = Arrangement.spacedBy(24.dp),
+            .padding(22.dp),
+        horizontalArrangement = Arrangement.spacedBy(22.dp),
     ) {
         Box(
             modifier = Modifier
-                .width(344.dp)
+                .width(304.dp)
                 .fillMaxHeight(),
         ) {
             rail()
@@ -381,10 +659,10 @@ fun OrmaWideShell(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxHeight(),
-            shape = OrmaShapes.PremiumCard,
+            shape = OrmaShapes.StandardCell,
             color = OrmaColors.ScreenBackground,
             contentColor = OrmaColors.TextPrimary,
-            border = BorderStroke(0.8.dp, OrmaColors.Hairline),
+            border = BorderStroke(0.8.dp, OrmaColors.Divider),
             tonalElevation = 0.dp,
             shadowElevation = 0.dp,
         ) {
@@ -392,7 +670,7 @@ fun OrmaWideShell(
                 modifier = Modifier
                     .fillMaxSize()
                     .verticalScroll(rememberScrollState())
-                    .padding(34.dp),
+                    .padding(30.dp),
                 contentAlignment = Alignment.TopCenter,
             ) {
                 Box(modifier = Modifier.widthIn(max = contentMaxWidth)) {
@@ -423,7 +701,7 @@ fun OrmaBrandRow(
                 modifier = Modifier.size(34.dp),
                 shape = OrmaShapes.SmallCard,
                 color = OrmaColors.Accent,
-                contentColor = OrmaColors.ScreenBackground,
+                contentColor = OrmaColors.OnAccent,
                 tonalElevation = 0.dp,
                 shadowElevation = 0.dp,
             ) {
@@ -432,14 +710,14 @@ fun OrmaBrandRow(
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(7.dp),
-                        color = OrmaColors.ScreenBackground,
+                        color = OrmaColors.OnAccent,
                     )
                 }
             }
             Text(
                 text = "ORMA",
                 style = MaterialTheme.typography.titleMedium,
-                color = if (dark) OrmaColors.DarkTextPrimary else OrmaColors.Accent,
+                color = if (dark) OrmaColors.DarkTextPrimary else OrmaColors.TextPrimary,
             )
         }
         trailing?.let {
@@ -464,7 +742,7 @@ fun OrmaSmallPill(
         modifier = modifier,
         shape = OrmaShapes.Capsule,
         color = if (dark) OrmaColors.DarkSubtleBadge else OrmaColors.Accent.copy(alpha = 0.08f),
-        contentColor = if (dark) OrmaColors.DarkTextPrimary else OrmaColors.Accent,
+        contentColor = if (dark) OrmaColors.DarkTextPrimary else OrmaColors.TextPrimary,
         border = BorderStroke(1.dp, if (dark) OrmaColors.DarkHairline else OrmaColors.Hairline),
         tonalElevation = 0.dp,
         shadowElevation = 0.dp,
@@ -491,7 +769,7 @@ fun OrmaScreenHeader(
         Text(
             text = eyebrow.uppercase(),
             style = MaterialTheme.typography.labelSmall,
-            color = OrmaColors.Accent,
+            color = OrmaColors.TextPrimary,
         )
         Text(
             text = title,
@@ -592,7 +870,7 @@ fun <T> OrmaSegmentedRow(
                 modifier = Modifier.clickable { onSelected(option) },
                 shape = OrmaShapes.Capsule,
                 color = if (active) OrmaColors.Accent else OrmaColors.Accent.copy(alpha = 0.08f),
-                contentColor = if (active) OrmaColors.ScreenBackground else OrmaColors.Accent,
+                contentColor = if (active) OrmaColors.OnAccent else OrmaColors.Accent,
                 tonalElevation = 0.dp,
                 shadowElevation = 0.dp,
             ) {
@@ -605,6 +883,344 @@ fun <T> OrmaSegmentedRow(
         }
     }
 }
+
+@Composable
+fun OrmaCalendarDateField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    modifier: Modifier = Modifier,
+    placeholder: String = "Choose date",
+    supportingText: String? = null,
+    allowClear: Boolean = true,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    var visibleMonth by remember(value) {
+        mutableStateOf(ormaCalendarMonthFrom(value).ifBlank { ormaCurrentIsoDate().take(7) })
+    }
+    val selectedDate = value.take(10).takeIf(::ormaIsIsoDate)
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = label,
+            modifier = Modifier.padding(start = 4.dp),
+            style = MaterialTheme.typography.labelMedium,
+            color = OrmaColors.TextSecondary,
+        )
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { expanded = !expanded },
+            shape = OrmaShapes.Field,
+            color = OrmaColors.CellBackground,
+            contentColor = OrmaColors.TextPrimary,
+            tonalElevation = 0.dp,
+            shadowElevation = 0.dp,
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                OrmaFlatIcon(
+                    kind = OrmaFlatIconKind.Calendar,
+                    modifier = Modifier.size(18.dp),
+                    color = OrmaColors.TextSecondary,
+                )
+                Text(
+                    text = selectedDate?.let(::ormaDateDisplayLabel) ?: placeholder,
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = if (selectedDate == null) OrmaColors.TextTertiary else OrmaColors.Accent,
+                )
+                OrmaChevronDownIcon(
+                    modifier = Modifier.size(18.dp),
+                    color = OrmaColors.TextSecondary,
+                )
+            }
+        }
+        supportingText?.takeIf { it.isNotBlank() }?.let {
+            Text(
+                text = it,
+                modifier = Modifier.padding(start = 4.dp),
+                style = MaterialTheme.typography.labelMedium,
+                color = OrmaColors.TextSecondary,
+            )
+        }
+        if (expanded) {
+            OrmaCalendarMonthPicker(
+                visibleMonth = visibleMonth,
+                selectedDate = selectedDate,
+                onMonthChange = { visibleMonth = it },
+                onSelected = {
+                    onValueChange(it)
+                    expanded = false
+                },
+                onClear = if (allowClear) {
+                    {
+                        onValueChange("")
+                        expanded = false
+                    }
+                } else {
+                    null
+                },
+            )
+        }
+    }
+}
+
+@Composable
+fun OrmaCalendarDateTimeField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    modifier: Modifier = Modifier,
+    placeholder: String = "Choose date",
+    supportingText: String? = null,
+    allowClear: Boolean = true,
+) {
+    val date = value.take(10).takeIf(::ormaIsIsoDate).orEmpty()
+    val time = value.substringAfter(" ", "").take(5).takeIf(::ormaIsTime).orEmpty()
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        OrmaCalendarDateField(
+            value = date,
+            onValueChange = { nextDate ->
+                onValueChange(ormaJoinDateTime(nextDate, time))
+            },
+            label = label,
+            placeholder = placeholder,
+            supportingText = supportingText,
+            allowClear = allowClear,
+        )
+        if (date.isNotBlank()) {
+            OrmaSegmentedRow(
+                options = listOf("", "09:00", "12:00", "15:00", "18:00"),
+                selected = time,
+                label = { it.ifBlank { "Any time" } },
+                onSelected = { nextTime -> onValueChange(ormaJoinDateTime(date, nextTime)) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun OrmaCalendarMonthPicker(
+    visibleMonth: String,
+    selectedDate: String?,
+    onMonthChange: (String) -> Unit,
+    onSelected: (String) -> Unit,
+    onClear: (() -> Unit)?,
+) {
+    val year = visibleMonth.substringBefore("-").toIntOrNull() ?: 2026
+    val month = visibleMonth.substringAfter("-", "06").toIntOrNull()?.coerceIn(1, 12) ?: 6
+    val days = ormaDaysInMonth(year, month)
+    val leadingEmptyCells = ormaFirstWeekdayOffset(year, month)
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = OrmaShapes.StandardCell,
+        color = OrmaColors.CardBackground,
+        contentColor = OrmaColors.TextPrimary,
+        border = BorderStroke(0.6.dp, OrmaColors.Hairline),
+        tonalElevation = 0.dp,
+        shadowElevation = OrmaElevation.None,
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                OrmaCalendarArrowButton(
+                    kind = OrmaFlatIconKind.ChevronLeft,
+                    onClick = { onMonthChange(ormaShiftMonth(year, month, -1)) },
+                    modifier = Modifier.width(48.dp),
+                )
+                Text(
+                    text = "${ormaMonthName(month)} $year",
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = OrmaColors.TextPrimary,
+                    textAlign = TextAlign.Center,
+                )
+                OrmaCalendarArrowButton(
+                    kind = OrmaFlatIconKind.ChevronRight,
+                    onClick = { onMonthChange(ormaShiftMonth(year, month, 1)) },
+                    modifier = Modifier.width(48.dp),
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                listOf("M", "T", "W", "T", "F", "S", "S").forEach {
+                    Text(
+                        text = it,
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = OrmaColors.TextTertiary,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+            }
+            val cells = List(leadingEmptyCells) { 0 } + (1..days).toList()
+            cells.chunked(7).forEach { week ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    (week + List(7 - week.size) { 0 }).forEach { day ->
+                        if (day == 0) {
+                            Spacer(modifier = Modifier.weight(1f).height(40.dp))
+                        } else {
+                            val isoDate = "$year-${month.twoDigit()}-${day.twoDigit()}"
+                            val active = isoDate == selectedDate
+                            Surface(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(40.dp)
+                                    .clickable { onSelected(isoDate) },
+                                shape = OrmaShapes.SmallCard,
+                                color = if (active) OrmaColors.Accent else OrmaColors.CellBackground,
+                                contentColor = if (active) OrmaColors.OnAccent else OrmaColors.TextPrimary,
+                                tonalElevation = 0.dp,
+                                shadowElevation = 0.dp,
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Text(
+                                        text = day.toString(),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = if (active) OrmaColors.OnAccent else OrmaColors.TextPrimary,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if (onClear != null) {
+                OrmaTextButton(
+                    text = "Clear date",
+                    onClick = onClear,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun OrmaCalendarArrowButton(
+    kind: OrmaFlatIconKind,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier
+            .height(44.dp)
+            .clickable(onClick = onClick),
+        shape = OrmaShapes.SmallCard,
+        color = OrmaColors.CellBackground,
+        contentColor = OrmaColors.Accent,
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
+    ) {
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center,
+        ) {
+            OrmaFlatIcon(
+                kind = kind,
+                modifier = Modifier.size(18.dp),
+                color = OrmaColors.IconPrimary,
+            )
+        }
+    }
+}
+
+private fun ormaCalendarMonthFrom(value: String): String =
+    value.take(10).takeIf(::ormaIsIsoDate)?.take(7).orEmpty()
+
+private fun ormaJoinDateTime(date: String, time: String): String =
+    when {
+        date.isBlank() -> ""
+        time.isBlank() -> date
+        else -> "$date $time"
+    }
+
+private fun ormaDateDisplayLabel(value: String): String {
+    val parts = value.split("-")
+    val year = parts.getOrNull(0).orEmpty()
+    val month = parts.getOrNull(1)?.toIntOrNull() ?: return value
+    val day = parts.getOrNull(2).orEmpty()
+    return "$day ${ormaMonthName(month).take(3)} $year"
+}
+
+private fun ormaIsIsoDate(value: String): Boolean {
+    val parts = value.split("-")
+    val year = parts.getOrNull(0)?.toIntOrNull() ?: return false
+    val month = parts.getOrNull(1)?.toIntOrNull() ?: return false
+    val day = parts.getOrNull(2)?.toIntOrNull() ?: return false
+    return year in 1900..2200 && month in 1..12 && day in 1..ormaDaysInMonth(year, month)
+}
+
+private fun ormaIsTime(value: String): Boolean {
+    val hour = value.substringBefore(":").toIntOrNull() ?: return false
+    val minute = value.substringAfter(":", "").toIntOrNull() ?: return false
+    return hour in 0..23 && minute in 0..59
+}
+
+private fun ormaDaysInMonth(year: Int, month: Int): Int =
+    when (month) {
+        2 -> if (ormaIsLeapYear(year)) 29 else 28
+        4, 6, 9, 11 -> 30
+        else -> 31
+    }
+
+private fun ormaIsLeapYear(year: Int): Boolean =
+    year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
+
+private fun ormaFirstWeekdayOffset(year: Int, month: Int): Int {
+    val shiftedMonth = if (month < 3) month + 12 else month
+    val shiftedYear = if (month < 3) year - 1 else year
+    val k = shiftedYear % 100
+    val j = shiftedYear / 100
+    val h = (1 + ((13 * (shiftedMonth + 1)) / 5) + k + (k / 4) + (j / 4) + (5 * j)) % 7
+    val sundayZero = (h + 6) % 7
+    return (sundayZero + 6) % 7
+}
+
+private fun ormaShiftMonth(year: Int, month: Int, delta: Int): String {
+    val zeroBased = (year * 12) + (month - 1) + delta
+    val nextYear = if (zeroBased >= 0) zeroBased / 12 else (zeroBased - 11) / 12
+    val nextMonth = ((zeroBased % 12) + 12) % 12 + 1
+    return "$nextYear-${nextMonth.twoDigit()}"
+}
+
+private fun ormaMonthName(month: Int): String =
+    listOf(
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+    ).getOrElse(month - 1) { "Month" }
+
+private fun Int.twoDigit(): String = toString().padStart(2, '0')
 
 @Composable
 fun OrmaKeyValueList(
@@ -640,7 +1256,7 @@ fun OrmaKeyValueList(
                         text = row.second.ifBlank { "Not set" },
                         modifier = Modifier.weight(1.1f),
                         style = MaterialTheme.typography.labelMedium,
-                        color = if (dark) OrmaColors.DarkTextPrimary else OrmaColors.Accent,
+                        color = if (dark) OrmaColors.DarkTextPrimary else OrmaColors.TextPrimary,
                         textAlign = TextAlign.End,
                     )
                 }
@@ -680,7 +1296,7 @@ fun OrmaUploadRow(
                 modifier = Modifier.size(54.dp),
                 shape = OrmaShapes.SmallCard,
                 color = if (selected) OrmaColors.Accent else OrmaColors.Accent.copy(alpha = 0.08f),
-                contentColor = if (selected) OrmaColors.ScreenBackground else OrmaColors.Accent,
+                contentColor = if (selected) OrmaColors.OnAccent else OrmaColors.Accent,
                 tonalElevation = 0.dp,
                 shadowElevation = 0.dp,
             ) {
@@ -854,7 +1470,7 @@ fun OrmaProgressPills(
             Surface(
                 shape = OrmaShapes.Capsule,
                 color = if (item.second) OrmaColors.Accent else OrmaColors.Accent.copy(alpha = 0.08f),
-                contentColor = if (item.second) OrmaColors.ScreenBackground else OrmaColors.Accent,
+                contentColor = if (item.second) OrmaColors.OnAccent else OrmaColors.Accent,
                 tonalElevation = 0.dp,
                 shadowElevation = 0.dp,
             ) {
@@ -891,7 +1507,7 @@ fun OrmaStepRail(
                         step.complete -> OrmaColors.DarkSubtleBadge
                         else -> OrmaColors.DarkSubtleBadge
                     },
-                    contentColor = if (step.active) OrmaColors.Accent else OrmaColors.DarkTextPrimary,
+                    contentColor = if (step.active) OrmaColors.TextPrimary else OrmaColors.DarkTextPrimary,
                     tonalElevation = 0.dp,
                     shadowElevation = 0.dp,
                 ) {

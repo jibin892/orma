@@ -5,10 +5,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import java.awt.FileDialog
+import java.awt.Frame
 import java.awt.GraphicsEnvironment
 import java.io.File
-import javax.swing.JFileChooser
-import javax.swing.filechooser.FileNameExtensionFilter
+import java.io.FilenameFilter
+import javax.swing.SwingUtilities
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -29,26 +32,70 @@ actual fun rememberOrmaBusinessLogoPicker(
 }
 
 private suspend fun openDesktopLogoPicker(): OrmaLogoPickerResult =
-    withContext(Dispatchers.IO) {
-        if (GraphicsEnvironment.isHeadless()) {
-            return@withContext OrmaLogoPickerResult.Failure(
+    if (GraphicsEnvironment.isHeadless()) {
+        OrmaLogoPickerResult.Failure(
+            title = "Logo picker unavailable",
+            message = "This desktop session cannot open a file picker.",
+            code = "DESKTOP_PICKER_HEADLESS",
+        )
+    } else {
+        val selectedFile = when (val result = openDesktopImageDialog()) {
+            is DesktopImageDialogResult.Selected -> result.file
+            DesktopImageDialogResult.Cancelled -> return OrmaLogoPickerResult.Cancelled
+            is DesktopImageDialogResult.Failed -> return OrmaLogoPickerResult.Failure(
                 title = "Logo picker unavailable",
-                message = "This desktop session cannot open a file picker.",
-                code = "DESKTOP_PICKER_HEADLESS",
+                message = "ORMA could not open the desktop file picker. Restart the app and try again.",
+                code = "DESKTOP_PICKER_OPEN_FAILED",
             )
         }
-        val chooser = JFileChooser().apply {
-            dialogTitle = "Choose business logo"
-            fileSelectionMode = JFileChooser.FILES_ONLY
-            isAcceptAllFileFilterUsed = false
-            fileFilter = FileNameExtensionFilter("Logo images", "png", "jpg", "jpeg", "webp")
+        withContext(Dispatchers.IO) {
+            selectedFile.toPickedImage()
         }
-        val result = chooser.showOpenDialog(null)
-        if (result != JFileChooser.APPROVE_OPTION) {
-            return@withContext OrmaLogoPickerResult.Cancelled
-        }
-        chooser.selectedFile.toPickedImage()
     }
+
+private sealed interface DesktopImageDialogResult {
+    data class Selected(val file: File) : DesktopImageDialogResult
+    data object Cancelled : DesktopImageDialogResult
+    data class Failed(val error: Throwable) : DesktopImageDialogResult
+}
+
+private suspend fun openDesktopImageDialog(): DesktopImageDialogResult {
+    val result = CompletableDeferred<DesktopImageDialogResult>()
+    val showDialog = Runnable {
+        runCatching {
+            val dialog = FileDialog(activeDesktopFrame(), "Choose image", FileDialog.LOAD).apply {
+                filenameFilter = FilenameFilter { _, name ->
+                    name.contentTypeFromName().isSupportedLogoContentType()
+                }
+                file = "*.png;*.jpg;*.jpeg;*.webp"
+                isMultipleMode = false
+            }
+            dialog.isVisible = true
+            val directory = dialog.directory
+            val fileName = dialog.file
+            dialog.dispose()
+            if (directory.isNullOrBlank() || fileName.isNullOrBlank()) {
+                DesktopImageDialogResult.Cancelled
+            } else {
+                DesktopImageDialogResult.Selected(File(directory, fileName))
+            }
+        }.fold(
+            onSuccess = result::complete,
+            onFailure = { result.complete(DesktopImageDialogResult.Failed(it)) },
+        )
+    }
+
+    if (SwingUtilities.isEventDispatchThread()) {
+        showDialog.run()
+    } else {
+        SwingUtilities.invokeLater(showDialog)
+    }
+    return result.await()
+}
+
+private fun activeDesktopFrame(): Frame? =
+    Frame.getFrames().firstOrNull { it.isActive }
+        ?: Frame.getFrames().firstOrNull { it.isVisible }
 
 private fun File.toPickedImage(): OrmaLogoPickerResult {
     val contentType = name.contentTypeFromName()
@@ -59,7 +106,13 @@ private fun File.toPickedImage(): OrmaLogoPickerResult {
             code = "UNSUPPORTED_LOGO_TYPE",
         )
     }
-    val bytes = readBytes()
+    val bytes = runCatching { readBytes() }.getOrElse {
+        return OrmaLogoPickerResult.Failure(
+            title = "Logo not readable",
+            message = "ORMA could not read the selected image.",
+            code = "LOGO_READ_FAILED",
+        )
+    }
     if (bytes.isEmpty()) {
         return OrmaLogoPickerResult.Failure(
             title = "Logo not readable",

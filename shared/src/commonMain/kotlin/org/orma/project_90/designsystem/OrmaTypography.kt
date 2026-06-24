@@ -40,11 +40,32 @@ internal fun ormaTypography(): Typography {
             lineHeight = 38.sp,
             letterSpacing = 0.sp,
         ),
+        displaySmall = TextStyle(
+            fontFamily = googleSans,
+            fontWeight = FontWeight.Normal,
+            fontSize = 30.sp,
+            lineHeight = 34.sp,
+            letterSpacing = 0.sp,
+        ),
+        headlineLarge = TextStyle(
+            fontFamily = googleSans,
+            fontWeight = FontWeight.Normal,
+            fontSize = 32.sp,
+            lineHeight = 36.sp,
+            letterSpacing = 0.sp,
+        ),
         headlineMedium = TextStyle(
             fontFamily = googleSans,
             fontWeight = FontWeight.Normal,
             fontSize = 28.sp,
             lineHeight = 32.sp,
+            letterSpacing = 0.sp,
+        ),
+        headlineSmall = TextStyle(
+            fontFamily = googleSans,
+            fontWeight = FontWeight.Normal,
+            fontSize = 24.sp,
+            lineHeight = 28.sp,
             letterSpacing = 0.sp,
         ),
         titleLarge = TextStyle(
@@ -80,6 +101,13 @@ internal fun ormaTypography(): Typography {
             fontWeight = FontWeight.Normal,
             fontSize = 14.sp,
             lineHeight = 20.sp,
+            letterSpacing = 0.sp,
+        ),
+        bodySmall = TextStyle(
+            fontFamily = googleSans,
+            fontWeight = FontWeight.Normal,
+            fontSize = 12.sp,
+            lineHeight = 16.sp,
             letterSpacing = 0.sp,
         ),
         labelLarge = TextStyle(

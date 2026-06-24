@@ -8,9 +8,13 @@
     <link rel="icon" type="image/svg+xml" href="favicon.svg">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
     <link rel="manifest" href="site.webmanifest">
+    <link rel="preload" href="composeResources/orma.shared.generated.resources/font/google_sans_regular.ttf" as="font" type="font/ttf" crossorigin>
+    <link rel="preload" href="composeResources/orma.shared.generated.resources/font/google_sans_medium.ttf" as="font" type="font/ttf" crossorigin>
+    <link rel="preload" href="composeResources/orma.shared.generated.resources/font/google_sans_semibold.ttf" as="font" type="font/ttf" crossorigin>
+    <link rel="preload" href="composeResources/orma.shared.generated.resources/font/google_sans_bold.ttf" as="font" type="font/ttf" crossorigin>
     <link type="text/css" rel="stylesheet" href="styles.css">
 </head>
-<body style="text-align: center; align-content: center">
+<body>
     <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 50 50" role="presentation">
         <circle cx="25" cy="25" r="20" stroke="#ccc" stroke-width="4" fill="none"/>
         <circle cx="25" cy="25" r="20" stroke="#333" stroke-width="4" fill="none" stroke-linecap="round"
@@ -20,6 +24,28 @@
         </circle>
     </svg>
     <script>
+        window.OrmaWebFontReady = (function () {
+            if (!document.fonts || typeof document.fonts.load !== "function") {
+                document.documentElement.dataset.ormaFonts = "unsupported";
+                return Promise.resolve();
+            }
+            document.documentElement.dataset.ormaFonts = "loading";
+            const fontLoads = [
+                '400 16px "Google Sans"',
+                '500 16px "Google Sans"',
+                '600 16px "Google Sans"',
+                '700 16px "Google Sans"'
+            ].map((font) => document.fonts.load(font));
+            const ready = Promise.allSettled(fontLoads)
+                .then(() => document.fonts.ready)
+                .catch(() => undefined);
+            const timeout = new Promise((resolve) => window.setTimeout(resolve, 6000));
+            return Promise.race([ready, timeout]).finally(() => {
+                document.documentElement.dataset.ormaFonts = document.fonts.status;
+            });
+        })();
+    </script>
+    <script>
         window.OrmaFirebaseGoogleAuth = (function () {
             const firebaseConfig = {
                 apiKey: "AIzaSyCGglHuAEx0e1xz6o-A5FqSRAAWepffXlk",
@@ -27,9 +53,12 @@
                 projectId: "orma-project-90",
                 storageBucket: "orma-project-90.firebasestorage.app",
                 messagingSenderId: "469264683998",
-                appId: "1:469264683998:web:dc157cbbee2f29fe35834f"
+                appId: "1:469264683998:web:dc157cbbee2f29fe35834f",
+                vapidKey: ""
             };
             let authBundlePromise = null;
+            let messagingBundlePromise = null;
+            let foregroundMessagingHandlerRegistered = false;
 
             async function authBundle() {
                 if (!authBundlePromise) {
@@ -47,6 +76,44 @@
                     });
                 }
                 return authBundlePromise;
+            }
+
+            async function messagingBundle() {
+                if (!messagingBundlePromise) {
+                    messagingBundlePromise = Promise.all([
+                        import("https://www.gstatic.com/firebasejs/11.10.0/firebase-app.js"),
+                        import("https://www.gstatic.com/firebasejs/11.10.0/firebase-messaging.js")
+                    ]).then(async ([appModule, messagingModule]) => {
+                        const app = appModule.getApps().length
+                            ? appModule.getApps()[0]
+                            : appModule.initializeApp(firebaseConfig);
+                        const messaging = messagingModule.getMessaging(app);
+                        return { messagingModule, messaging };
+                    });
+                }
+                return messagingBundlePromise;
+            }
+
+            function registerForegroundMessagingHandler(messagingModule, messaging) {
+                if (foregroundMessagingHandlerRegistered || typeof Notification === "undefined") {
+                    return;
+                }
+                foregroundMessagingHandlerRegistered = true;
+                messagingModule.onMessage(messaging, (payload) => {
+                    if (Notification.permission !== "granted") {
+                        return;
+                    }
+                    const title = payload && payload.notification && payload.notification.title
+                        ? payload.notification.title
+                        : "ORMA";
+                    const body = payload && payload.notification && payload.notification.body
+                        ? payload.notification.body
+                        : "New workspace update";
+                    new Notification(title, {
+                        body,
+                        data: payload && payload.data ? payload.data : {}
+                    });
+                });
             }
 
             function currentUserWhenReady(auth, authModule, timeoutMs) {
@@ -98,7 +165,184 @@
                 };
             }
 
+            function safeDesktopCallback(rawValue) {
+                if (!rawValue) {
+                    return "";
+                }
+                try {
+                    const url = new URL(rawValue);
+                    const loopback = url.hostname === "localhost" || url.hostname === "127.0.0.1";
+                    const pathAllowed = url.pathname === "/desktop-auth-complete";
+                    if (url.protocol !== "http:" || !loopback || !url.port || !pathAllowed) {
+                        return "";
+                    }
+                    return url.toString();
+                } catch (_) {
+                    return "";
+                }
+            }
+
+            function desktopAuthRequestFromUrl() {
+                const params = new URLSearchParams(window.location.search);
+                const callback = safeDesktopCallback(params.get("desktopAuthCallback"));
+                const state = params.get("desktopAuthState") || "";
+                if (!callback || !state) {
+                    return null;
+                }
+                return {
+                    callback,
+                    state,
+                    startedAt: 0
+                };
+            }
+
+            function desktopAuthRequestFromStorage() {
+                try {
+                    const rawValue = sessionStorage.getItem("orma.desktopAuth.request");
+                    if (!rawValue) {
+                        return null;
+                    }
+                    const parsed = JSON.parse(rawValue);
+                    const callback = safeDesktopCallback(parsed.callback);
+                    const state = typeof parsed.state === "string" ? parsed.state : "";
+                    if (!callback || !state) {
+                        return null;
+                    }
+                    return {
+                        callback,
+                        state,
+                        startedAt: Number(parsed.startedAt || 0)
+                    };
+                } catch (_) {
+                    return null;
+                }
+            }
+
+            function desktopAuthRequestsMatch(left, right) {
+                return Boolean(left && right && left.callback === right.callback && left.state === right.state);
+            }
+
+            function isRecentDesktopAuthRequest(request) {
+                return Boolean(request && request.startedAt > 0 && Date.now() - request.startedAt < 180000);
+            }
+
+            function desktopAuthRequest() {
+                const urlRequest = desktopAuthRequestFromUrl();
+                const storedRequest = desktopAuthRequestFromStorage();
+                if (
+                    isRecentDesktopAuthRequest(storedRequest) &&
+                    (!urlRequest || desktopAuthRequestsMatch(storedRequest, urlRequest))
+                ) {
+                    return storedRequest;
+                }
+                return urlRequest || storedRequest;
+            }
+
+            function isDesktopBridgeRequested() {
+                return Boolean(desktopAuthRequest());
+            }
+
+            function showDesktopAuthStatus(message) {
+                document.body.style.textAlign = "center";
+                document.body.style.alignContent = "center";
+                document.body.innerHTML = "<main style=\"font-family:'Google Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-synthesis:none;color:#173B3D;\"><h1 style=\"font-size:32px;margin:0 0 12px;\">ORMA Google sign-in</h1><p style=\"color:rgba(23,59,61,0.56);font-size:16px;margin:0;\">" + message + "</p></main>";
+            }
+
+            function base64UrlEncodeJson(payload) {
+                const bytes = new TextEncoder().encode(JSON.stringify(payload));
+                let binary = "";
+                bytes.forEach((byte) => {
+                    binary += String.fromCharCode(byte);
+                });
+                return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+            }
+
+            function redirectDesktopAuth(request, payload) {
+                const nextPayload = {
+                    ...payload,
+                    state: request.state
+                };
+                window.location.replace(request.callback + "#payload=" + encodeURIComponent(base64UrlEncodeJson(nextPayload)));
+            }
+
+            function friendlyGoogleErrorMessage(error) {
+                const code = error && error.code ? String(error.code) : "";
+                if (code === "auth/unauthorized-domain") {
+                    return "Google sign-in is not configured for the ORMA web app domain.";
+                }
+                if (code === "auth/network-request-failed") {
+                    return "Google sign-in could not reach Firebase. Check the internet connection and try again.";
+                }
+                if (code === "auth/web-storage-unsupported") {
+                    return "The browser blocked storage needed for Google sign-in. Enable browser storage for ORMA and try again.";
+                }
+                return error && error.message ? error.message : "Google sign-in did not complete.";
+            }
+
+            async function startDesktopBridgeIfNeeded() {
+                const request = desktopAuthRequest();
+                if (!request) {
+                    return false;
+                }
+                window.OrmaDesktopAuthBridgeActive = true;
+                showDesktopAuthStatus("Finishing Google sign-in...");
+                try {
+                    const { auth, authModule } = await authBundle();
+                    const provider = new authModule.GoogleAuthProvider();
+                    provider.setCustomParameters({ prompt: "select_account" });
+
+                    const redirectResult = await authModule.getRedirectResult(auth);
+                    if (redirectResult) {
+                        sessionStorage.removeItem("orma.desktopAuth.request");
+                        const credential = authModule.GoogleAuthProvider.credentialFromResult(redirectResult);
+                        if (credential && credential.idToken) {
+                            redirectDesktopAuth(request, { idToken: credential.idToken });
+                            return true;
+                        }
+                        const signedSession = await firebaseSession(true);
+                        if (signedSession) {
+                            redirectDesktopAuth(request, signedSession);
+                            return true;
+                        }
+                        throw new Error("Google did not return an account token.");
+                    }
+
+                    const signedSession = await firebaseSession(true);
+                    if (signedSession) {
+                        sessionStorage.removeItem("orma.desktopAuth.request");
+                        redirectDesktopAuth(request, signedSession);
+                        return true;
+                    }
+
+                    if (isRecentDesktopAuthRequest(request)) {
+                        throw new Error("Google returned without an account token.");
+                    }
+
+                    sessionStorage.setItem(
+                        "orma.desktopAuth.request",
+                        JSON.stringify({
+                            callback: request.callback,
+                            state: request.state,
+                            startedAt: Date.now()
+                        })
+                    );
+                    showDesktopAuthStatus("Opening Google account chooser...");
+                    await authModule.signInWithRedirect(auth, provider);
+                    return true;
+                } catch (error) {
+                    sessionStorage.removeItem("orma.desktopAuth.request");
+                    redirectDesktopAuth(request, {
+                        errorTitle: "Google sign-in failed",
+                        errorMessage: friendlyGoogleErrorMessage(error),
+                        errorCode: error && error.code ? error.code : "GOOGLE_DESKTOP_WEB_FAILED"
+                    });
+                    return true;
+                }
+            }
+
             return {
+                isDesktopBridgeRequested,
+                startDesktopBridgeIfNeeded,
                 restoreSession: async function () {
                     try {
                         return await firebaseSession(true) || {};
@@ -119,6 +363,79 @@
                         return {
                             ok: false,
                             errorCode: error && error.code ? error.code : "FIREBASE_WEB_SIGN_OUT_FAILED"
+                        };
+                    }
+                },
+                messagingToken: async function () {
+                    try {
+                        if (typeof window === "undefined" || !("Notification" in window)) {
+                            return {
+                                token: "",
+                                deviceName: "",
+                                errorTitle: "Web notifications are not supported",
+                                errorMessage: "This browser does not support web push notifications for ORMA.",
+                                errorCode: "WEB_NOTIFICATION_UNSUPPORTED"
+                            };
+                        }
+                        if (Notification.permission !== "granted") {
+                            return {
+                                token: "",
+                                deviceName: "",
+                                errorTitle: "Notifications are blocked",
+                                errorMessage: "Allow notifications for this site in browser settings to receive ORMA workspace alerts.",
+                                errorCode: "WEB_NOTIFICATION_PERMISSION_NOT_GRANTED"
+                            };
+                        }
+                        const { messagingModule, messaging } = await messagingBundle();
+                        let serviceWorkerRegistration = null;
+                        if ("serviceWorker" in navigator) {
+                            serviceWorkerRegistration = await navigator.serviceWorker.register("/firebase-messaging-sw.js");
+                        } else {
+                            return {
+                                token: "",
+                                deviceName: "",
+                                errorTitle: "Web notifications are not supported",
+                                errorMessage: "This browser does not support the service worker required for ORMA web notifications.",
+                                errorCode: "WEB_SERVICE_WORKER_UNSUPPORTED"
+                            };
+                        }
+                        const vapidKey = window.OrmaFirebaseMessagingVapidKey || firebaseConfig.vapidKey || "";
+                        if (!vapidKey) {
+                            return {
+                                token: "",
+                                deviceName: "",
+                                errorTitle: "Web notifications are not configured",
+                                errorMessage: "Firebase Web Push certificate key is missing. Add the ORMA VAPID key before enabling web notifications.",
+                                errorCode: "FIREBASE_WEB_VAPID_KEY_MISSING"
+                            };
+                        }
+                        const tokenOptions = {};
+                        if (serviceWorkerRegistration) {
+                            tokenOptions.serviceWorkerRegistration = serviceWorkerRegistration;
+                        }
+                        tokenOptions.vapidKey = vapidKey;
+                        const token = await messagingModule.getToken(messaging, tokenOptions);
+                        if (!token) {
+                            return {
+                                token: "",
+                                deviceName: "",
+                                errorTitle: "Web notifications are not connected",
+                                errorMessage: "Firebase did not return a browser notification token. Try again after refreshing the page.",
+                                errorCode: "FIREBASE_WEB_TOKEN_EMPTY"
+                            };
+                        }
+                        registerForegroundMessagingHandler(messagingModule, messaging);
+                        return {
+                            token: token,
+                            deviceName: navigator.userAgent || "Web browser"
+                        };
+                    } catch (error) {
+                        return {
+                            token: "",
+                            deviceName: "",
+                            errorTitle: "Web notifications are not connected",
+                            errorMessage: error && error.message ? error.message : "ORMA could not create a browser notification token.",
+                            errorCode: error && error.code ? error.code : "FIREBASE_WEB_MESSAGING_TOKEN_FAILED"
                         };
                     }
                 },
@@ -152,7 +469,20 @@
             }
             };
         })();
+        if (window.OrmaFirebaseGoogleAuth && window.OrmaFirebaseGoogleAuth.isDesktopBridgeRequested()) {
+            window.OrmaDesktopAuthBridgeActive = true;
+            window.OrmaFirebaseGoogleAuth.startDesktopBridgeIfNeeded();
+        }
     </script>
-    <script type="application/javascript" src="webApp.js"></script>
+    <script>
+        if (!window.OrmaDesktopAuthBridgeActive) {
+            Promise.resolve(window.OrmaWebFontReady).finally(() => {
+                const webAppScript = document.createElement("script");
+                webAppScript.type = "application/javascript";
+                webAppScript.src = "webApp.js";
+                document.body.appendChild(webAppScript);
+            });
+        }
+    </script>
 </body>
 </html>
