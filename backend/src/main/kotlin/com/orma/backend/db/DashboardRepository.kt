@@ -238,8 +238,13 @@ class DashboardRepository(
                 currency = access.currency,
                 businessMode = access.businessMode,
                 totalCustomers = connection.scalarInt(
-                    "select count(*) from customers where workspace_id = ?::uuid and status = 'active'",
-                    access.workspaceId,
+                    """
+                    select count(*)
+                    from customers
+                    where workspace_id = ?::uuid and status = 'active'
+                    ${filters.createdDateWhereSql("created_at")}
+                    """.trimIndent(),
+                    *filters.withCreatedDateParams(access.workspaceId).toTypedArray(),
                 ),
                 totalPaidAmount = connection.scalarDecimal(
                     """
@@ -325,8 +330,9 @@ class DashboardRepository(
                       and status = 'active'
                       and item_type = 'product'
                       and (track_stock = false or stock_quantity > 0)
+                      ${filters.createdDateWhereSql("created_at")}
                     """.trimIndent(),
-                    access.workspaceId,
+                    *filters.withCreatedDateParams(access.workspaceId).toTypedArray(),
                 ),
                 lowStockProducts = connection.scalarInt(
                     """
@@ -336,13 +342,15 @@ class DashboardRepository(
                       and status = 'active'
                       and track_stock = true
                       and stock_quantity <= reorder_level
+                      ${filters.createdDateWhereSql("created_at")}
                     """.trimIndent(),
-                    access.workspaceId,
+                    *filters.withCreatedDateParams(access.workspaceId).toTypedArray(),
                 ),
                 recentOrders = connection.listOrders(
                     workspaceId = access.workspaceId,
                     filters = filters.copy(limit = 5, page = 1),
                     includeItems = false,
+                    excludeCancelledWhenStatusAll = true,
                 ).items,
                 lowStockItems = connection.listProducts(
                     workspaceId = access.workspaceId,
@@ -1680,6 +1688,7 @@ class DashboardRepository(
                 )
                 repeat(6) { params.add(search.ilikePattern()) }
             }
+            appendCreatedDateWhere(filters, params, "created_at")
             append(" order by created_at desc")
             append(" limit ${filters.limit.sanitizedLimit()}")
             append(" offset ${filters.offset()}")
@@ -1804,6 +1813,7 @@ class DashboardRepository(
                 )
                 repeat(5) { params.add(search.ilikePattern()) }
             }
+            appendCreatedDateWhere(filters, params, "created_at")
             append(" order by created_at desc")
             append(" limit ${filters.limit.sanitizedLimit()}")
             append(" offset ${filters.offset()}")
@@ -1882,6 +1892,7 @@ class DashboardRepository(
                 append(" and name ilike ?")
                 params.add(search.ilikePattern())
             }
+            appendCreatedDateWhere(filters, params, "created_at")
             append(" order by sort_order asc, name asc limit ${filters.limit.sanitizedLimit()} offset ${filters.offset()}")
         }
         return prepareStatement(sql).use { statement ->
@@ -1957,6 +1968,7 @@ class DashboardRepository(
                 append(" and (po.name ilike ? or coalesce(p.name, '') ilike ? or coalesce(pc.name, '') ilike ?)")
                 repeat(3) { params.add(search.ilikePattern()) }
             }
+            appendCreatedDateWhere(filters, params, "po.created_at")
             append(" order by po.created_at desc limit ${filters.limit.sanitizedLimit()} offset ${filters.offset()}")
         }
         return prepareStatement(sql).use { statement ->
@@ -2039,6 +2051,7 @@ class DashboardRepository(
                 append(" and (label ilike ? or coalesce(upi_id, '') ilike ? or coalesce(payee_name, '') ilike ?)")
                 repeat(3) { params.add(search.ilikePattern()) }
             }
+            appendCreatedDateWhere(filters, params, "created_at")
             append(" order by is_default desc, created_at desc limit ${filters.limit.sanitizedLimit()} offset ${filters.offset()}")
         }
         return prepareStatement(sql).use { statement ->
@@ -2146,6 +2159,7 @@ class DashboardRepository(
             if (filters.lowStockOnly) {
                 append(" and p.track_stock = true and p.stock_quantity <= p.reorder_level")
             }
+            appendCreatedDateWhere(filters, params, "p.created_at")
             append(" order by p.created_at desc")
             append(" limit ${filters.limit.sanitizedLimit()}")
             append(" offset ${filters.offset()}")
@@ -2328,9 +2342,10 @@ class DashboardRepository(
         workspaceId: String,
         filters: DashboardQueryFilters = DashboardQueryFilters(),
         includeItems: Boolean,
+        excludeCancelledWhenStatusAll: Boolean = false,
     ): PagedResult<OrderResponse> {
         val params = mutableListOf(workspaceId)
-        val search = filters.query.cleanSearchTerm()
+        val searchTokens = filters.query.cleanSearchTokens()
         val status = filters.status.cleanOrderStatusFilter()
         val orderType = filters.orderType.cleanOrderTypeFilter()
         val sql = buildString {
@@ -2339,7 +2354,7 @@ class DashboardRepository(
             if (status != null) {
                 append(" and o.status = ?")
                 params.add(status)
-            } else {
+            } else if (excludeCancelledWhenStatusAll) {
                 append(" and o.status <> 'cancelled'")
             }
             if (filters.scheduledOnly) {
@@ -2350,18 +2365,7 @@ class DashboardRepository(
                 params.add(orderType)
             }
             appendOrderDateWhere(filters, params, alias = "o")
-            if (search != null) {
-                append(
-                    """
-                     and (
-                        o.order_number ilike ?
-                        or coalesce(c.name, '') ilike ?
-                        or coalesce(o.notes, '') ilike ?
-                    )
-                    """.trimIndent(),
-                )
-                repeat(3) { params.add(search.ilikePattern()) }
-            }
+            appendOrderSearchWhere(searchTokens, params)
             append(" group by o.id, c.name")
             append(" order by o.created_at desc")
             append(" limit ${filters.limit.sanitizedLimit()}")
@@ -2390,7 +2394,7 @@ class DashboardRepository(
         includeItems: Boolean,
     ): PagedResult<OrderResponse> {
         val params = mutableListOf(workspaceId, customerId)
-        val search = filters.query.cleanSearchTerm()
+        val searchTokens = filters.query.cleanSearchTokens()
         val status = filters.status.cleanOrderStatusFilter()
         val orderType = filters.orderType.cleanOrderTypeFilter()
         val sql = buildString {
@@ -2399,8 +2403,6 @@ class DashboardRepository(
             if (status != null) {
                 append(" and o.status = ?")
                 params.add(status)
-            } else {
-                append(" and o.status <> 'cancelled'")
             }
             if (filters.scheduledOnly) {
                 append(" and o.scheduled_at is not null")
@@ -2410,17 +2412,7 @@ class DashboardRepository(
                 params.add(orderType)
             }
             appendOrderDateWhere(filters, params, alias = "o")
-            if (search != null) {
-                append(
-                    """
-                     and (
-                        o.order_number ilike ?
-                        or coalesce(o.notes, '') ilike ?
-                    )
-                    """.trimIndent(),
-                )
-                repeat(2) { params.add(search.ilikePattern()) }
-            }
+            appendOrderSearchWhere(searchTokens, params)
             append(" group by o.id, c.name")
             append(" order by o.created_at desc")
             append(" limit ${filters.limit.sanitizedLimit()}")
@@ -2489,6 +2481,7 @@ class DashboardRepository(
                 )
                 repeat(4) { params.add(search.ilikePattern()) }
             }
+            appendCreatedDateWhere(filters, params, "created_at")
             append(" order by is_default_receipt desc, is_default_barcode desc, created_at desc")
             append(" limit ${filters.limit.sanitizedLimit()}")
             append(" offset ${filters.offset()}")
@@ -3399,6 +3392,13 @@ class DashboardRepository(
             cleanDateToOrNull()?.let { add(it) }
         }
 
+    private fun DashboardQueryFilters.withCreatedDateParams(workspaceId: String): List<String> =
+        buildList {
+            add(workspaceId)
+            cleanDateFromOrNull()?.let { add(it) }
+            cleanDateToOrNull()?.let { add(it) }
+        }
+
     private fun DashboardQueryFilters.orderDateWhereSql(alias: String = "o"): String =
         buildString {
             cleanDateFromOrNull()?.let {
@@ -3406,6 +3406,16 @@ class DashboardRepository(
             }
             cleanDateToOrNull()?.let {
                 append(" and coalesce($alias.scheduled_at, $alias.created_at) < (?::date + interval '1 day')")
+            }
+        }
+
+    private fun DashboardQueryFilters.createdDateWhereSql(expression: String): String =
+        buildString {
+            cleanDateFromOrNull()?.let {
+                append(" and $expression >= ?::date")
+            }
+            cleanDateToOrNull()?.let {
+                append(" and $expression < (?::date + interval '1 day')")
             }
         }
 
@@ -3420,6 +3430,88 @@ class DashboardRepository(
         }
         filters.cleanDateToOrNull()?.let {
             append(" and coalesce($alias.scheduled_at, $alias.created_at) < (?::date + interval '1 day')")
+            params.add(it)
+        }
+    }
+
+    private fun StringBuilder.appendOrderSearchWhere(
+        searchTokens: List<String>,
+        params: MutableList<String>,
+    ) {
+        searchTokens.forEach { token ->
+            val searchSql = """
+                and (
+                    o.id::text ilike ?
+                    or o.order_number ilike ?
+                    or coalesce(c.name, '') ilike ?
+                    or coalesce(c.phone_number, '') ilike ?
+                    or coalesce(c.email, '') ilike ?
+                    or coalesce(c.tax_number, '') ilike ?
+                    or coalesce(c.address_line, '') ilike ?
+                    or coalesce(c.city, '') ilike ?
+                    or coalesce(c.region, '') ilike ?
+                    or coalesce(c.country, '') ilike ?
+                    or coalesce(c.postal_code, '') ilike ?
+                    or o.order_type ilike ?
+                    or replace(o.order_type, '_', ' ') ilike ?
+                    or o.status ilike ?
+                    or replace(o.status, '_', ' ') ilike ?
+                    or case when o.status = 'draft' then 'captured' else replace(o.status, '_', ' ') end ilike ?
+                    or o.fulfillment_type ilike ?
+                    or replace(o.fulfillment_type, '_', ' ') ilike ?
+                    or o.payment_mode ilike ?
+                    or replace(o.payment_mode, '_', ' ') ilike ?
+                    or coalesce(o.source, '') ilike ?
+                    or replace(coalesce(o.source, ''), '_', ' ') ilike ?
+                    or coalesce(o.notes, '') ilike ?
+                    or o.currency ilike ?
+                    or o.subtotal::text ilike ?
+                    or o.tax_total::text ilike ?
+                    or o.discount_total::text ilike ?
+                    or o.paid_total::text ilike ?
+                    or o.total::text ilike ?
+                    or greatest(o.total - o.paid_total, 0)::text ilike ?
+                    or (o.currency || ' ' || o.total::text) ilike ?
+                    or (o.currency || ' ' || o.paid_total::text) ilike ?
+                    or (o.currency || ' ' || greatest(o.total - o.paid_total, 0)::text) ilike ?
+                    or case when o.total > o.paid_total then 'due' else 'paid' end ilike ?
+                    or coalesce(o.scheduled_at::text, '') ilike ?
+                    or coalesce(o.created_at::text, '') ilike ?
+                    or (
+                        (select count(*) from order_items oi_count where oi_count.order_id = o.id)::text || ' items'
+                    ) ilike ?
+                    or exists (
+                        select 1
+                        from order_items oi_search
+                        left join products p_search on p_search.id = oi_search.product_id
+                        where oi_search.order_id = o.id
+                          and (
+                            coalesce(oi_search.description, '') ilike ?
+                            or coalesce(p_search.name, '') ilike ?
+                            or oi_search.quantity::text ilike ?
+                            or oi_search.unit_price::text ilike ?
+                            or oi_search.line_total::text ilike ?
+                          )
+                    )
+                )
+            """.trimIndent()
+            append(" ")
+            append(searchSql)
+            repeat(searchSql.count { it == '?' }) { params.add(token.ilikePattern()) }
+        }
+    }
+
+    private fun StringBuilder.appendCreatedDateWhere(
+        filters: DashboardQueryFilters,
+        params: MutableList<String>,
+        expression: String,
+    ) {
+        filters.cleanDateFromOrNull()?.let {
+            append(" and $expression >= ?::date")
+            params.add(it)
+        }
+        filters.cleanDateToOrNull()?.let {
+            append(" and $expression < (?::date + interval '1 day')")
             params.add(it)
         }
     }
@@ -3441,6 +3533,16 @@ class DashboardRepository(
 
     private fun String?.cleanSearchTerm(): String? =
         this?.trim()?.take(80)?.ifBlank { null }
+
+    private fun String?.cleanSearchTokens(): List<String> =
+        this
+            ?.trim()
+            ?.take(80)
+            ?.lowercase()
+            ?.split(Regex("\\s+"))
+            ?.filter { it.isNotBlank() }
+            ?.take(8)
+            .orEmpty()
 
     private fun String.ilikePattern(): String =
         "%${replace("%", "\\%").replace("_", "\\_")}%"
