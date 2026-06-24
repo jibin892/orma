@@ -44,6 +44,7 @@ data class OrmaTeamOverview(
     val workspace: OrmaBackendWorkspace,
     val canInviteMembers: Boolean,
     val members: List<OrmaTeamMember>,
+    val invites: List<OrmaTeamInvite> = emptyList(),
 )
 
 data class OrmaTeamMember(
@@ -55,6 +56,27 @@ data class OrmaTeamMember(
     val role: String,
     val status: String,
     val joinedAt: String,
+)
+
+data class OrmaTeamInvite(
+    val id: String,
+    val code: String,
+    val inviteeName: String?,
+    val inviteeEmail: String?,
+    val inviteePhoneNumber: String?,
+    val role: String,
+    val status: String,
+    val createdAt: String,
+    val expiresAt: String?,
+    val createdByDisplayName: String?,
+    val createdByEmail: String?,
+)
+
+data class OrmaTeamInviteDraft(
+    val inviteeName: String = "",
+    val inviteeEmail: String = "",
+    val inviteePhoneNumber: String = "",
+    val role: String = "team_member",
 )
 
 data class OrmaMediaUpload(
@@ -744,6 +766,59 @@ class OrmaBackendClient(
             parse = { it.toTeamOverview() },
         )
     }
+
+    suspend fun createTeamInvite(
+        idToken: String,
+        draft: OrmaTeamInviteDraft,
+    ): OrmaBackendResult<OrmaTeamOverview> =
+        executeBackendRequest(
+            actionTitle = "Invite team member",
+            request = {
+                ormaPostJsonAuthorized(
+                    url = config.url("/onboarding/team/invites"),
+                    bearerToken = idToken,
+                    body = buildJsonObject(
+                        "inviteeName" to JsonValue.StringValue(draft.inviteeName.blankToNull()),
+                        "inviteeEmail" to JsonValue.StringValue(draft.inviteeEmail.blankToNull()),
+                        "inviteePhoneNumber" to JsonValue.StringValue(draft.inviteePhoneNumber.blankToNull()),
+                        "role" to JsonValue.StringValue(draft.role.ifBlank { "team_member" }),
+                    ),
+                )
+            },
+            parse = { it.toTeamOverview() },
+        )
+
+    suspend fun revokeTeamInvite(
+        idToken: String,
+        inviteId: String,
+    ): OrmaBackendResult<OrmaTeamOverview> =
+        executeBackendRequest(
+            actionTitle = "Revoke invite",
+            request = {
+                ormaPostJsonAuthorized(
+                    url = config.url("/onboarding/team/invites/${inviteId.urlQueryEscaped()}/revoke"),
+                    bearerToken = idToken,
+                    body = buildJsonObject(),
+                )
+            },
+            parse = { it.toTeamOverview() },
+        )
+
+    suspend fun removeTeamMember(
+        idToken: String,
+        memberId: String,
+    ): OrmaBackendResult<OrmaTeamOverview> =
+        executeBackendRequest(
+            actionTitle = "Remove team member",
+            request = {
+                ormaPostJsonAuthorized(
+                    url = config.url("/onboarding/team/members/${memberId.urlQueryEscaped()}/remove"),
+                    bearerToken = idToken,
+                    body = buildJsonObject(),
+                )
+            },
+            parse = { it.toTeamOverview() },
+        )
 
     suspend fun updateNotificationPreference(
         idToken: String,
@@ -1733,6 +1808,7 @@ private fun String.toTeamOverview(): OrmaTeamOverview {
         workspace = workspaceJson.toBackendWorkspace(),
         canInviteMembers = jsonBoolean("canInviteMembers") ?: false,
         members = jsonObjectsInArray("members").map { it.toTeamMember() },
+        invites = jsonObjectsInArray("invites").map { it.toTeamInvite() },
     )
 }
 
@@ -1746,6 +1822,21 @@ private fun String.toTeamMember(): OrmaTeamMember =
         role = jsonString("role").orEmpty(),
         status = jsonString("status").orEmpty(),
         joinedAt = jsonString("joinedAt").orEmpty(),
+    )
+
+private fun String.toTeamInvite(): OrmaTeamInvite =
+    OrmaTeamInvite(
+        id = jsonString("id").orEmpty(),
+        code = jsonString("code").orEmpty(),
+        inviteeName = jsonString("inviteeName"),
+        inviteeEmail = jsonString("inviteeEmail"),
+        inviteePhoneNumber = jsonString("inviteePhoneNumber"),
+        role = jsonString("role").orEmpty(),
+        status = jsonString("status").orEmpty(),
+        createdAt = jsonString("createdAt").orEmpty(),
+        expiresAt = jsonString("expiresAt"),
+        createdByDisplayName = jsonString("createdByDisplayName"),
+        createdByEmail = jsonString("createdByEmail"),
     )
 
 private fun String.toCustomer(): OrmaCustomer =

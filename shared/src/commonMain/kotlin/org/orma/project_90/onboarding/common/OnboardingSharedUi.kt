@@ -127,6 +127,8 @@ import org.orma.project_90.backend.OrmaStockAdjustmentDraft
 import org.orma.project_90.backend.OrmaProductOfferDraft
 import org.orma.project_90.backend.OrmaSupplier
 import org.orma.project_90.backend.OrmaSupplierDraft
+import org.orma.project_90.backend.OrmaTeamInvite
+import org.orma.project_90.backend.OrmaTeamInviteDraft
 import org.orma.project_90.backend.OrmaTeamMember
 import org.orma.project_90.backend.OrmaWorkspacePaymentMethodDraft
 import org.orma.project_90.components.atoms.OrmaDashboardEmptyState
@@ -21444,6 +21446,7 @@ private fun DashboardTeamKpiStrip(
     canInviteMembers: Boolean,
 ) {
     val members = state.dashboard.teamMembers
+    val invites = state.dashboard.teamInvites
     val active = members.count { it.status.dashboardTeamStatusLabel() == "Active" }
     val owners = members.count { it.role == "business_owner" }
     val reachable = members.count { !it.email.isNullOrBlank() || !it.phoneNumber.isNullOrBlank() }
@@ -21459,13 +21462,13 @@ private fun DashboardTeamKpiStrip(
                 DashboardFocusMetric(
                     label = "Members",
                     value = members.size.toString(),
-                    detail = "workspace users",
+                    detail = "$active active",
                     tone = OrmaStatusTone.Info,
                 ),
                 DashboardFocusMetric(
-                    label = "Active",
-                    value = active.toString(),
-                    detail = "can access",
+                    label = "Invites",
+                    value = invites.size.toString(),
+                    detail = "pending",
                     tone = OrmaStatusTone.Success,
                 ),
                 DashboardFocusMetric(
@@ -21519,6 +21522,13 @@ private fun DashboardTeamMembersSurface(
     canInviteMembers: Boolean,
 ) {
     val members = state.dashboard.teamMembers
+    val invites = state.dashboard.teamInvites
+    val currentMemberId = state.currentDashboardTeamMember()?.id
+    var showInviteSheet by rememberSaveable { mutableStateOf(false) }
+    var detailMemberId by rememberSaveable { mutableStateOf<String?>(null) }
+    var detailInviteId by rememberSaveable { mutableStateOf<String?>(null) }
+    val detailMember = members.firstOrNull { it.id == detailMemberId }
+    val detailInvite = invites.firstOrNull { it.id == detailInviteId }
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = OrmaShapes.SmallCard,
@@ -21535,23 +21545,42 @@ private fun DashboardTeamMembersSurface(
             DashboardRecordsSurfaceHeader(
                 title = if (canInviteMembers) "Team members" else "Workspace team",
                 body = if (canInviteMembers) {
-                    "Review who can access this workspace and when they joined."
+                    "Invite staff, review active access, and remove users who should no longer enter the workspace."
                 } else {
                     "People currently linked to the same workspace as you."
                 },
-                badgeText = "${members.size} ACTIVE",
+                badgeText = if (canInviteMembers) {
+                    "${members.size} ACTIVE / ${invites.size} INVITED"
+                } else {
+                    "${members.size} ACTIVE"
+                },
                 badgeTone = OrmaStatusTone.Success,
             )
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End,
+                horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                if (canInviteMembers) {
+                    DashboardWideActionButton(
+                        text = "Add invite",
+                        onClick = { showInviteSheet = true },
+                        enabled = !state.dashboard.actionLoading,
+                        primary = true,
+                    )
+                }
                 DashboardWideActionButton(
                     text = if (state.dashboard.loading) "Syncing" else "Refresh",
                     onClick = actions.onDashboardRefresh,
                     enabled = !state.dashboard.loading,
-                    primary = true,
+                )
+            }
+            if (canInviteMembers) {
+                DashboardTeamInvitesQueue(
+                    invites = invites,
+                    actionLoading = state.dashboard.actionLoading,
+                    onOpenInvite = { detailInviteId = it.id },
+                    onRevokeInvite = { actions.onRevokeTeamInvite(it.id) },
                 )
             }
             if (members.isEmpty()) {
@@ -21582,6 +21611,11 @@ private fun DashboardTeamMembersSurface(
                     members = sortedMembers,
                     sortKey = sortKey,
                     sortAscending = sortAscending,
+                    canInviteMembers = canInviteMembers,
+                    currentMemberId = currentMemberId,
+                    actionLoading = state.dashboard.actionLoading,
+                    onOpenMember = { detailMemberId = it.id },
+                    onRemoveMember = { actions.onRemoveTeamMember(it.id) },
                     onSortChange = { nextSortKey ->
                         if (sortKey == nextSortKey) {
                             sortAscending = !sortAscending
@@ -21594,6 +21628,40 @@ private fun DashboardTeamMembersSurface(
             }
         }
     }
+    if (showInviteSheet) {
+        DashboardTeamInviteSheet(
+            onDismiss = { showInviteSheet = false },
+            onSubmit = { draft ->
+                actions.onCreateTeamInvite(draft)
+                showInviteSheet = false
+            },
+        )
+    }
+    if (detailMember != null) {
+        DashboardTeamMemberDetailsSheet(
+            member = detailMember,
+            canRemove = canInviteMembers &&
+                detailMember.id != currentMemberId &&
+                detailMember.role != "business_owner",
+            actionLoading = state.dashboard.actionLoading,
+            onDismiss = { detailMemberId = null },
+            onRemove = {
+                actions.onRemoveTeamMember(detailMember.id)
+                detailMemberId = null
+            },
+        )
+    }
+    if (detailInvite != null) {
+        DashboardTeamInviteDetailsSheet(
+            invite = detailInvite,
+            actionLoading = state.dashboard.actionLoading,
+            onDismiss = { detailInviteId = null },
+            onRevoke = {
+                actions.onRevokeTeamInvite(detailInvite.id)
+                detailInviteId = null
+            },
+        )
+    }
 }
 
 @Composable
@@ -21602,6 +21670,11 @@ private fun DashboardTeamMembersTable(
     members: List<OrmaTeamMember>,
     sortKey: String,
     sortAscending: Boolean,
+    canInviteMembers: Boolean,
+    currentMemberId: String?,
+    actionLoading: Boolean,
+    onOpenMember: (OrmaTeamMember) -> Unit,
+    onRemoveMember: (OrmaTeamMember) -> Unit,
     onSortChange: (String) -> Unit,
 ) {
     LazyColumn(
@@ -21631,7 +21704,7 @@ private fun DashboardTeamMembersTable(
                             activeSortKey = sortKey,
                             sortAscending = sortAscending,
                             onSortChange = onSortChange,
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier.weight(1.05f),
                         )
                         DashboardSaleHeaderCell(
                             text = "Contact",
@@ -21639,7 +21712,7 @@ private fun DashboardTeamMembersTable(
                             activeSortKey = sortKey,
                             sortAscending = sortAscending,
                             onSortChange = onSortChange,
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier.weight(1.15f),
                         )
                         DashboardSaleHeaderCell(
                             text = "Role",
@@ -21647,7 +21720,7 @@ private fun DashboardTeamMembersTable(
                             activeSortKey = sortKey,
                             sortAscending = sortAscending,
                             onSortChange = onSortChange,
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier.weight(0.85f),
                         )
                         DashboardSaleHeaderCell(
                             text = "Joined",
@@ -21655,8 +21728,19 @@ private fun DashboardTeamMembersTable(
                             activeSortKey = sortKey,
                             sortAscending = sortAscending,
                             onSortChange = onSortChange,
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier.weight(0.85f),
                         )
+                        if (canInviteMembers) {
+                            Text(
+                                text = "ACTIONS",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = OrmaColors.TextSecondary,
+                                letterSpacing = 1.8.sp,
+                                modifier = Modifier.weight(0.95f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
                     }
                     HorizontalDivider(
                         modifier = Modifier.padding(horizontal = 10.dp),
@@ -21673,6 +21757,11 @@ private fun DashboardTeamMembersTable(
             DashboardWideTeamMemberRow(
                 member = member,
                 zebra = index % 2 == 1,
+                canInviteMembers = canInviteMembers,
+                currentMemberId = currentMemberId,
+                actionLoading = actionLoading,
+                onOpenMember = onOpenMember,
+                onRemoveMember = onRemoveMember,
             )
         }
     }
@@ -21682,6 +21771,11 @@ private fun DashboardTeamMembersTable(
 private fun DashboardWideTeamMemberRow(
     member: OrmaTeamMember,
     zebra: Boolean = false,
+    canInviteMembers: Boolean = false,
+    currentMemberId: String? = null,
+    actionLoading: Boolean = false,
+    onOpenMember: (OrmaTeamMember) -> Unit = {},
+    onRemoveMember: (OrmaTeamMember) -> Unit = {},
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val hovered by interactionSource.collectIsHoveredAsState()
@@ -21707,14 +21801,14 @@ private fun DashboardWideTeamMemberRow(
                     ?: member.phoneNumber
                     ?: "Team member",
                 secondary = member.status.dashboardTeamStatusLabel(),
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1.05f),
             )
             DashboardWideCell(
                 primary = listOfNotNull(member.email, member.phoneNumber).joinToString(" / ")
                     .ifBlank { "No contact saved" },
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1.15f),
             )
-            Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+            Box(modifier = Modifier.weight(0.85f), contentAlignment = Alignment.CenterStart) {
                 OrmaBadge(
                     text = teamRoleLabel(member.role).uppercase(),
                     tone = if (member.role == "business_owner") OrmaStatusTone.Success else OrmaStatusTone.Info,
@@ -21722,8 +21816,28 @@ private fun DashboardWideTeamMemberRow(
             }
             DashboardWideCell(
                 primary = member.joinedAt.dashboardDateLabel(),
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(0.85f),
             )
+            if (canInviteMembers) {
+                val canRemove = member.id != currentMemberId && member.role != "business_owner"
+                Row(
+                    modifier = Modifier.weight(0.95f),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    DashboardTableActionButton(
+                        text = "Details",
+                        onClick = { onOpenMember(member) },
+                        enabled = true,
+                        iconKind = OrmaFlatIconKind.View,
+                    )
+                    DashboardTableActionButton(
+                        text = "Remove",
+                        onClick = { onRemoveMember(member) },
+                        enabled = canRemove && !actionLoading,
+                    )
+                }
+            }
         }
         HorizontalDivider(
             modifier = Modifier.padding(horizontal = 10.dp),

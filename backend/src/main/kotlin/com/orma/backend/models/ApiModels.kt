@@ -111,6 +111,7 @@ data class TeamOverviewResponse(
     val workspace: WorkspaceResponse,
     val canInviteMembers: Boolean,
     val members: List<TeamMemberResponse>,
+    val invites: List<TeamInviteResponse> = emptyList(),
 )
 
 @Serializable
@@ -123,6 +124,29 @@ data class TeamMemberResponse(
     val role: String,
     val status: String,
     val joinedAt: String,
+)
+
+@Serializable
+data class TeamInviteResponse(
+    val id: String,
+    val code: String,
+    val inviteeName: String? = null,
+    val inviteeEmail: String? = null,
+    val inviteePhoneNumber: String? = null,
+    val role: String,
+    val status: String,
+    val createdAt: String,
+    val expiresAt: String? = null,
+    val createdByDisplayName: String? = null,
+    val createdByEmail: String? = null,
+)
+
+@Serializable
+data class TeamInviteRequest(
+    val inviteeName: String? = null,
+    val inviteeEmail: String? = null,
+    val inviteePhoneNumber: String? = null,
+    val role: String = "team_member",
 )
 
 @Serializable

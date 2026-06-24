@@ -28,6 +28,8 @@ import org.orma.project_90.backend.OrmaProductOfferDraft
 import org.orma.project_90.backend.OrmaProductImportResult
 import org.orma.project_90.backend.OrmaStockAdjustmentDraft
 import org.orma.project_90.backend.OrmaSupplierDraft
+import org.orma.project_90.backend.OrmaTeamInviteDraft
+import org.orma.project_90.backend.OrmaTeamOverview
 import org.orma.project_90.backend.OrmaWorkspacePaymentMethodDraft
 import org.orma.project_90.backend.createOrmaBackendClient
 import org.orma.project_90.auth.OrmaAuthProvider
@@ -851,6 +853,7 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
                     paymentMethodPagination = paymentMethods?.pagination ?: state.dashboard.paymentMethodPagination.copy(page = 1),
                     printers = printers?.items.orEmpty(),
                     teamMembers = teamOverview?.members.orEmpty(),
+                    teamInvites = teamOverview?.invites.orEmpty(),
                     paymentMethods = paymentMethods?.items.orEmpty(),
                     metaConnection = metaConnection,
                     metaActionLoading = false,
@@ -1278,6 +1281,59 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
                     resetDashboardOrderPage()
                     refreshDashboard("Order updated.")
                 }
+                is OrmaBackendResult.Failure -> applyDashboardFailure(result.title, result.message, result.code)
+            }
+        }
+    }
+
+    fun applyTeamOverview(overview: OrmaTeamOverview, message: String) {
+        state = state.copy(
+            dashboard = state.dashboard.copy(
+                actionLoading = false,
+                errorTitle = null,
+                errorMessage = null,
+                statusMessage = message,
+                teamMembers = overview.members,
+                teamInvites = overview.invites,
+            ),
+        )
+    }
+
+    fun createDashboardTeamInvite(draft: OrmaTeamInviteDraft) {
+        val snapshot = state
+        val hasContact = draft.inviteeEmail.trim().isNotBlank() || draft.inviteePhoneNumber.trim().isNotBlank()
+        if (snapshot.dashboard.actionLoading || !hasContact) return
+        markDashboardActionLoading()
+        scope.launch {
+            val idToken = freshDashboardTokenOrError(snapshot) ?: return@launch
+            when (val result = backendClient.createTeamInvite(idToken, draft)) {
+                is OrmaBackendResult.Success -> applyTeamOverview(result.value, "Team invite created.")
+                is OrmaBackendResult.Failure -> applyDashboardFailure(result.title, result.message, result.code)
+            }
+        }
+    }
+
+    fun revokeDashboardTeamInvite(inviteId: String) {
+        val snapshot = state
+        if (snapshot.dashboard.actionLoading || inviteId.isBlank()) return
+        markDashboardActionLoading()
+        scope.launch {
+            val idToken = freshDashboardTokenOrError(snapshot) ?: return@launch
+            when (val result = backendClient.revokeTeamInvite(idToken, inviteId)) {
+                is OrmaBackendResult.Success -> applyTeamOverview(result.value, "Team invite revoked.")
+                is OrmaBackendResult.Failure -> applyDashboardFailure(result.title, result.message, result.code)
+            }
+        }
+    }
+
+    fun removeDashboardTeamMember(memberId: String) {
+        val snapshot = state
+        if (snapshot.dashboard.actionLoading || memberId.isBlank()) return
+        markDashboardActionLoading()
+        scope.launch {
+            val idToken = freshDashboardTokenOrError(snapshot) ?: return@launch
+            when (val result = backendClient.removeTeamMember(idToken, memberId)) {
+                is OrmaBackendResult.Success -> applyTeamOverview(result.value, "Team member removed.")
                 is OrmaBackendResult.Failure -> applyDashboardFailure(result.title, result.message, result.code)
             }
         }
@@ -1814,6 +1870,9 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
         onUpdateOrderStatusWithPayment = { orderId, status, paidTotal ->
             updateDashboardOrderStatus(orderId, status, paidTotal)
         },
+        onCreateTeamInvite = ::createDashboardTeamInvite,
+        onRevokeTeamInvite = ::revokeDashboardTeamInvite,
+        onRemoveTeamMember = ::removeDashboardTeamMember,
         onInvoiceGstinLookupRequest = ::lookupInvoiceGstin,
         onCreatePrinter = ::createDashboardPrinter,
         onCreatePaymentMethod = ::createDashboardPaymentMethod,

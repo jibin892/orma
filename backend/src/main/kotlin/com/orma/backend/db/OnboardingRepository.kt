@@ -2,9 +2,11 @@ package com.orma.backend.db
 
 import com.orma.backend.auth.VerifiedFirebaseUser
 import com.orma.backend.models.BusinessSetupRequest
+import com.orma.backend.models.TeamInviteRequest
 import java.sql.Connection
 import java.sql.PreparedStatement
 import java.sql.ResultSet
+import java.util.UUID
 import javax.sql.DataSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -48,11 +50,31 @@ data class TeamMemberRecord(
     val joinedAt: String,
 )
 
+data class TeamInviteRecord(
+    val id: String,
+    val code: String,
+    val inviteeName: String?,
+    val inviteeEmail: String?,
+    val inviteePhoneNumber: String?,
+    val role: String,
+    val status: String,
+    val createdAt: String,
+    val expiresAt: String?,
+    val createdByDisplayName: String?,
+    val createdByEmail: String?,
+)
+
 data class TeamOverviewRecord(
     val workspace: WorkspaceRecord,
     val canInviteMembers: Boolean,
     val members: List<TeamMemberRecord>,
+    val invites: List<TeamInviteRecord>,
 )
+
+class TeamAccessException(
+    val code: String,
+    override val message: String,
+) : RuntimeException(message)
 
 data class ProductImageRecord(
     val id: String,
@@ -134,11 +156,137 @@ class OnboardingRepository(
                 displayNameFallback = null,
             )
             val workspace = connection.findPrimaryWorkspace(user.id) ?: return@withContext null
+            val canInviteMembers = workspace.role == RoleBusinessOwner
             TeamOverviewRecord(
                 workspace = workspace,
-                canInviteMembers = false,
+                canInviteMembers = canInviteMembers,
                 members = connection.listWorkspaceMembers(workspace.id),
+                invites = if (canInviteMembers) connection.listWorkspaceInvites(workspace.id) else emptyList(),
             )
+        }
+    }
+
+    suspend fun createTeamInvite(
+        firebaseUser: VerifiedFirebaseUser,
+        request: TeamInviteRequest,
+    ): TeamOverviewRecord? = withContext(Dispatchers.IO) {
+        dataSource.connection.use { connection ->
+            connection.autoCommit = false
+            try {
+                val user = connection.upsertUser(
+                    firebaseUser = firebaseUser,
+                    providerFallback = null,
+                    emailFallback = null,
+                    phoneNumberFallback = null,
+                    displayNameFallback = null,
+                )
+                val workspace = connection.requireOwnerWorkspace(user.id)
+                val invite = connection.insertTeamInvite(workspace.id, user.id, request)
+                connection.insertTeamActivity(
+                    workspaceId = workspace.id,
+                    actorUserId = user.id,
+                    activityType = "team_invite_created",
+                    entityType = "team_invite",
+                    entityId = invite.id,
+                    entityLabel = invite.inviteeName ?: invite.inviteeEmail ?: invite.inviteePhoneNumber ?: "Team invite",
+                    title = "Team invite created",
+                    body = "${teamRoleLabel(invite.role)} invite prepared for ${invite.inviteeName ?: invite.inviteeEmail ?: invite.inviteePhoneNumber ?: "a team member"}.",
+                    tone = "success",
+                )
+                connection.commit()
+                connection.teamOverview(workspace, canInviteMembers = true)
+            } catch (error: Throwable) {
+                connection.rollback()
+                throw error
+            } finally {
+                connection.autoCommit = true
+            }
+        }
+    }
+
+    suspend fun revokeTeamInvite(
+        firebaseUser: VerifiedFirebaseUser,
+        inviteId: String,
+    ): TeamOverviewRecord? = withContext(Dispatchers.IO) {
+        dataSource.connection.use { connection ->
+            connection.autoCommit = false
+            try {
+                val user = connection.upsertUser(
+                    firebaseUser = firebaseUser,
+                    providerFallback = null,
+                    emailFallback = null,
+                    phoneNumberFallback = null,
+                    displayNameFallback = null,
+                )
+                val workspace = connection.requireOwnerWorkspace(user.id)
+                val invite = connection.revokeTeamInvite(workspace.id, inviteId)
+                if (invite != null) {
+                    connection.insertTeamActivity(
+                        workspaceId = workspace.id,
+                        actorUserId = user.id,
+                        activityType = "team_invite_revoked",
+                        entityType = "team_invite",
+                        entityId = invite.id,
+                        entityLabel = invite.inviteeName ?: invite.inviteeEmail ?: invite.inviteePhoneNumber ?: "Team invite",
+                        title = "Team invite revoked",
+                        body = "${teamRoleLabel(invite.role)} invite removed for ${invite.inviteeName ?: invite.inviteeEmail ?: invite.inviteePhoneNumber ?: "a team member"}.",
+                        tone = "warning",
+                    )
+                }
+                connection.commit()
+                connection.teamOverview(workspace, canInviteMembers = true)
+            } catch (error: Throwable) {
+                connection.rollback()
+                throw error
+            } finally {
+                connection.autoCommit = true
+            }
+        }
+    }
+
+    suspend fun removeTeamMember(
+        firebaseUser: VerifiedFirebaseUser,
+        memberId: String,
+    ): TeamOverviewRecord? = withContext(Dispatchers.IO) {
+        dataSource.connection.use { connection ->
+            connection.autoCommit = false
+            try {
+                val user = connection.upsertUser(
+                    firebaseUser = firebaseUser,
+                    providerFallback = null,
+                    emailFallback = null,
+                    phoneNumberFallback = null,
+                    displayNameFallback = null,
+                )
+                val workspace = connection.requireOwnerWorkspace(user.id)
+                val member = connection.findWorkspaceMember(workspace.id, memberId)
+                    ?: throw TeamAccessException("team_member_not_found", "This team member is no longer active.")
+                if (member.userId == user.id) {
+                    throw TeamAccessException("team_remove_self_blocked", "Owners cannot remove their own active workspace access.")
+                }
+                if (member.role == RoleBusinessOwner && connection.countActiveOwners(workspace.id) <= 1) {
+                    throw TeamAccessException("team_last_owner_blocked", "Keep at least one active owner on this workspace.")
+                }
+                connection.disableWorkspaceMember(workspace.id, member.id)
+                connection.insertTeamActivity(
+                    workspaceId = workspace.id,
+                    actorUserId = user.id,
+                    activityType = "team_member_removed",
+                    entityType = "team_member",
+                    entityId = member.id,
+                    entityLabel = member.displayName ?: member.email ?: member.phoneNumber ?: "Team member",
+                    title = "Team member removed",
+                    body = "${member.displayName ?: member.email ?: member.phoneNumber ?: "Team member"} no longer has active workspace access.",
+                    tone = "warning",
+                )
+                connection.commit()
+                connection.teamOverview(workspace, canInviteMembers = true)
+            } catch (error: Throwable) {
+                connection.rollback()
+                throw error
+            } finally {
+                connection.autoCommit = true
+            }
         }
     }
 
@@ -483,6 +631,216 @@ class OnboardingRepository(
         }
     }
 
+    private fun Connection.listWorkspaceInvites(workspaceId: String): List<TeamInviteRecord> {
+        val sql = """
+            select
+                ti.id::text as invite_id,
+                ti.code,
+                ti.invitee_name,
+                ti.invitee_email,
+                ti.invitee_phone_number,
+                ti.role,
+                ti.status,
+                ti.created_at::text as created_at,
+                ti.expires_at::text as expires_at,
+                au.display_name as created_by_display_name,
+                au.email as created_by_email
+            from team_invites ti
+            left join app_users au on au.id = ti.created_by_user_id
+            where ti.workspace_id = ?::uuid
+              and ti.status in ('active', 'pending')
+            order by ti.created_at desc
+        """.trimIndent()
+
+        return prepareStatement(sql).use { statement ->
+            statement.setString(1, workspaceId)
+            statement.executeQuery().use { result ->
+                buildList {
+                    while (result.next()) add(result.toTeamInviteRecord())
+                }
+            }
+        }
+    }
+
+    private fun Connection.teamOverview(
+        workspace: WorkspaceRecord,
+        canInviteMembers: Boolean,
+    ): TeamOverviewRecord =
+        TeamOverviewRecord(
+            workspace = workspace,
+            canInviteMembers = canInviteMembers,
+            members = listWorkspaceMembers(workspace.id),
+            invites = if (canInviteMembers) listWorkspaceInvites(workspace.id) else emptyList(),
+        )
+
+    private fun Connection.requireOwnerWorkspace(userId: String): WorkspaceRecord {
+        val workspace = findPrimaryWorkspace(userId)
+            ?: throw TeamAccessException(
+                code = "workspace_not_found",
+                message = "Complete business setup before managing team access.",
+            )
+        if (workspace.role != RoleBusinessOwner) {
+            throw TeamAccessException(
+                code = "team_owner_required",
+                message = "Only the workspace owner can manage team access.",
+            )
+        }
+        return workspace
+    }
+
+    private fun Connection.insertTeamInvite(
+        workspaceId: String,
+        userId: String,
+        request: TeamInviteRequest,
+    ): TeamInviteRecord {
+        val cleanName = request.inviteeName.cleanOptional()?.take(120)
+        val cleanEmail = request.inviteeEmail.cleanOptional()?.lowercase()?.take(160)
+        val cleanPhone = request.inviteePhoneNumber.cleanOptional()?.take(40)
+        if (cleanEmail == null && cleanPhone == null) {
+            throw TeamAccessException(
+                code = "team_invite_contact_required",
+                message = "Add an email or phone number before creating the invite.",
+            )
+        }
+        val sql = """
+            insert into team_invites (
+                code,
+                workspace_id,
+                created_by_user_id,
+                role,
+                status,
+                expires_at,
+                invitee_name,
+                invitee_email,
+                invitee_phone_number,
+                updated_at
+            )
+            values (?, ?::uuid, ?::uuid, ?, 'active', now() + interval '14 days', ?, ?, ?, now())
+            returning
+                id::text as invite_id,
+                code,
+                invitee_name,
+                invitee_email,
+                invitee_phone_number,
+                role,
+                status,
+                created_at::text as created_at,
+                expires_at::text as expires_at,
+                null::text as created_by_display_name,
+                null::text as created_by_email
+        """.trimIndent()
+        return prepareStatement(sql).use { statement ->
+            statement.setString(1, generateTeamInviteCode())
+            statement.setString(2, workspaceId)
+            statement.setString(3, userId)
+            statement.setString(4, request.role.normalizedTeamRole())
+            statement.setNullableString(5, cleanName)
+            statement.setNullableString(6, cleanEmail)
+            statement.setNullableString(7, cleanPhone)
+            statement.executeQuery().use { result ->
+                result.next()
+                result.toTeamInviteRecord()
+            }
+        }
+    }
+
+    private fun Connection.revokeTeamInvite(
+        workspaceId: String,
+        inviteId: String,
+    ): TeamInviteRecord? {
+        val sql = """
+            update team_invites
+            set status = 'revoked', updated_at = now()
+            where id::text = ?
+              and workspace_id = ?::uuid
+              and status in ('active', 'pending')
+            returning
+                id::text as invite_id,
+                code,
+                invitee_name,
+                invitee_email,
+                invitee_phone_number,
+                role,
+                status,
+                created_at::text as created_at,
+                expires_at::text as expires_at,
+                null::text as created_by_display_name,
+                null::text as created_by_email
+        """.trimIndent()
+        return prepareStatement(sql).use { statement ->
+            statement.setString(1, inviteId.trim())
+            statement.setString(2, workspaceId)
+            statement.executeQuery().use { result ->
+                if (result.next()) result.toTeamInviteRecord() else null
+            }
+        }
+    }
+
+    private fun Connection.findWorkspaceMember(
+        workspaceId: String,
+        memberId: String,
+    ): TeamMemberRecord? {
+        val sql = """
+            select
+                wm.id::text as member_id,
+                wm.user_id::text as user_id,
+                au.display_name,
+                au.email,
+                au.phone_number,
+                wm.role,
+                wm.status,
+                wm.created_at::text as joined_at
+            from workspace_members wm
+            join app_users au on au.id = wm.user_id
+            where wm.workspace_id = ?::uuid
+              and wm.id::text = ?
+              and wm.status = 'active'
+            limit 1
+        """.trimIndent()
+        return prepareStatement(sql).use { statement ->
+            statement.setString(1, workspaceId)
+            statement.setString(2, memberId.trim())
+            statement.executeQuery().use { result ->
+                if (result.next()) result.toTeamMemberRecord() else null
+            }
+        }
+    }
+
+    private fun Connection.countActiveOwners(workspaceId: String): Int {
+        val sql = """
+            select count(*)::int as owner_count
+            from workspace_members
+            where workspace_id = ?::uuid
+              and role = 'business_owner'
+              and status = 'active'
+        """.trimIndent()
+        return prepareStatement(sql).use { statement ->
+            statement.setString(1, workspaceId)
+            statement.executeQuery().use { result ->
+                result.next()
+                result.getInt("owner_count")
+            }
+        }
+    }
+
+    private fun Connection.disableWorkspaceMember(
+        workspaceId: String,
+        memberId: String,
+    ) {
+        val sql = """
+            update workspace_members
+            set status = 'disabled', updated_at = now()
+            where workspace_id = ?::uuid
+              and id::text = ?
+              and status = 'active'
+        """.trimIndent()
+        prepareStatement(sql).use { statement ->
+            statement.setString(1, workspaceId)
+            statement.setString(2, memberId.trim())
+            statement.executeUpdate()
+        }
+    }
+
     private fun Connection.markUserOwnerComplete(
         userId: String,
         displayName: String,
@@ -759,6 +1117,46 @@ class OnboardingRepository(
         }
     }
 
+    private fun Connection.insertTeamActivity(
+        workspaceId: String,
+        actorUserId: String,
+        activityType: String,
+        entityType: String,
+        entityId: String?,
+        entityLabel: String?,
+        title: String,
+        body: String,
+        tone: String,
+    ) {
+        val actor = findActivityActor(workspaceId, actorUserId)
+        val sql = """
+            insert into workspace_activity (
+                workspace_id, actor_user_id, actor_display_name, actor_email, actor_phone_number,
+                actor_role, activity_type, entity_type, entity_id, entity_label, title, body, tone
+            )
+            values (
+                ?::uuid, ?::uuid, ?, ?, ?,
+                ?, ?, ?, ?::uuid, ?, ?, ?, ?
+            )
+        """.trimIndent()
+        prepareStatement(sql).use { statement ->
+            statement.setString(1, workspaceId)
+            statement.setString(2, actorUserId)
+            statement.setNullableString(3, actor?.displayName.cleanOptional())
+            statement.setNullableString(4, actor?.email.cleanOptional()?.lowercase())
+            statement.setNullableString(5, actor?.phoneNumber.cleanOptional())
+            statement.setNullableString(6, actor?.role.cleanOptional())
+            statement.setString(7, activityType.cleanActivityType())
+            statement.setString(8, entityType.cleanActivityType())
+            statement.setNullableUuid(9, entityId)
+            statement.setNullableString(10, entityLabel.cleanOptional())
+            statement.setString(11, title.cleanOptional() ?: "Team access updated")
+            statement.setString(12, body.cleanOptional() ?: "Team access was updated.")
+            statement.setString(13, tone.cleanActivityTone())
+            statement.executeUpdate()
+        }
+    }
+
     private fun PreparedStatement.bindBusinessSetup(
         userId: String,
         request: BusinessSetupRequest,
@@ -851,6 +1249,21 @@ class OnboardingRepository(
             joinedAt = getString("joined_at"),
         )
 
+    private fun ResultSet.toTeamInviteRecord(): TeamInviteRecord =
+        TeamInviteRecord(
+            id = getString("invite_id"),
+            code = getString("code"),
+            inviteeName = getString("invitee_name"),
+            inviteeEmail = getString("invitee_email"),
+            inviteePhoneNumber = getString("invitee_phone_number"),
+            role = getString("role").normalizedTeamRole(),
+            status = getString("status"),
+            createdAt = getString("created_at"),
+            expiresAt = getString("expires_at"),
+            createdByDisplayName = getString("created_by_display_name"),
+            createdByEmail = getString("created_by_email"),
+        )
+
     private fun ResultSet.toProductImageRecord(): ProductImageRecord =
         ProductImageRecord(
             id = getString("id"),
@@ -907,6 +1320,9 @@ class OnboardingRepository(
         }
     }
 
+    private fun String?.cleanOptional(): String? =
+        this?.trim()?.takeIf { it.isNotBlank() }
+
     private fun String.cleanActivityType(): String =
         trim()
             .lowercase()
@@ -915,12 +1331,28 @@ class OnboardingRepository(
             .take(60)
             .ifBlank { "activity" }
 
+    private fun String.cleanActivityTone(): String =
+        trim().lowercase().takeIf { it in setOf("info", "success", "warning", "danger") } ?: "info"
+
     private fun String.sellableActivityLabel(): String =
         when (cleanActivityType()) {
             "service" -> "Service"
             "appointment" -> "Appointment"
             else -> "Product"
         }
+
+    private fun teamRoleLabel(role: String): String = when (role.normalizedTeamRole()) {
+        RoleBusinessOwner -> "Business owner"
+        "manager" -> "Manager"
+        "cashier" -> "Cashier"
+        "accountant" -> "Accountant"
+        "inventory_manager" -> "Inventory"
+        "sales_staff" -> "Sales"
+        else -> "Staff"
+    }
+
+    private fun generateTeamInviteCode(): String =
+        "TEAM-" + UUID.randomUUID().toString().replace("-", "").take(12).uppercase()
 
     private fun String.normalizedTeamRole(): String {
         val normalized = trim()
