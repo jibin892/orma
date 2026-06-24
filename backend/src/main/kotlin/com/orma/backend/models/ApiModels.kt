@@ -621,6 +621,7 @@ data class OrderItemRequest(
 @Serializable
 data class OrderStatusRequest(
     val status: String,
+    val paidTotal: String? = null,
 )
 
 @Serializable

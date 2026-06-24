@@ -371,7 +371,7 @@ fun Route.dashboardRoutes(
             call.respondValidation("order_status_required", "Choose an order status.")
             return@put
         }
-        call.respondWorkspaceResult(repository.updateOrderStatus(firebaseUser, orderId, request.status))
+        call.respondWorkspaceResult(repository.updateOrderStatus(firebaseUser, orderId, request.status, request.paidTotal))
     }
 
     post("/orders/{id}/status") {
@@ -383,7 +383,7 @@ fun Route.dashboardRoutes(
             call.respondValidation("order_status_required", "Choose an order status.")
             return@post
         }
-        call.respondWorkspaceResult(repository.updateOrderStatus(firebaseUser, orderId, request.status))
+        call.respondWorkspaceResult(repository.updateOrderStatus(firebaseUser, orderId, request.status, request.paidTotal))
     }
 
     get("/printers") {

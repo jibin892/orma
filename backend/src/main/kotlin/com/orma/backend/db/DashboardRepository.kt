@@ -938,6 +938,7 @@ class DashboardRepository(
         firebaseUser: VerifiedFirebaseUser,
         orderId: String,
         status: String,
+        paidTotal: String? = null,
     ): OrderResponse? = withContext(Dispatchers.IO) {
         dataSource.connection.use { connection ->
             connection.autoCommit = false
@@ -946,7 +947,7 @@ class DashboardRepository(
                     connection.rollback()
                     return@withContext null
                 }
-                val updated = connection.updateOrderStatus(access, orderId, status)
+                val updated = connection.updateOrderStatus(access, orderId, status, paidTotal)
                 connection.commit()
                 updated
             } catch (error: Throwable) {
@@ -2416,7 +2417,58 @@ class DashboardRepository(
                         add(if (includeItems) order.copy(items = listOrderItems(order.id)) else order)
                     }
                 }
-                items.toPagedResult(filters, totalItems)
+                val resolvedTotalItems = if (items.isEmpty() && filters.offset() > 0) {
+                    countOrders(
+                        workspaceId = workspaceId,
+                        filters = filters,
+                        excludeCancelledWhenStatusAll = excludeCancelledWhenStatusAll,
+                    )
+                } else {
+                    totalItems
+                }
+                items.toPagedResult(filters, resolvedTotalItems)
+            }
+        }
+    }
+
+    private fun Connection.countOrders(
+        workspaceId: String,
+        filters: DashboardQueryFilters = DashboardQueryFilters(),
+        excludeCancelledWhenStatusAll: Boolean = false,
+    ): Int {
+        val params = mutableListOf(workspaceId)
+        val searchTokens = filters.query.cleanSearchTokens()
+        val status = filters.status.cleanOrderStatusFilter()
+        val orderType = filters.orderType.cleanOrderTypeFilter()
+        val sql = buildString {
+            append(
+                """
+                select count(distinct o.id)::int as total_count
+                from orders o
+                left join customers c on c.id = o.customer_id
+                where o.workspace_id = ?::uuid
+                """.trimIndent(),
+            )
+            if (status != null) {
+                append(" and o.status = ?")
+                params.add(status)
+            } else if (excludeCancelledWhenStatusAll) {
+                append(" and o.status <> 'cancelled'")
+            }
+            if (filters.scheduledOnly) {
+                append(" and o.scheduled_at is not null")
+            }
+            if (orderType != null) {
+                append(" and o.order_type = ?")
+                params.add(orderType)
+            }
+            appendOrderDateWhere(filters, params, alias = "o")
+            appendOrderSearchWhere(searchTokens, params)
+        }
+        return prepareStatement(sql).use { statement ->
+            statement.bindStringParams(params)
+            statement.executeQuery().use { result ->
+                if (result.next()) result.getInt("total_count") else 0
             }
         }
     }
@@ -2816,10 +2868,11 @@ class DashboardRepository(
         access: DashboardWorkspaceAccess,
         orderId: String,
         requestedStatus: String,
+        requestedPaidTotal: String? = null,
     ): OrderResponse? {
         val status = requestedStatus.normalizedOrderStatus()
         val currentSql = """
-            select status, inventory_applied
+            select status, inventory_applied, total
             from orders
             where id = ?::uuid and workspace_id = ?::uuid
             for update
@@ -2829,10 +2882,18 @@ class DashboardRepository(
             statement.setString(2, access.workspaceId)
             statement.executeQuery().use { result ->
                 if (!result.next()) return null
-                result.getString("status") to result.getBoolean("inventory_applied")
+                CurrentOrderStatus(
+                    status = result.getString("status"),
+                    inventoryApplied = result.getBoolean("inventory_applied"),
+                    total = result.getBigDecimal("total") ?: BigDecimal.ZERO,
+                )
             }
         }
-        val shouldApplyInventory = status.appliesInventory() && !current.second
+        val cleanRequestedPaidTotal = requestedPaidTotal
+            ?.takeIf { it.isNotBlank() }
+            ?.moneyOrZero()
+            ?.coerceAtMost(current.total)
+        val shouldApplyInventory = status.appliesInventory() && !current.inventoryApplied
         prepareStatement(
             """
             update orders
@@ -2840,6 +2901,7 @@ class DashboardRepository(
                 status = ?,
                 inventory_applied = inventory_applied or ?,
                 paid_total = case
+                    when ? then ?
                     when ? and coalesce(paid_total, 0) <= 0 then total
                     else paid_total
                 end,
@@ -2849,9 +2911,11 @@ class DashboardRepository(
         ).use { statement ->
             statement.setString(1, status)
             statement.setBoolean(2, shouldApplyInventory)
-            statement.setBoolean(3, status.impliesFullPayment())
-            statement.setString(4, orderId)
-            statement.setString(5, access.workspaceId)
+            statement.setBoolean(3, cleanRequestedPaidTotal != null)
+            statement.setBigDecimal(4, cleanRequestedPaidTotal ?: BigDecimal.ZERO)
+            statement.setBoolean(5, status.impliesFullPayment())
+            statement.setString(6, orderId)
+            statement.setString(7, access.workspaceId)
             statement.executeUpdate()
         }
         if (shouldApplyInventory) {
@@ -4065,6 +4129,12 @@ class DashboardRepository(
         val lineSubtotal: BigDecimal,
         val lineTax: BigDecimal,
         val lineTotal: BigDecimal,
+    )
+
+    private data class CurrentOrderStatus(
+        val status: String,
+        val inventoryApplied: Boolean,
+        val total: BigDecimal,
     )
 
     private data class PublicCatalogPreparedItem(
