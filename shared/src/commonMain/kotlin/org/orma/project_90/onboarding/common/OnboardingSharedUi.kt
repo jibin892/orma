@@ -22186,6 +22186,12 @@ private fun OrmaTeamMember.dashboardDisplayName(): String =
         ?: phoneNumber?.takeIf { it.isNotBlank() }
         ?: "Team member"
 
+private fun OrmaTeamMember.dashboardEffectiveTeamRole(
+    canInviteMembers: Boolean,
+    currentMemberId: String?,
+): String =
+    if (canInviteMembers && id == currentMemberId) "business_owner" else role
+
 @Composable
 private fun DashboardTeamContent(
     state: OnboardingUiState,
@@ -22274,10 +22280,11 @@ private fun DashboardTeamKpiStrip(
     val members = state.dashboard.teamMembers
     val invites = state.dashboard.teamInvites
     val active = members.count { it.status.dashboardTeamStatusLabel() == "Active" }
-    val owners = members.count { it.role == "business_owner" }
-    val reachable = members.count { !it.email.isNullOrBlank() || !it.phoneNumber.isNullOrBlank() }
     val currentMember = state.currentDashboardTeamMember()
-    val currentRole = currentMember?.role
+    val currentMemberId = currentMember?.id
+    val owners = members.count { it.dashboardEffectiveTeamRole(canInviteMembers, currentMemberId) == "business_owner" }
+    val reachable = members.count { !it.email.isNullOrBlank() || !it.phoneNumber.isNullOrBlank() }
+    val currentRole = currentMember?.dashboardEffectiveTeamRole(canInviteMembers, currentMemberId)
         ?.let { teamRoleLabel(it) }
         ?: if (state.accessPath == AccessPath.TeamMember) "Team member" else "Business owner"
     val currentStatus = currentMember?.status?.dashboardTeamStatusLabel()
@@ -22466,9 +22473,10 @@ private fun DashboardTeamMembersSurface(
     if (detailMember != null) {
         DashboardTeamMemberDetailsSheet(
             member = detailMember,
+            effectiveRole = detailMember.dashboardEffectiveTeamRole(canInviteMembers, currentMemberId),
             canRemove = canInviteMembers &&
                 detailMember.id != currentMemberId &&
-                detailMember.role != "business_owner",
+                detailMember.dashboardEffectiveTeamRole(canInviteMembers, currentMemberId) != "business_owner",
             actionLoading = state.dashboard.actionLoading,
             onDismiss = { detailMemberId = null },
             onRemove = {
@@ -22678,6 +22686,7 @@ private fun DashboardTeamInviteSheet(
 @Composable
 private fun DashboardTeamMemberDetailsSheet(
     member: OrmaTeamMember,
+    effectiveRole: String = member.role,
     canRemove: Boolean,
     actionLoading: Boolean,
     onDismiss: () -> Unit,
@@ -22693,7 +22702,7 @@ private fun DashboardTeamMemberDetailsSheet(
                 "Name" to member.dashboardDisplayName(),
                 "Email" to (member.email ?: "Not saved"),
                 "Phone" to (member.phoneNumber ?: "Not saved"),
-                "Role" to teamRoleLabel(member.role),
+                "Role" to teamRoleLabel(effectiveRole),
                 "Status" to member.status.dashboardTeamStatusLabel(),
                 "Joined" to member.joinedAt.dashboardDateLabel(),
             ),
@@ -22883,6 +22892,7 @@ private fun DashboardWideTeamMemberRow(
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val hovered by interactionSource.collectIsHoveredAsState()
+    val effectiveRole = member.dashboardEffectiveTeamRole(canInviteMembers, currentMemberId)
     val rowBackground = when {
         hovered -> OrmaColors.ScreenBackground.copy(alpha = 0.44f)
         zebra -> OrmaColors.ScreenBackground.copy(alpha = 0.18f)
@@ -22914,8 +22924,8 @@ private fun DashboardWideTeamMemberRow(
             )
             Box(modifier = Modifier.weight(0.85f), contentAlignment = Alignment.CenterStart) {
                 OrmaBadge(
-                    text = teamRoleLabel(member.role).uppercase(),
-                    tone = if (member.role == "business_owner") OrmaStatusTone.Success else OrmaStatusTone.Info,
+                    text = teamRoleLabel(effectiveRole).uppercase(),
+                    tone = if (effectiveRole == "business_owner") OrmaStatusTone.Success else OrmaStatusTone.Info,
                 )
             }
             DashboardWideCell(
@@ -22923,7 +22933,7 @@ private fun DashboardWideTeamMemberRow(
                 modifier = Modifier.weight(0.85f),
             )
             if (canInviteMembers) {
-                val canRemove = member.id != currentMemberId && member.role != "business_owner"
+                val canRemove = member.id != currentMemberId && effectiveRole != "business_owner"
                 Row(
                     modifier = Modifier.weight(0.95f),
                     horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
