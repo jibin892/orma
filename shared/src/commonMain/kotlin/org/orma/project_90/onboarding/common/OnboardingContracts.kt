@@ -56,6 +56,7 @@ internal enum class AuthLoadingKind {
 internal enum class DashboardPageTarget {
     Orders,
     Customers,
+    Suppliers,
     Products,
 }
 
@@ -200,6 +201,7 @@ internal data class OnboardingActions(
     val onLoadCustomerOrders: (String) -> Unit,
     val onCreateCustomer: (OrmaCustomerDraft) -> Unit,
     val onCreateSupplier: (OrmaSupplierDraft) -> Unit,
+    val onUpdateSupplier: (String, OrmaSupplierDraft) -> Unit,
     val onCreateProductCategory: (OrmaProductCategoryDraft) -> Unit,
     val onCreateProductOffer: (OrmaProductOfferDraft) -> Unit,
     val onCreateProduct: (OrmaProductDraft) -> Unit,

@@ -64,6 +64,7 @@ import org.jetbrains.compose.resources.painterResource
 import org.orma.project_90.calendar.ormaCurrentIsoDate
 import orma.shared.generated.resources.Res
 import orma.shared.generated.resources.orma_icon_back
+import orma.shared.generated.resources.orma_icon_calendar
 import orma.shared.generated.resources.orma_icon_download
 import orma.shared.generated.resources.orma_icon_edit
 import orma.shared.generated.resources.orma_icon_image
@@ -186,6 +187,7 @@ fun OrmaFlatIcon(
 
 private fun ormaFlatIconResource(kind: OrmaFlatIconKind): DrawableResource? = when (kind) {
     OrmaFlatIconKind.Refresh -> Res.drawable.orma_icon_refresh
+    OrmaFlatIconKind.Calendar -> Res.drawable.orma_icon_calendar
     OrmaFlatIconKind.ChevronLeft,
     OrmaFlatIconKind.Back -> Res.drawable.orma_icon_back
     OrmaFlatIconKind.ChevronRight -> Res.drawable.orma_icon_next
@@ -893,12 +895,15 @@ fun OrmaCalendarDateField(
     placeholder: String = "Choose date",
     supportingText: String? = null,
     allowClear: Boolean = true,
+    minDate: String? = null,
 ) {
     var expanded by remember { mutableStateOf(false) }
     var visibleMonth by remember(value) {
         mutableStateOf(ormaCalendarMonthFrom(value).ifBlank { ormaCurrentIsoDate().take(7) })
     }
     val selectedDate = value.take(10).takeIf(::ormaIsIsoDate)
+    val minimumDate = minDate?.take(10)?.takeIf(::ormaIsIsoDate)
+    val fieldTone = if (selectedDate == null) OrmaColors.TextPrimary.copy(alpha = 0.72f) else OrmaColors.Accent
     Column(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -916,6 +921,7 @@ fun OrmaCalendarDateField(
             shape = OrmaShapes.Field,
             color = OrmaColors.CellBackground,
             contentColor = OrmaColors.TextPrimary,
+            border = BorderStroke(1.dp, OrmaColors.Accent.copy(alpha = if (selectedDate == null) 0.08f else 0.14f)),
             tonalElevation = 0.dp,
             shadowElevation = 0.dp,
         ) {
@@ -927,17 +933,17 @@ fun OrmaCalendarDateField(
                 OrmaFlatIcon(
                     kind = OrmaFlatIconKind.Calendar,
                     modifier = Modifier.size(18.dp),
-                    color = OrmaColors.TextSecondary,
+                    color = fieldTone,
                 )
                 Text(
                     text = selectedDate?.let(::ormaDateDisplayLabel) ?: placeholder,
                     modifier = Modifier.weight(1f),
                     style = MaterialTheme.typography.bodyLarge,
-                    color = if (selectedDate == null) OrmaColors.TextTertiary else OrmaColors.Accent,
+                    color = if (selectedDate == null) OrmaColors.TextSecondary else OrmaColors.Accent,
                 )
                 OrmaChevronDownIcon(
                     modifier = Modifier.size(18.dp),
-                    color = OrmaColors.TextSecondary,
+                    color = fieldTone,
                 )
             }
         }
@@ -953,6 +959,7 @@ fun OrmaCalendarDateField(
             OrmaCalendarMonthPicker(
                 visibleMonth = visibleMonth,
                 selectedDate = selectedDate,
+                minDate = minimumDate,
                 onMonthChange = { visibleMonth = it },
                 onSelected = {
                     onValueChange(it)
@@ -980,9 +987,11 @@ fun OrmaCalendarDateTimeField(
     placeholder: String = "Choose date",
     supportingText: String? = null,
     allowClear: Boolean = true,
+    disablePastDates: Boolean = true,
 ) {
     val date = value.take(10).takeIf(::ormaIsIsoDate).orEmpty()
     val time = value.substringAfter(" ", "").take(5).takeIf(::ormaIsTime).orEmpty()
+    val minDate = if (disablePastDates) ormaCurrentIsoDate() else null
     Column(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -996,6 +1005,7 @@ fun OrmaCalendarDateTimeField(
             placeholder = placeholder,
             supportingText = supportingText,
             allowClear = allowClear,
+            minDate = minDate,
         )
         if (date.isNotBlank()) {
             OrmaSegmentedRow(
@@ -1012,12 +1022,16 @@ fun OrmaCalendarDateTimeField(
 private fun OrmaCalendarMonthPicker(
     visibleMonth: String,
     selectedDate: String?,
+    minDate: String?,
     onMonthChange: (String) -> Unit,
     onSelected: (String) -> Unit,
     onClear: (() -> Unit)?,
 ) {
     val year = visibleMonth.substringBefore("-").toIntOrNull() ?: 2026
     val month = visibleMonth.substringAfter("-", "06").toIntOrNull()?.coerceIn(1, 12) ?: 6
+    val visibleMonthKey = "$year-${month.twoDigit()}"
+    val minMonthKey = minDate?.take(7)
+    val canNavigatePrevious = minMonthKey == null || visibleMonthKey > minMonthKey
     val days = ormaDaysInMonth(year, month)
     val leadingEmptyCells = ormaFirstWeekdayOffset(year, month)
     Surface(
@@ -1042,6 +1056,7 @@ private fun OrmaCalendarMonthPicker(
                     kind = OrmaFlatIconKind.ChevronLeft,
                     onClick = { onMonthChange(ormaShiftMonth(year, month, -1)) },
                     modifier = Modifier.width(48.dp),
+                    enabled = canNavigatePrevious,
                 )
                 Text(
                     text = "${ormaMonthName(month)} $year",
@@ -1082,14 +1097,23 @@ private fun OrmaCalendarMonthPicker(
                         } else {
                             val isoDate = "$year-${month.twoDigit()}-${day.twoDigit()}"
                             val active = isoDate == selectedDate
+                            val disabled = minDate != null && isoDate < minDate
                             Surface(
                                 modifier = Modifier
                                     .weight(1f)
                                     .height(40.dp)
-                                    .clickable { onSelected(isoDate) },
+                                    .clickable(enabled = !disabled) { onSelected(isoDate) },
                                 shape = OrmaShapes.SmallCard,
-                                color = if (active) OrmaColors.Accent else OrmaColors.CellBackground,
-                                contentColor = if (active) OrmaColors.OnAccent else OrmaColors.TextPrimary,
+                                color = when {
+                                    active && !disabled -> OrmaColors.Accent
+                                    disabled -> OrmaColors.CellBackground.copy(alpha = 0.48f)
+                                    else -> OrmaColors.CellBackground
+                                },
+                                contentColor = when {
+                                    active && !disabled -> OrmaColors.OnAccent
+                                    disabled -> OrmaColors.TextDisabled
+                                    else -> OrmaColors.TextPrimary
+                                },
                                 tonalElevation = 0.dp,
                                 shadowElevation = 0.dp,
                             ) {
@@ -1097,7 +1121,11 @@ private fun OrmaCalendarMonthPicker(
                                     Text(
                                         text = day.toString(),
                                         style = MaterialTheme.typography.labelMedium,
-                                        color = if (active) OrmaColors.OnAccent else OrmaColors.TextPrimary,
+                                        color = when {
+                                            active && !disabled -> OrmaColors.OnAccent
+                                            disabled -> OrmaColors.TextDisabled
+                                            else -> OrmaColors.TextPrimary
+                                        },
                                     )
                                 }
                             }
@@ -1121,14 +1149,15 @@ private fun OrmaCalendarArrowButton(
     kind: OrmaFlatIconKind,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
 ) {
     Surface(
         modifier = modifier
             .height(44.dp)
-            .clickable(onClick = onClick),
+            .clickable(enabled = enabled, onClick = onClick),
         shape = OrmaShapes.SmallCard,
-        color = OrmaColors.CellBackground,
-        contentColor = OrmaColors.Accent,
+        color = if (enabled) OrmaColors.CellBackground else OrmaColors.CellBackground.copy(alpha = 0.48f),
+        contentColor = if (enabled) OrmaColors.Accent else OrmaColors.TextDisabled,
         tonalElevation = 0.dp,
         shadowElevation = 0.dp,
     ) {
@@ -1139,7 +1168,7 @@ private fun OrmaCalendarArrowButton(
             OrmaFlatIcon(
                 kind = kind,
                 modifier = Modifier.size(18.dp),
-                color = OrmaColors.IconPrimary,
+                color = if (enabled) OrmaColors.IconPrimary else OrmaColors.TextDisabled,
             )
         }
     }

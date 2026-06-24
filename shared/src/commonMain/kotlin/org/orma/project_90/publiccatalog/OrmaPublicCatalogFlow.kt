@@ -338,68 +338,154 @@ private fun PublicCatalogMobile(
     onPaymentModeChange: (String) -> Unit,
     onSubmit: () -> Unit,
 ) {
-    Column(
+    val scrollState = rememberScrollState()
+    val mobileScope = rememberCoroutineScope()
+    val showFloatingCart = selectedItems.isNotEmpty() && receipt == null
+
+    Box(
         modifier = Modifier
             .widthIn(max = 430.dp)
             .fillMaxSize()
             .statusBarsPadding()
             .navigationBarsPadding()
-            .imePadding()
-            .padding(horizontal = 16.dp)
-            .padding(top = 16.dp, bottom = 16.dp)
-            .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+            .imePadding(),
     ) {
-        PublicCatalogCheckoutTopBar(
-            catalog = catalog,
-            loading = loading,
-            selectedItems = selectedItems,
-            visibleProducts = visibleProducts,
-            total = total,
-            compact = true,
-        )
-        PublicCatalogProductsCard {
-            PublicCatalogProducts(
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 16.dp)
+                .padding(top = 16.dp, bottom = 16.dp)
+                .verticalScroll(scrollState),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            PublicCatalogCheckoutTopBar(
                 catalog = catalog,
                 loading = loading,
-                quantities = quantities,
-                selectedCategoryId = selectedCategoryId,
-                selectedCartItemType = selectedCartItemType,
-                visibleProducts = visibleProducts,
-                onQuantityChange = onQuantityChange,
-                onCategoryChange = onCategoryChange,
-            )
-        }
-        PublicCatalogCheckoutCard {
-            PublicCatalogCheckout(
-                catalog = catalog,
-                error = error,
-                receipt = receipt,
-                customerName = customerName,
-                phoneNumber = phoneNumber,
-                notes = notes,
-                fulfillmentType = fulfillmentType,
-                scheduledAt = scheduledAt,
-                paymentMode = paymentMode,
                 selectedItems = selectedItems,
-                selectedFlow = selectedFlow,
+                visibleProducts = visibleProducts,
                 total = total,
-                submitting = submitting,
-                statusRefreshing = statusRefreshing,
-                submitEnabled = submitEnabled,
-                onRetry = onRetry,
-                onClearSelection = onClearSelection,
-                onNewOrder = onNewOrder,
-                onCustomerNameChange = onCustomerNameChange,
-                onPhoneChange = onPhoneChange,
-                onNotesChange = onNotesChange,
-                onFulfillmentChange = onFulfillmentChange,
-                onScheduledAtChange = onScheduledAtChange,
-                onPaymentModeChange = onPaymentModeChange,
-                onSubmit = onSubmit,
+                compact = true,
+            )
+            PublicCatalogProductsCard {
+                PublicCatalogProducts(
+                    catalog = catalog,
+                    loading = loading,
+                    quantities = quantities,
+                    selectedCategoryId = selectedCategoryId,
+                    selectedCartItemType = selectedCartItemType,
+                    visibleProducts = visibleProducts,
+                    onQuantityChange = onQuantityChange,
+                    onCategoryChange = onCategoryChange,
+                )
+            }
+            PublicCatalogCheckoutCard {
+                PublicCatalogCheckout(
+                    catalog = catalog,
+                    error = error,
+                    receipt = receipt,
+                    customerName = customerName,
+                    phoneNumber = phoneNumber,
+                    notes = notes,
+                    fulfillmentType = fulfillmentType,
+                    scheduledAt = scheduledAt,
+                    paymentMode = paymentMode,
+                    selectedItems = selectedItems,
+                    selectedFlow = selectedFlow,
+                    total = total,
+                    submitting = submitting,
+                    statusRefreshing = statusRefreshing,
+                    submitEnabled = submitEnabled,
+                    onRetry = onRetry,
+                    onClearSelection = onClearSelection,
+                    onNewOrder = onNewOrder,
+                    onCustomerNameChange = onCustomerNameChange,
+                    onPhoneChange = onPhoneChange,
+                    onNotesChange = onNotesChange,
+                    onFulfillmentChange = onFulfillmentChange,
+                    onScheduledAtChange = onScheduledAtChange,
+                    onPaymentModeChange = onPaymentModeChange,
+                    onSubmit = onSubmit,
+                )
+            }
+            Spacer(modifier = Modifier.height(if (showFloatingCart) 104.dp else 6.dp))
+        }
+        if (showFloatingCart) {
+            PublicCatalogFloatingCartButton(
+                catalog = catalog,
+                selectedItems = selectedItems,
+                total = total,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                onClick = {
+                    mobileScope.launch {
+                        scrollState.animateScrollTo(scrollState.maxValue)
+                    }
+                },
             )
         }
-        Spacer(modifier = Modifier.height(6.dp))
+    }
+}
+
+@Composable
+private fun PublicCatalogFloatingCartButton(
+    catalog: OrmaPublicCatalog?,
+    selectedItems: List<PublicCatalogSelection>,
+    total: Double,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val selectedCount = selectedItems.sumOf { it.quantity }
+    val currency = catalog?.workspace?.currency ?: selectedItems.firstOrNull()?.product?.currency.orEmpty()
+    val itemLabel = if (selectedCount == 1) "1 item" else "$selectedCount items"
+    val totalLabel = "${currency.ifBlank { "" }} ${money(total)}".trim()
+
+    Surface(
+        onClick = onClick,
+        modifier = modifier.height(64.dp),
+        shape = OrmaShapes.CheckoutButton,
+        color = OrmaColors.Accent,
+        contentColor = OrmaColors.OnAccent,
+        shadowElevation = 10.dp,
+        tonalElevation = 0.dp,
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 18.dp),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(
+                    text = "Cart",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = OrmaColors.OnAccent.copy(alpha = 0.72f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = "$itemLabel / $totalLabel",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = OrmaColors.OnAccent,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Text(
+                text = "View cart",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
+                color = OrmaColors.OnAccent,
+                maxLines = 1,
+            )
+        }
     }
 }
 

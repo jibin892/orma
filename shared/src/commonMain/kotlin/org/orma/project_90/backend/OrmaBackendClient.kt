@@ -204,6 +204,14 @@ data class OrmaSupplier(
     val email: String?,
     val taxNumber: String?,
     val addressLine: String?,
+    val paymentTerms: String? = null,
+    val paymentMode: String? = null,
+    val paymentReference: String? = null,
+    val payableTotal: String = "0.00",
+    val paidTotal: String = "0.00",
+    val balanceDue: String = "0.00",
+    val currency: String = "INR",
+    val lastPaymentAt: String? = null,
     val notes: String?,
     val status: String,
     val createdAt: String = "",
@@ -402,6 +410,7 @@ data class OrmaProductImportError(
 private data class OrmaProductImportCsvRow(
     val name: String,
     val itemType: String,
+    val categoryName: String,
     val sku: String,
     val barcode: String,
     val description: String,
@@ -484,6 +493,13 @@ data class OrmaSupplierDraft(
     val email: String = "",
     val taxNumber: String = "",
     val addressLine: String = "",
+    val paymentTerms: String = "",
+    val paymentMode: String = "",
+    val paymentReference: String = "",
+    val payableTotal: String = "",
+    val paidTotal: String = "",
+    val currency: String = "INR",
+    val lastPaymentAt: String = "",
     val notes: String = "",
 )
 
@@ -501,8 +517,8 @@ data class OrmaProductDraft(
     val currency: String = "INR",
     val taxRate: String = "0",
     val pricesIncludeTax: Boolean = false,
-    val stockQuantity: String = "0",
-    val reorderLevel: String = "0",
+    val stockQuantity: String = "",
+    val reorderLevel: String = "",
     val trackStock: Boolean = true,
     val durationMinutes: String = "",
     val bookingRequired: Boolean = false,
@@ -1006,14 +1022,24 @@ class OrmaBackendClient(
                 ormaPostJsonAuthorized(
                     url = config.url("/suppliers"),
                     bearerToken = idToken,
-                    body = buildJsonObject(
-                        "name" to JsonValue.StringValue(draft.name),
-                        "phoneNumber" to JsonValue.StringValue(draft.phoneNumber.blankToNull()),
-                        "email" to JsonValue.StringValue(draft.email.blankToNull()),
-                        "taxNumber" to JsonValue.StringValue(draft.taxNumber.blankToNull()),
-                        "addressLine" to JsonValue.StringValue(draft.addressLine.blankToNull()),
-                        "notes" to JsonValue.StringValue(draft.notes.blankToNull()),
-                    ),
+                    body = draft.toSupplierRequestJson(),
+                )
+            },
+            parse = { it.toSupplier() },
+        )
+
+    suspend fun updateSupplier(
+        idToken: String,
+        supplierId: String,
+        draft: OrmaSupplierDraft,
+    ): OrmaBackendResult<OrmaSupplier> =
+        executeBackendRequest(
+            actionTitle = "Update supplier",
+            request = {
+                ormaPutJsonAuthorized(
+                    url = config.url("/suppliers/$supplierId"),
+                    bearerToken = idToken,
+                    body = draft.toSupplierRequestJson(),
                 )
             },
             parse = { it.toSupplier() },
@@ -1865,6 +1891,14 @@ private fun String.toSupplier(): OrmaSupplier =
         email = jsonString("email"),
         taxNumber = jsonString("taxNumber"),
         addressLine = jsonString("addressLine"),
+        paymentTerms = jsonString("paymentTerms"),
+        paymentMode = jsonString("paymentMode"),
+        paymentReference = jsonString("paymentReference"),
+        payableTotal = jsonDecimalString("payableTotal") ?: "0.00",
+        paidTotal = jsonDecimalString("paidTotal") ?: "0.00",
+        balanceDue = jsonDecimalString("balanceDue") ?: "0.00",
+        currency = jsonString("currency") ?: "INR",
+        lastPaymentAt = jsonString("lastPaymentAt"),
         notes = jsonString("notes"),
         status = jsonString("status").orEmpty(),
         createdAt = jsonString("createdAt").orEmpty(),
@@ -2193,6 +2227,23 @@ private fun buildJsonObject(vararg fields: Pair<String, JsonValue>): String =
         "\"$key\":$encodedValue"
     }
 
+private fun OrmaSupplierDraft.toSupplierRequestJson(): String =
+    buildJsonObject(
+        "name" to JsonValue.StringValue(name),
+        "phoneNumber" to JsonValue.StringValue(phoneNumber.blankToNull()),
+        "email" to JsonValue.StringValue(email.blankToNull()),
+        "taxNumber" to JsonValue.StringValue(taxNumber.blankToNull()),
+        "addressLine" to JsonValue.StringValue(addressLine.blankToNull()),
+        "paymentTerms" to JsonValue.StringValue(paymentTerms.blankToNull()),
+        "paymentMode" to JsonValue.StringValue(paymentMode.blankToNull()),
+        "paymentReference" to JsonValue.StringValue(paymentReference.blankToNull()),
+        "payableTotal" to JsonValue.StringValue(payableTotal.blankToZero()),
+        "paidTotal" to JsonValue.StringValue(paidTotal.blankToZero()),
+        "currency" to JsonValue.StringValue(currency.ifBlank { "INR" }),
+        "lastPaymentAt" to JsonValue.StringValue(lastPaymentAt.blankToNull()),
+        "notes" to JsonValue.StringValue(notes.blankToNull()),
+    )
+
 private fun OrmaProductDraft.toProductRequestJson(): String =
     buildJsonObject(
         "name" to JsonValue.StringValue(name),
@@ -2412,6 +2463,7 @@ private fun String.toProductImportCsvRows(defaultCurrency: String): List<OrmaPro
         OrmaProductImportCsvRow(
             name = row.value("name", "productName", "itemName"),
             itemType = row.value("itemType", "item type", "type", "sellableType").ifBlank { "product" },
+            categoryName = row.value("categoryName", "category name", "category"),
             sku = row.value("sku"),
             barcode = row.value("barcode", "barCode"),
             description = row.value("description", "details"),
@@ -2437,6 +2489,7 @@ private fun List<OrmaProductImportCsvRow>.toProductImportRowsJson(): String =
         buildJsonObject(
             "name" to JsonValue.StringValue(row.name),
             "itemType" to JsonValue.StringValue(row.itemType),
+            "categoryName" to JsonValue.StringValue(row.categoryName.blankToNull()),
             "sku" to JsonValue.StringValue(row.sku.blankToNull()),
             "barcode" to JsonValue.StringValue(row.barcode.blankToNull()),
             "description" to JsonValue.StringValue(row.description.blankToNull()),

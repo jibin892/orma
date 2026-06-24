@@ -936,6 +936,9 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
                 DashboardPageTarget.Customers -> snapshot.dashboard.copy(
                     customerPagination = snapshot.dashboard.customerPagination.copy(page = nextPage),
                 )
+                DashboardPageTarget.Suppliers -> snapshot.dashboard.copy(
+                    supplierPagination = snapshot.dashboard.supplierPagination.copy(page = nextPage),
+                )
                 DashboardPageTarget.Products -> snapshot.dashboard.copy(
                     productPagination = snapshot.dashboard.productPagination.copy(page = nextPage),
                 )
@@ -976,6 +979,19 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
             val idToken = freshDashboardTokenOrError(snapshot) ?: return@launch
             when (val result = backendClient.createSupplier(idToken, draft)) {
                 is OrmaBackendResult.Success -> refreshDashboard("Supplier created.")
+                is OrmaBackendResult.Failure -> applyDashboardFailure(result.title, result.message, result.code)
+            }
+        }
+    }
+
+    fun updateDashboardSupplier(supplierId: String, draft: OrmaSupplierDraft) {
+        val snapshot = state
+        if (snapshot.dashboard.actionLoading || supplierId.isBlank() || draft.name.trim().length < 2) return
+        markDashboardActionLoading()
+        scope.launch {
+            val idToken = freshDashboardTokenOrError(snapshot) ?: return@launch
+            when (val result = backendClient.updateSupplier(idToken, supplierId, draft)) {
+                is OrmaBackendResult.Success -> refreshDashboard("Supplier updated.")
                 is OrmaBackendResult.Failure -> applyDashboardFailure(result.title, result.message, result.code)
             }
         }
@@ -1852,6 +1868,7 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
         onLoadCustomerOrders = ::loadDashboardCustomerOrders,
         onCreateCustomer = ::createDashboardCustomer,
         onCreateSupplier = ::createDashboardSupplier,
+        onUpdateSupplier = ::updateDashboardSupplier,
         onCreateProductCategory = ::createDashboardProductCategory,
         onCreateProductOffer = ::createDashboardProductOffer,
         onCreateProduct = ::createDashboardProduct,

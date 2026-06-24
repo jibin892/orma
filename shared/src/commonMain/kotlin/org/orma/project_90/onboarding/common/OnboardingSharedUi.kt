@@ -157,10 +157,7 @@ import org.orma.project_90.files.rememberOrmaCsvFilePicker
 import org.orma.project_90.media.OrmaLogoPickerResult
 import org.orma.project_90.media.OrmaLogoPreviewImage
 import org.orma.project_90.media.OrmaPickedImage
-import org.orma.project_90.media.OrmaProductAiImageResult
 import org.orma.project_90.media.OrmaRemoteImage
-import org.orma.project_90.media.generateOrmaProductAiImage
-import org.orma.project_90.media.isOrmaProductAiImageGenerationAvailable
 import org.orma.project_90.media.rememberOrmaBusinessLogoPicker
 import org.orma.project_90.designsystem.OrmaActionRow
 import org.orma.project_90.designsystem.OrmaBadge
@@ -180,6 +177,7 @@ import org.orma.project_90.designsystem.OrmaIndentedDivider
 import org.orma.project_90.designsystem.OrmaKeyValueList
 import org.orma.project_90.designsystem.OrmaListRow
 import org.orma.project_90.designsystem.OrmaOtpCells
+import org.orma.project_90.designsystem.OrmaPrimaryButton
 import org.orma.project_90.designsystem.OrmaQrCode
 import org.orma.project_90.designsystem.OrmaScreenColumn
 import org.orma.project_90.designsystem.OrmaSecondaryButton
@@ -3018,6 +3016,119 @@ private fun <T> DashboardCompactSegmentedPicker(
 }
 
 @Composable
+private fun <T> DashboardDropdownPicker(
+    label: String,
+    selected: T?,
+    placeholder: String,
+    options: List<T>,
+    optionLabel: (T) -> String,
+    onSelected: (T) -> Unit,
+    modifier: Modifier = Modifier,
+    supportingText: String? = null,
+    onClear: (() -> Unit)? = null,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val selectedLabel = selected?.let(optionLabel).orEmpty()
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = label,
+            modifier = Modifier.padding(start = 4.dp),
+            style = MaterialTheme.typography.labelMedium,
+            color = OrmaColors.TextSecondary,
+        )
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(enabled = options.isNotEmpty()) { expanded = !expanded },
+            shape = OrmaShapes.Field,
+            color = OrmaColors.CellBackground,
+            contentColor = OrmaColors.TextPrimary,
+            border = BorderStroke(1.dp, OrmaColors.Accent.copy(alpha = if (selected != null) 0.14f else 0.08f)),
+            tonalElevation = 0.dp,
+            shadowElevation = 0.dp,
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = selectedLabel.ifBlank { placeholder },
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = if (selectedLabel.isBlank()) OrmaColors.TextSecondary else OrmaColors.Accent,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                OrmaChevronDownIcon(
+                    modifier = Modifier.size(18.dp),
+                    color = if (selectedLabel.isBlank()) OrmaColors.TextPrimary.copy(alpha = 0.72f) else OrmaColors.Accent,
+                )
+            }
+        }
+        if (expanded) {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = OrmaShapes.StandardCell,
+                color = OrmaColors.CardBackground,
+                contentColor = OrmaColors.TextPrimary,
+                border = BorderStroke(0.6.dp, OrmaColors.Hairline),
+                tonalElevation = 0.dp,
+                shadowElevation = OrmaElevation.Subtle,
+            ) {
+                Column(modifier = Modifier.padding(vertical = 6.dp)) {
+                    options.forEachIndexed { index, option ->
+                        val active = selected == option
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    onSelected(option)
+                                    expanded = false
+                                }
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = optionLabel(option),
+                                modifier = Modifier.weight(1f),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (active) OrmaColors.Accent else OrmaColors.TextPrimary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            if (active) {
+                                OrmaBadge(text = "Selected", tone = OrmaStatusTone.Success)
+                            }
+                        }
+                        if (index < options.lastIndex) HorizontalDivider(color = OrmaColors.Divider)
+                    }
+                }
+            }
+        }
+        supportingText?.takeIf { it.isNotBlank() }?.let {
+            Text(
+                text = it,
+                modifier = Modifier.padding(start = 4.dp),
+                style = MaterialTheme.typography.labelMedium,
+                color = OrmaColors.TextSecondary,
+            )
+        }
+        if (selected != null && onClear != null) {
+            OrmaTextButton(
+                text = "Clear $label",
+                onClick = onClear,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
+}
+
+@Composable
 private fun DashboardMessageCard(
     title: String,
     body: String,
@@ -4368,6 +4479,19 @@ private fun DashboardHomeContent(
     var showCustomerSheet by rememberSaveable { mutableStateOf(false) }
     var showProductSheet by rememberSaveable { mutableStateOf(false) }
 
+    if (showProductSheet) {
+        ProductEditorScreen(
+            state = state,
+            wide = wide,
+            onDismiss = { showProductSheet = false },
+            onSubmit = { draft ->
+                actions.onCreateProduct(draft)
+                showProductSheet = false
+            },
+        )
+        return
+    }
+
     if (wide) {
         DashboardWideHomeContent(
             state = state,
@@ -4430,16 +4554,6 @@ private fun DashboardHomeContent(
             onSubmit = { draft ->
                 actions.onCreateCustomer(draft)
                 showCustomerSheet = false
-            },
-        )
-    }
-    if (showProductSheet) {
-        ProductFormSheet(
-            state = state,
-            onDismiss = { showProductSheet = false },
-            onSubmit = { draft ->
-                actions.onCreateProduct(draft)
-                showProductSheet = false
             },
         )
     }
@@ -7239,44 +7353,46 @@ private fun DashboardSalesCounterWorkspace(
 ) {
     val visibleOrders = filteredDashboardOrders(state)
     val stageOrders = filteredDashboardOrders(state, ignoreStatus = true)
-    OrmaDashboardResponsiveWorkspace(
-        wide = true,
-        primaryWeight = 1.72f,
-        secondaryMinWidth = 340.dp,
-        secondaryMaxWidth = 420.dp,
-        stackBelowWidth = 1180.dp,
-        primary = {
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
-            ) {
-                DashboardSalesFocusToolbar(
-                    state = state,
-                    actions = actions,
-                    orders = stageOrders,
-                    currency = state.dashboard.summary.currency.ifBlank {
-                        stageOrders.firstOrNull()?.currency ?: "INR"
-                    },
-                    createEnabled = !state.dashboard.loading,
-                    onClearSelection = onClearSelection,
-                    onCreate = onCreateOrder,
-                )
-                DashboardSalesRecordsSurface(
-                    state = state,
-                    actions = actions,
-                    orders = visibleOrders,
-                    stageOrders = stageOrders,
-                    selectedOrder = selectedOrder,
-                    onOpenOrder = onOpenOrder,
-                    onEditOrder = onEditOrder,
-                    onClearSelection = onClearSelection,
-                    onCreateOrder = { onCreateOrder(null) },
-                    onStatusChange = onStatusChange,
-                )
-            }
-        },
-        secondary = {
-            if (selectedOrder != null) {
+    val primaryContent: @Composable () -> Unit = {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            DashboardSalesFocusToolbar(
+                state = state,
+                actions = actions,
+                orders = stageOrders,
+                currency = state.dashboard.summary.currency.ifBlank {
+                    stageOrders.firstOrNull()?.currency ?: "INR"
+                },
+                createEnabled = !state.dashboard.loading,
+                onClearSelection = onClearSelection,
+                onCreate = onCreateOrder,
+            )
+            DashboardSalesRecordsSurface(
+                state = state,
+                actions = actions,
+                orders = visibleOrders,
+                stageOrders = stageOrders,
+                selectedOrder = selectedOrder,
+                onOpenOrder = onOpenOrder,
+                onEditOrder = onEditOrder,
+                onClearSelection = onClearSelection,
+                onCreateOrder = { onCreateOrder(null) },
+                onStatusChange = onStatusChange,
+            )
+        }
+    }
+
+    if (selectedOrder != null) {
+        OrmaDashboardResponsiveWorkspace(
+            wide = true,
+            primaryWeight = 1.72f,
+            secondaryMinWidth = 340.dp,
+            secondaryMaxWidth = 420.dp,
+            stackBelowWidth = 1180.dp,
+            primary = primaryContent,
+            secondary = {
                 DashboardSaleInspectorPanel(
                     order = selectedOrder,
                     onClose = onClearSelection,
@@ -7284,14 +7400,11 @@ private fun DashboardSalesCounterWorkspace(
                     onOpenFullDetails = { onOpenFullDetails(selectedOrder) },
                     onStatusChange = { status -> onStatusChange(selectedOrder, status) },
                 )
-            } else {
-                DashboardSalesFocusPanel(
-                    state = state,
-                    orders = stageOrders,
-                )
-            }
-        },
-    )
+            },
+        )
+    } else {
+        primaryContent()
+    }
 }
 
 @Composable
@@ -9170,44 +9283,6 @@ private fun DashboardSaleInspectorPanel(
 }
 
 @Composable
-private fun DashboardSalesFocusPanel(
-    state: OnboardingUiState,
-    orders: List<OrmaOrder>,
-) {
-    DashboardRecordCard {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.Top,
-        ) {
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                Text(
-                    text = "Sale inspector",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = OrmaColors.TextPrimary,
-                )
-                Text(
-                    text = "Select a sale to inspect customer, line items, payment, and fulfilment without losing the queue.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = OrmaColors.TextSecondary,
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            OrmaBadge(
-                text = if (state.dashboard.loading) "SYNC" else "LIVE",
-                tone = OrmaStatusTone.Info,
-            )
-        }
-        DashboardChecklistRow(text = "${orders.size} sales are in the current queue.")
-        DashboardChecklistRow(text = "Use Open for review and Edit for payment or fulfilment changes.")
-    }
-}
-
-@Composable
 private fun DashboardRecordsSurfaceHeader(
     title: String,
     body: String,
@@ -9312,6 +9387,9 @@ private fun DashboardWorkspaceToolbarCard(
     secondaryText: String? = null,
     onSecondary: (() -> Unit)? = null,
     secondaryEnabled: Boolean = true,
+    tertiaryText: String? = null,
+    onTertiary: (() -> Unit)? = null,
+    tertiaryEnabled: Boolean = true,
     badgeTone: OrmaStatusTone = OrmaStatusTone.Info,
     content: @Composable ColumnScope.() -> Unit,
 ) {
@@ -9365,6 +9443,13 @@ private fun DashboardWorkspaceToolbarCard(
                                 enabled = primaryEnabled,
                             )
                         }
+                        if (tertiaryText != null && onTertiary != null) {
+                            DashboardToolbarHeaderActionButton(
+                                text = tertiaryText,
+                                onClick = onTertiary,
+                                enabled = tertiaryEnabled,
+                            )
+                        }
                         if (secondaryText != null && onSecondary != null) {
                             DashboardToolbarHeaderActionButton(
                                 text = secondaryText,
@@ -9394,6 +9479,13 @@ private fun DashboardWorkspaceToolbarCard(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
+                                if (tertiaryText != null && onTertiary != null) {
+                                    DashboardToolbarHeaderActionButton(
+                                        text = tertiaryText,
+                                        onClick = onTertiary,
+                                        enabled = tertiaryEnabled,
+                                    )
+                                }
                                 if (secondaryText != null && onSecondary != null) {
                                     DashboardToolbarHeaderActionButton(
                                         text = secondaryText,
@@ -9439,6 +9531,7 @@ private fun DashboardToolbarHeaderActionButton(
     onClick: () -> Unit,
     enabled: Boolean = true,
 ) {
+    val iconKind = dashboardFlatIconForAction(text) ?: OrmaFlatIconKind.Refresh
     Surface(
         onClick = onClick,
         enabled = enabled,
@@ -9458,7 +9551,7 @@ private fun DashboardToolbarHeaderActionButton(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             OrmaFlatIcon(
-                kind = OrmaFlatIconKind.Refresh,
+                kind = iconKind,
                 modifier = Modifier.size(13.dp),
                 color = if (enabled) OrmaColors.TextPrimary else OrmaColors.TextDisabled,
             )
@@ -9565,6 +9658,7 @@ private fun DashboardCatalogSearchToolbar(
     placeholder: String,
     primaryText: String? = null,
     onAddItem: (() -> Unit)? = null,
+    onSupplierClick: (() -> Unit)? = null,
     onTransferClick: () -> Unit,
     onCategoryClick: () -> Unit,
     showToolActions: Boolean = true,
@@ -9613,6 +9707,9 @@ private fun DashboardCatalogSearchToolbar(
         secondaryText = if (state.dashboard.loading) "Syncing" else "Sync",
         onSecondary = actions.onDashboardRefresh,
         secondaryEnabled = !state.dashboard.loading,
+        tertiaryText = if (onSupplierClick != null) "Supplier" else null,
+        onTertiary = onSupplierClick,
+        tertiaryEnabled = !state.dashboard.loading,
     ) {
         BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
             val compact = maxWidth < 700.dp
@@ -9754,6 +9851,9 @@ private fun DashboardInvoiceSearchToolbar(
         primaryText = "Create invoice",
         onPrimary = onCreateInvoice,
         primaryEnabled = !state.dashboard.loading,
+        secondaryText = if (state.dashboard.loading) "Syncing" else "Refresh",
+        onSecondary = actions.onDashboardRefresh,
+        secondaryEnabled = !state.dashboard.loading,
     ) {
         BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
             val compact = maxWidth < 600.dp
@@ -9769,21 +9869,16 @@ private fun DashboardInvoiceSearchToolbar(
                         modifier = Modifier.fillMaxWidth(),
                         shape = OrmaShapes.Field,
                     )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        if (filtersActive) {
+                    if (filtersActive) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
                             DashboardSalesInlineResetButton(
                                 onClick = { clearDashboardInvoiceFilters(actions) },
                             )
                         }
-                        DashboardWideActionButton(
-                            text = if (state.dashboard.loading) "Syncing" else "Refresh",
-                            onClick = actions.onDashboardRefresh,
-                            enabled = !state.dashboard.loading,
-                        )
                     }
                     DashboardCompactSegmentedPicker(
                         options = DashboardInvoiceStatusFilters,
@@ -9819,11 +9914,6 @@ private fun DashboardInvoiceSearchToolbar(
                                 onClick = { clearDashboardInvoiceFilters(actions) },
                             )
                         }
-                        DashboardWideActionButton(
-                            text = if (state.dashboard.loading) "Syncing" else "Refresh",
-                            onClick = actions.onDashboardRefresh,
-                            enabled = !state.dashboard.loading,
-                        )
                     }
                     DashboardCompactSegmentedPicker(
                         options = DashboardInvoiceStatusFilters,
@@ -11866,31 +11956,58 @@ private fun DashboardProductsContent(
     actions: OnboardingActions,
     wide: Boolean,
 ) {
-    var showProductSheet by rememberSaveable { mutableStateOf(false) }
+    var showProductEditor by rememberSaveable { mutableStateOf(false) }
     var showSupplierSheet by rememberSaveable { mutableStateOf(false) }
     var showCategorySheet by rememberSaveable { mutableStateOf(false) }
     var showOfferSheet by rememberSaveable { mutableStateOf(false) }
     var showProductTransferSheet by rememberSaveable { mutableStateOf(false) }
+    var selectedProductTab by rememberSaveable { mutableStateOf(DashboardProductWorkspaceTabItems) }
     var editProductId by rememberSaveable { mutableStateOf<String?>(null) }
+    var editSupplierId by rememberSaveable { mutableStateOf<String?>(null) }
     var stockProductId by rememberSaveable { mutableStateOf<String?>(null) }
     var imageProductId by rememberSaveable { mutableStateOf<String?>(null) }
     val editProduct = state.dashboard.products.firstOrNull { it.id == editProductId }
+    val editSupplier = state.dashboard.suppliers.firstOrNull { it.id == editSupplierId }
     val stockProduct = state.dashboard.products.firstOrNull { it.id == stockProductId }
     val imageProduct = state.dashboard.products.firstOrNull { it.id == imageProductId }
     val visibleProducts = filteredDashboardProducts(state)
+    val visibleSuppliers = filteredDashboardSuppliers(state)
     val itemType = state.activeDashboardItemType()
     val selectedItemType = state.selectedDashboardItemTypeFilter()
+    val productEditorActive = showProductEditor || editProduct != null
 
-    if (wide) {
+    if (productEditorActive) {
+        ProductEditorScreen(
+            state = state,
+            product = editProduct,
+            wide = wide,
+            onDismiss = {
+                showProductEditor = false
+                editProductId = null
+            },
+            onSubmit = { draft ->
+                editProduct?.let { product ->
+                    actions.onUpdateProduct(product.id, draft)
+                } ?: actions.onCreateProduct(draft)
+                showProductEditor = false
+                editProductId = null
+            },
+        )
+    } else if (wide) {
         DashboardProductsWorkspace(
             state = state,
             actions = actions,
             products = visibleProducts,
-            onAddProduct = { showProductSheet = true },
+            onAddProduct = { showProductEditor = true },
+            selectedTab = selectedProductTab,
+            onTabSelected = { selectedProductTab = it },
             onTransferClick = { showProductTransferSheet = true },
             onCategoryClick = { showCategorySheet = true },
             onSupplierClick = { showSupplierSheet = true },
             onOfferClick = { showOfferSheet = true },
+            suppliers = visibleSuppliers,
+            onAddSupplier = { showSupplierSheet = true },
+            onEditSupplier = { editSupplierId = it.id },
             onEditClick = { editProductId = it.id },
             onStockClick = { stockProductId = it.id },
             onImageClick = { imageProductId = it.id },
@@ -11898,8 +12015,12 @@ private fun DashboardProductsContent(
     } else {
         DashboardListScaffold(
             eyebrow = if (selectedItemType == "all") "CATALOG" else itemType.catalogSectionEyebrow(),
-            title = if (selectedItemType == "all") "Catalog" else itemType.catalogSectionTitle(),
-            body = if (state.dashboard.products.isEmpty()) {
+            title = if (selectedProductTab == DashboardProductWorkspaceTabSuppliers) {
+                "Suppliers"
+            } else if (selectedItemType == "all") "Catalog" else itemType.catalogSectionTitle(),
+            body = if (selectedProductTab == DashboardProductWorkspaceTabSuppliers) {
+                "Track supplier contacts, payment terms, paid amounts, and open balances."
+            } else if (state.dashboard.products.isEmpty()) {
                 if (selectedItemType == "all") {
                     "Add products, services, and appointment items before selling or sharing the catalog."
                 } else {
@@ -11914,72 +12035,92 @@ private fun DashboardProductsContent(
                     itemType.catalogSectionDescription()
                 }
             },
-            primaryText = if (selectedItemType == "all") "Add item" else itemType.catalogActionText(),
-            onPrimary = { showProductSheet = true },
-            secondaryText = "Import / Export",
-            onSecondary = { showProductTransferSheet = true },
-            tertiaryText = "Category",
-            onTertiary = { showCategorySheet = true },
+            primaryText = if (selectedProductTab == DashboardProductWorkspaceTabSuppliers) {
+                "Add supplier"
+            } else if (selectedItemType == "all") "Add item" else itemType.catalogActionText(),
+            onPrimary = {
+                if (selectedProductTab == DashboardProductWorkspaceTabSuppliers) {
+                    showSupplierSheet = true
+                } else {
+                    showProductEditor = true
+                }
+            },
+            secondaryText = if (selectedProductTab == DashboardProductWorkspaceTabSuppliers) null else "Import / Export",
+            onSecondary = if (selectedProductTab == DashboardProductWorkspaceTabSuppliers) null else {
+                { showProductTransferSheet = true }
+            },
+            tertiaryText = if (selectedProductTab == DashboardProductWorkspaceTabSuppliers) null else "Category",
+            onTertiary = if (selectedProductTab == DashboardProductWorkspaceTabSuppliers) null else {
+                { showCategorySheet = true }
+            },
             loading = state.dashboard.loading,
             wide = false,
         ) {
-            DashboardCatalogSearchToolbar(
-                state = state,
-                actions = actions,
-                placeholder = when {
-                    selectedItemType == "all" -> "Product, service, appointment, category"
-                    itemType == "service" -> "Service, category, price"
-                    itemType == "appointment" -> "Appointment service, duration, category"
-                    else -> "Product, SKU, barcode, supplier"
-                },
-                onTransferClick = { showProductTransferSheet = true },
-                onCategoryClick = { showCategorySheet = true },
-                showToolActions = false,
+            DashboardProductWorkspaceTabs(
+                selectedTab = selectedProductTab,
+                onSelected = { selectedProductTab = it },
             )
-            DashboardCatalogPulseCard(state = state)
-            DashboardCatalogToolsRow(
-                state = state,
-                onSupplierClick = { showSupplierSheet = true },
-                onOfferClick = { showOfferSheet = true },
-            )
-            DashboardProductRecords(
-                state = state,
-                actions = actions,
-                onEditClick = { editProductId = it.id },
-                onStockClick = { stockProductId = it.id },
-                onImageClick = { imageProductId = it.id },
-                wide = false,
-            )
+            if (selectedProductTab == DashboardProductWorkspaceTabSuppliers) {
+                DashboardSupplierSearchToolbar(
+                    state = state,
+                    actions = actions,
+                    onAddSupplier = { showSupplierSheet = true },
+                )
+                DashboardSupplierRecordsSurface(
+                    state = state,
+                    actions = actions,
+                    suppliers = visibleSuppliers,
+                    onAddSupplier = { showSupplierSheet = true },
+                    onEditSupplier = { editSupplierId = it.id },
+                    wide = false,
+                )
+            } else {
+                DashboardCatalogSearchToolbar(
+                    state = state,
+                    actions = actions,
+                    placeholder = when {
+                        selectedItemType == "all" -> "Product, service, appointment, category"
+                        itemType == "service" -> "Service, category, price"
+                        itemType == "appointment" -> "Appointment service, duration, category"
+                        else -> "Product, SKU, barcode, supplier"
+                    },
+                    onSupplierClick = { showSupplierSheet = true },
+                    onTransferClick = { showProductTransferSheet = true },
+                    onCategoryClick = { showCategorySheet = true },
+                    showToolActions = false,
+                )
+                DashboardCatalogPulseCard(state = state)
+                DashboardCatalogToolsRow(
+                    state = state,
+                    onSupplierClick = { showSupplierSheet = true },
+                    onOfferClick = { showOfferSheet = true },
+                )
+                DashboardProductRecords(
+                    state = state,
+                    actions = actions,
+                    onEditClick = { editProductId = it.id },
+                    onStockClick = { stockProductId = it.id },
+                    onImageClick = { imageProductId = it.id },
+                    wide = false,
+                )
+            }
         }
     }
 
-    if (showProductSheet) {
-        ProductFormSheet(
-            state = state,
-            onDismiss = { showProductSheet = false },
-            onSubmit = { draft ->
-                actions.onCreateProduct(draft)
-                showProductSheet = false
-            },
-        )
-    }
-    editProduct?.let { product ->
-        ProductFormSheet(
-            state = state,
-            product = product,
-            onDismiss = { editProductId = null },
-            onSubmit = { draft ->
-                actions.onUpdateProduct(product.id, draft)
-                editProductId = null
-            },
-        )
-    }
-    if (showSupplierSheet) {
+    if (showSupplierSheet || editSupplier != null) {
         SupplierFormSheet(
-            onDismiss = { showSupplierSheet = false },
-            onSubmit = { draft ->
-                actions.onCreateSupplier(draft)
+            supplier = editSupplier,
+            defaultCurrency = state.dashboard.summary.currency.ifBlank { "INR" },
+            onDismiss = {
                 showSupplierSheet = false
+                editSupplierId = null
+            },
+            onSubmit = { draft ->
+                editSupplier?.let { supplier ->
+                    actions.onUpdateSupplier(supplier.id, draft)
+                } ?: actions.onCreateSupplier(draft)
+                showSupplierSheet = false
+                editSupplierId = null
             },
         )
     }
@@ -12043,10 +12184,15 @@ private fun DashboardProductsWorkspace(
     actions: OnboardingActions,
     products: List<OrmaProduct>,
     onAddProduct: () -> Unit,
+    selectedTab: String,
+    onTabSelected: (String) -> Unit,
     onTransferClick: () -> Unit,
     onCategoryClick: () -> Unit,
     onSupplierClick: () -> Unit,
     onOfferClick: () -> Unit,
+    suppliers: List<OrmaSupplier>,
+    onAddSupplier: () -> Unit,
+    onEditSupplier: (OrmaSupplier) -> Unit,
     onEditClick: (OrmaProduct) -> Unit,
     onStockClick: (OrmaProduct) -> Unit,
     onImageClick: (OrmaProduct) -> Unit,
@@ -12062,42 +12208,64 @@ private fun DashboardProductsWorkspace(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
-                DashboardCatalogSearchToolbar(
-                    state = state,
-                    actions = actions,
-                    placeholder = when {
-                        state.selectedDashboardItemTypeFilter() == "all" -> "Product, service, appointment, category"
-                        state.activeDashboardItemType() == "service" -> "Service, category, price"
-                        state.activeDashboardItemType() == "appointment" -> "Appointment service, duration, category"
-                        else -> "Product, SKU, barcode, supplier"
-                    },
-                    primaryText = if (state.selectedDashboardItemTypeFilter() == "all") {
-                        "Add item"
-                    } else {
-                        state.activeDashboardItemType().catalogActionText()
-                    },
-                    onAddItem = onAddProduct,
-                    onTransferClick = onTransferClick,
-                    onCategoryClick = onCategoryClick,
+                DashboardProductWorkspaceTabs(
+                    selectedTab = selectedTab,
+                    onSelected = onTabSelected,
                 )
-                DashboardProductKpiStrip(state = state, products = products)
-                DashboardCatalogOperationsPanel(
-                    state = state,
-                    onSupplierClick = onSupplierClick,
-                    onOfferClick = onOfferClick,
-                    onTransferClick = onTransferClick,
-                )
-                DashboardProductRecordsSurface(
-                    state = state,
-                    actions = actions,
-                    products = products,
-                    onAddProduct = onAddProduct,
-                    onTransferClick = onTransferClick,
-                    onCategoryClick = onCategoryClick,
-                    onEditClick = onEditClick,
-                    onStockClick = onStockClick,
-                    onImageClick = onImageClick,
-                )
+                if (selectedTab == DashboardProductWorkspaceTabSuppliers) {
+                    DashboardSupplierSearchToolbar(
+                        state = state,
+                        actions = actions,
+                        onAddSupplier = onAddSupplier,
+                    )
+                    DashboardSupplierKpiStrip(state = state, suppliers = suppliers)
+                    DashboardSupplierRecordsSurface(
+                        state = state,
+                        actions = actions,
+                        suppliers = suppliers,
+                        onAddSupplier = onAddSupplier,
+                        onEditSupplier = onEditSupplier,
+                        wide = true,
+                    )
+                } else {
+                    DashboardCatalogSearchToolbar(
+                        state = state,
+                        actions = actions,
+                        placeholder = when {
+                            state.selectedDashboardItemTypeFilter() == "all" -> "Product, service, appointment, category"
+                            state.activeDashboardItemType() == "service" -> "Service, category, price"
+                            state.activeDashboardItemType() == "appointment" -> "Appointment service, duration, category"
+                            else -> "Product, SKU, barcode, supplier"
+                        },
+                        primaryText = if (state.selectedDashboardItemTypeFilter() == "all") {
+                            "Add item"
+                        } else {
+                            state.activeDashboardItemType().catalogActionText()
+                        },
+                        onAddItem = onAddProduct,
+                        onSupplierClick = onSupplierClick,
+                        onTransferClick = onTransferClick,
+                        onCategoryClick = onCategoryClick,
+                    )
+                    DashboardProductKpiStrip(state = state, products = products)
+                    DashboardCatalogOperationsPanel(
+                        state = state,
+                        onSupplierClick = onSupplierClick,
+                        onOfferClick = onOfferClick,
+                        onTransferClick = onTransferClick,
+                    )
+                    DashboardProductRecordsSurface(
+                        state = state,
+                        actions = actions,
+                        products = products,
+                        onAddProduct = onAddProduct,
+                        onTransferClick = onTransferClick,
+                        onCategoryClick = onCategoryClick,
+                        onEditClick = onEditClick,
+                        onStockClick = onStockClick,
+                        onImageClick = onImageClick,
+                    )
+                }
             }
         },
         secondary = {
@@ -12113,6 +12281,423 @@ private fun DashboardProductsWorkspace(
             }
         },
     )
+}
+
+private const val DashboardProductWorkspaceTabItems = "items"
+private const val DashboardProductWorkspaceTabSuppliers = "suppliers"
+private val DashboardProductWorkspaceTabOptions = listOf(
+    DashboardProductWorkspaceTabItems,
+    DashboardProductWorkspaceTabSuppliers,
+)
+
+@Composable
+private fun DashboardProductWorkspaceTabs(
+    selectedTab: String,
+    onSelected: (String) -> Unit,
+) {
+    DashboardCompactSegmentedPicker(
+        options = DashboardProductWorkspaceTabOptions,
+        selected = selectedTab.takeIf { it in DashboardProductWorkspaceTabOptions } ?: DashboardProductWorkspaceTabItems,
+        label = {
+            when (it) {
+                DashboardProductWorkspaceTabSuppliers -> "Supplier"
+                else -> "Product / service / appointment"
+            }
+        },
+        onSelected = onSelected,
+        modifier = Modifier.fillMaxWidth(),
+    )
+}
+
+@Composable
+private fun DashboardSupplierSearchToolbar(
+    state: OnboardingUiState,
+    actions: OnboardingActions,
+    onAddSupplier: () -> Unit,
+) {
+    val filters = state.dashboard.filters
+    val filtersActive = state.hasActiveDashboardFilter()
+    DashboardWorkspaceToolbarCard(
+        title = "Supplier focus",
+        body = "Track supplier contact, payment terms, paid amount, and open balance.",
+        badgeText = if (state.dashboard.loading) "SYNC" else "LIVE",
+        primaryText = "Add supplier",
+        onPrimary = onAddSupplier,
+        primaryEnabled = !state.dashboard.loading,
+        secondaryText = if (state.dashboard.loading) "Syncing" else "Sync",
+        onSecondary = actions.onDashboardRefresh,
+        secondaryEnabled = !state.dashboard.loading,
+    ) {
+        BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+            val compact = maxWidth < 700.dp
+            if (compact) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    DashboardCompactSearchField(
+                        value = filters.query,
+                        onValueChange = actions.onDashboardSearchChange,
+                        placeholder = "Supplier, phone, email, payment",
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = OrmaShapes.Field,
+                    )
+                    if (filtersActive) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            DashboardSalesInlineResetButton(
+                                onClick = { clearDashboardWorkspaceFilters(state, actions) },
+                            )
+                        }
+                    }
+                    DashboardDateRangeFilter(
+                        filters = filters,
+                        actions = actions,
+                        wide = false,
+                    )
+                }
+            } else {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        DashboardCompactSearchField(
+                            value = filters.query,
+                            onValueChange = actions.onDashboardSearchChange,
+                            placeholder = "Supplier, phone, email, payment",
+                            modifier = Modifier.weight(1f),
+                            shape = OrmaShapes.Field,
+                        )
+                        if (filtersActive) {
+                            DashboardSalesInlineResetButton(
+                                onClick = { clearDashboardWorkspaceFilters(state, actions) },
+                            )
+                        }
+                    }
+                    DashboardDateRangeFilter(
+                        filters = filters,
+                        actions = actions,
+                        wide = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DashboardSupplierKpiStrip(
+    state: OnboardingUiState,
+    suppliers: List<OrmaSupplier>,
+) {
+    val currency = state.dashboard.summary.currency.ifBlank { suppliers.firstOrNull()?.currency ?: "INR" }
+    val payable = suppliers.sumOf { it.payableTotal.toDoubleOrNull().orZero() }
+    val paid = suppliers.sumOf { it.paidTotal.toDoubleOrNull().orZero() }
+    val due = suppliers.sumOf { it.balanceDue.toDoubleOrNull().orZero() }
+    val withDue = suppliers.count { it.balanceDue.toDoubleOrNull().orZero() > 0.0 }
+    DashboardFocusMetricStrip(
+        metrics = listOf(
+            DashboardFocusMetric(
+                label = "Suppliers",
+                value = suppliers.size.toString(),
+                detail = "purchase sources",
+                tone = OrmaStatusTone.Info,
+            ),
+            DashboardFocusMetric(
+                label = "Payable",
+                value = dashboardMoney(payable.toDashboardMoneyInput(), currency),
+                detail = "tracked",
+                tone = OrmaStatusTone.Info,
+                weight = 1.24f,
+            ),
+            DashboardFocusMetric(
+                label = "Paid",
+                value = dashboardMoney(paid.toDashboardMoneyInput(), currency),
+                detail = "settled",
+                tone = OrmaStatusTone.Success,
+                weight = 1.24f,
+            ),
+            DashboardFocusMetric(
+                label = "Due",
+                value = dashboardMoney(due.toDashboardMoneyInput(), currency),
+                detail = "$withDue open",
+                tone = if (due > 0.0) OrmaStatusTone.Warning else OrmaStatusTone.Success,
+                weight = 1.24f,
+            ),
+        ),
+    )
+}
+
+@Composable
+private fun DashboardSupplierRecordsSurface(
+    state: OnboardingUiState,
+    actions: OnboardingActions,
+    suppliers: List<OrmaSupplier>,
+    onAddSupplier: () -> Unit,
+    onEditSupplier: (OrmaSupplier) -> Unit,
+    wide: Boolean,
+) {
+    val supplierPagination = state.dashboard.supplierPagination
+    val totalSuppliers = supplierPagination.totalItems.coerceAtLeast(suppliers.size)
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = OrmaShapes.SmallCard,
+        color = OrmaColors.CardBackground,
+        contentColor = OrmaColors.TextPrimary,
+        border = BorderStroke(0.6.dp, OrmaColors.Hairline),
+        tonalElevation = 0.dp,
+        shadowElevation = OrmaElevation.Subtle,
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            DashboardRecordsSurfaceHeader(
+                title = "Supplier records",
+                body = "Manage supplier contact, GST/VAT, payment terms, paid total, and open due.",
+                badgeText = if (totalSuppliers > suppliers.size) {
+                    "${suppliers.size} SHOWN / $totalSuppliers TOTAL"
+                } else {
+                    "${suppliers.size} SHOWN"
+                },
+            )
+            if (suppliers.isEmpty()) {
+                DashboardInlineEmptyRecords(
+                    icon = DashboardNavIconKind.Products,
+                    title = when {
+                        state.dashboard.loading -> "Loading suppliers"
+                        !state.dashboard.errorMessage.isNullOrBlank() -> "Could not load suppliers"
+                        state.hasActiveDashboardFilter() -> "No matching suppliers"
+                        else -> "No suppliers yet"
+                    },
+                    body = when {
+                        state.dashboard.loading -> "ORMA is refreshing supplier records."
+                        !state.dashboard.errorMessage.isNullOrBlank() -> state.dashboard.errorMessage.orEmpty()
+                        state.hasActiveDashboardFilter() -> "Clear filters or search another supplier, phone, email, or payment reference."
+                        else -> "Add suppliers before tracking purchases, restock payments, or payable balances."
+                    },
+                )
+                OrmaSecondaryButton(
+                    text = "Add supplier",
+                    onClick = onAddSupplier,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            } else if (wide) {
+                DashboardSupplierTable(
+                    suppliers = suppliers,
+                    onEditSupplier = onEditSupplier,
+                )
+            } else {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    suppliers.forEach { supplier ->
+                        DashboardSupplierRow(
+                            supplier = supplier,
+                            onEditClick = { onEditSupplier(supplier) },
+                        )
+                    }
+                }
+            }
+            DashboardPaginationControls(
+                pagination = supplierPagination,
+                wide = wide,
+                loading = state.dashboard.loading,
+                onPageChange = { actions.onDashboardPageChange(DashboardPageTarget.Suppliers, it) },
+            )
+        }
+    }
+}
+
+@Composable
+@OptIn(ExperimentalFoundationApi::class)
+private fun DashboardSupplierTable(
+    suppliers: List<OrmaSupplier>,
+    onEditSupplier: (OrmaSupplier) -> Unit,
+) {
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val minTableWidth = 860.dp
+        val tableWidth = if (maxWidth > minTableWidth) maxWidth else minTableWidth
+        Box(modifier = Modifier.horizontalScroll(rememberScrollState())) {
+            LazyColumn(
+                modifier = Modifier
+                    .width(tableWidth)
+                    .heightIn(max = 520.dp),
+            ) {
+                stickyHeader {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = OrmaColors.CardBackground,
+                        contentColor = OrmaColors.TextPrimary,
+                        tonalElevation = 0.dp,
+                        shadowElevation = 0.dp,
+                    ) {
+                        Column {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                DashboardWideHeaderLabel("Supplier", Modifier.weight(1.25f))
+                                DashboardWideHeaderLabel("Contact", Modifier.weight(1.1f))
+                                DashboardWideHeaderLabel("Payment", Modifier.weight(1.08f))
+                                DashboardWideHeaderLabel("Due", Modifier.weight(0.88f))
+                                DashboardWideHeaderLabel("Actions", Modifier.width(126.dp))
+                            }
+                            HorizontalDivider(
+                                modifier = Modifier.padding(horizontal = 10.dp),
+                                thickness = 0.8.dp,
+                                color = OrmaColors.CellBackground.copy(alpha = 0.72f),
+                            )
+                        }
+                    }
+                }
+                itemsIndexed(
+                    items = suppliers,
+                    key = { _, supplier -> supplier.id },
+                ) { index, supplier ->
+                    DashboardWideSupplierRow(
+                        supplier = supplier,
+                        zebra = index % 2 == 1,
+                        onEditClick = { onEditSupplier(supplier) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DashboardWideSupplierRow(
+    supplier: OrmaSupplier,
+    zebra: Boolean = false,
+    onEditClick: () -> Unit,
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val hovered by interactionSource.collectIsHoveredAsState()
+    val rowBackground = when {
+        hovered -> OrmaColors.ScreenBackground.copy(alpha = 0.44f)
+        zebra -> OrmaColors.ScreenBackground.copy(alpha = 0.18f)
+        else -> Color.Transparent
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(OrmaShapes.SmallCard)
+                .background(rowBackground)
+                .hoverable(interactionSource)
+                .clickable(onClick = onEditClick)
+                .padding(horizontal = 10.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            DashboardWideCell(
+                primary = supplier.name,
+                secondary = supplier.taxNumber ?: supplier.addressLine,
+                modifier = Modifier.weight(1.25f),
+            )
+            DashboardWideCell(
+                primary = listOfNotNull(supplier.phoneNumber, supplier.email).joinToString(" / ").ifBlank { "No contact" },
+                secondary = supplier.notes,
+                modifier = Modifier.weight(1.1f),
+            )
+            DashboardWideCell(
+                primary = supplier.paymentTerms ?: "No terms",
+                secondary = listOfNotNull(
+                    supplier.paymentMode,
+                    supplier.paymentReference,
+                    supplier.lastPaymentAt?.dashboardDateLabel(),
+                ).joinToString(" / "),
+                modifier = Modifier.weight(1.08f),
+            )
+            DashboardWideCell(
+                primary = dashboardMoney(supplier.balanceDue, supplier.currency),
+                secondary = "${dashboardMoney(supplier.paidTotal, supplier.currency)} paid",
+                modifier = Modifier.weight(0.88f),
+            )
+            Box(modifier = Modifier.width(126.dp), contentAlignment = Alignment.CenterStart) {
+                DashboardTableActionButton(
+                    text = "Edit",
+                    iconKind = OrmaFlatIconKind.Edit,
+                    onClick = onEditClick,
+                )
+            }
+        }
+        HorizontalDivider(
+            modifier = Modifier.padding(horizontal = 10.dp),
+            thickness = 0.8.dp,
+            color = if (hovered) {
+                OrmaColors.CellBackground.copy(alpha = 0.86f)
+            } else {
+                OrmaColors.CellBackground.copy(alpha = 0.62f)
+            },
+        )
+    }
+}
+
+@Composable
+private fun DashboardSupplierRow(
+    supplier: OrmaSupplier,
+    onEditClick: () -> Unit,
+) {
+    DashboardRecordCard {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.Top,
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                Text(
+                    text = supplier.name,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = OrmaColors.TextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = listOfNotNull(supplier.phoneNumber, supplier.email).joinToString(" / ").ifBlank { "No contact saved" },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = OrmaColors.TextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            OrmaBadge(
+                text = if (supplier.balanceDue.toDoubleOrNull().orZero() > 0.0) "DUE" else "PAID",
+                tone = if (supplier.balanceDue.toDoubleOrNull().orZero() > 0.0) OrmaStatusTone.Warning else OrmaStatusTone.Success,
+            )
+        }
+        OrmaKeyValueList(
+            rows = listOf(
+                "Payable" to dashboardMoney(supplier.payableTotal, supplier.currency),
+                "Paid" to dashboardMoney(supplier.paidTotal, supplier.currency),
+                "Balance due" to dashboardMoney(supplier.balanceDue, supplier.currency),
+                "Terms" to supplier.paymentTerms.orEmpty().ifBlank { "Not added" },
+                "Last payment" to (supplier.lastPaymentAt?.dashboardDateLabel() ?: "Not added"),
+            ),
+        )
+        OrmaSecondaryButton(
+            text = "Edit supplier",
+            onClick = onEditClick,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
 }
 
 @Composable
@@ -13662,6 +14247,7 @@ private fun dashboardFlatIconForAction(text: String): OrmaFlatIconKind? {
         normalized.contains("download") -> OrmaFlatIconKind.Download
         normalized.contains("upload") -> OrmaFlatIconKind.Upload
         normalized.contains("import") || normalized.contains("export") -> OrmaFlatIconKind.Download
+        normalized.contains("supplier") -> OrmaFlatIconKind.Category
         normalized.contains("category") -> OrmaFlatIconKind.Category
         else -> null
     }
@@ -16560,18 +17146,25 @@ private fun CustomerFormSheet(
 
 @Composable
 private fun SupplierFormSheet(
+    supplier: OrmaSupplier? = null,
+    defaultCurrency: String = "INR",
     onDismiss: () -> Unit,
     onSubmit: (OrmaSupplierDraft) -> Unit,
 ) {
-    var draft by remember { mutableStateOf(OrmaSupplierDraft()) }
+    var draft by remember(supplier?.id, defaultCurrency) {
+        mutableStateOf(supplier?.toSupplierDraft() ?: OrmaSupplierDraft(currency = defaultCurrency.ifBlank { "INR" }))
+    }
     var attemptedSubmit by rememberSaveable { mutableStateOf(false) }
     val nameError = if (draft.name.trim().length >= 2) null else "Enter at least 2 characters."
     val phoneError = optionalOrmaPhoneError(draft.phoneNumber)
     val emailError = optionalOrmaEmailError(draft.email)
-    val formReady = nameError == null && phoneError == null && emailError == null
+    val payableError = optionalNonNegativeDecimalError(draft.payableTotal, "Enter zero or higher.")
+    val paidError = optionalNonNegativeDecimalError(draft.paidTotal, "Enter zero or higher.")
+    val balanceDue = (draft.payableTotal.toDoubleOrNull().orZero() - draft.paidTotal.toDoubleOrNull().orZero()).coerceAtLeast(0.0)
+    val formReady = nameError == null && phoneError == null && emailError == null && payableError == null && paidError == null
     DashboardFormSheet(
-        title = "Add supplier",
-        body = "Attach suppliers to catalog items and stock updates.",
+        title = if (supplier == null) "Add supplier" else "Edit supplier",
+        body = "Attach suppliers to catalog items and track payable, paid, and balance details.",
         onDismiss = onDismiss,
     ) {
         OrmaTextField(draft.name, { draft = draft.copy(name = it) }, "Supplier name", placeholder = "Company name")
@@ -16586,12 +17179,83 @@ private fun SupplierFormSheet(
         if (attemptedSubmit) emailError?.let { FormValidationText(it) }
         OrmaTextField(draft.taxNumber, { draft = draft.copy(taxNumber = it.uppercase().take(24)) }, "GST/VAT number", placeholder = "Optional")
         OrmaTextField(draft.addressLine, { draft = draft.copy(addressLine = it) }, "Address", placeholder = "Optional")
+        OrmaTextField(
+            value = draft.paymentTerms,
+            onValueChange = { draft = draft.copy(paymentTerms = it.take(80)) },
+            label = "Payment terms",
+            placeholder = "COD, Net 7, Net 30",
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            OrmaTextField(
+                value = draft.payableTotal,
+                onValueChange = { draft = draft.copy(payableTotal = it.moneyInput()) },
+                label = "Payable total",
+                placeholder = "0.00",
+                modifier = Modifier.weight(1f),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            )
+            OrmaTextField(
+                value = draft.paidTotal,
+                onValueChange = { draft = draft.copy(paidTotal = it.moneyInput()) },
+                label = "Paid total",
+                placeholder = "0.00",
+                modifier = Modifier.weight(1f),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            )
+        }
+        if (attemptedSubmit) {
+            payableError?.let { FormValidationText(it) }
+            paidError?.let { FormValidationText(it) }
+        }
+        OrmaKeyValueList(
+            rows = listOf(
+                "Balance due" to dashboardMoney(balanceDue.toDashboardMoneyInput(), draft.currency.ifBlank { defaultCurrency.ifBlank { "INR" } }),
+            ),
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            OrmaTextField(
+                value = draft.currency,
+                onValueChange = { draft = draft.copy(currency = it.uppercase().filter(Char::isLetter).take(3)) },
+                label = "Currency",
+                placeholder = defaultCurrency.ifBlank { "INR" },
+                modifier = Modifier.weight(0.74f),
+            )
+            OrmaTextField(
+                value = draft.paymentMode,
+                onValueChange = { draft = draft.copy(paymentMode = it.take(60)) },
+                label = "Payment mode",
+                placeholder = "UPI, bank, cash",
+                modifier = Modifier.weight(1.26f),
+            )
+        }
+        OrmaTextField(
+            value = draft.paymentReference,
+            onValueChange = { draft = draft.copy(paymentReference = it.take(120)) },
+            label = "Payment reference",
+            placeholder = "UPI ID, bank account, invoice ref",
+        )
+        OrmaCalendarDateField(
+            value = draft.lastPaymentAt.take(10),
+            onValueChange = { draft = draft.copy(lastPaymentAt = it) },
+            label = "Last payment date",
+            placeholder = "Optional",
+        )
         OrmaTextField(draft.notes, { draft = draft.copy(notes = it) }, "Notes", placeholder = "Optional", singleLine = false, minLines = 2)
         OrmaActionRow(
-            primaryText = "Save supplier",
+            primaryText = if (supplier == null) "Save supplier" else "Update supplier",
             onPrimary = {
                 attemptedSubmit = true
-                if (formReady) onSubmit(draft.copy(name = draft.name.trim(), email = draft.email.trim()))
+                if (formReady) {
+                    onSubmit(
+                        draft.copy(
+                            name = draft.name.trim(),
+                            email = draft.email.trim(),
+                            currency = draft.currency.ifBlank { defaultCurrency.ifBlank { "INR" } },
+                            payableTotal = draft.payableTotal.ifBlank { "0" },
+                            paidTotal = draft.paidTotal.ifBlank { "0" },
+                        ),
+                    )
+                }
             },
             primaryEnabled = draft.name.trim().isNotBlank(),
             secondaryText = "Cancel",
@@ -16605,11 +17269,8 @@ private fun ProductImagePickerCard(
     productName: String,
     image: OrmaPickedImage?,
     currentImageAvailable: Boolean,
-    aiGenerating: Boolean,
-    aiAvailable: Boolean,
     errorMessage: String?,
     onUpload: () -> Unit,
-    onGenerate: () -> Unit,
     onRemove: () -> Unit,
 ) {
     val selected = image != null || currentImageAvailable
@@ -16645,7 +17306,6 @@ private fun ProductImagePickerCard(
                 ) {
                     Text(
                         text = when {
-                            aiGenerating -> "Creating AI image"
                             image != null -> "Product image ready"
                             currentImageAvailable -> "Product image attached"
                             else -> "Product image"
@@ -16657,10 +17317,8 @@ private fun ProductImagePickerCard(
                     )
                     Text(
                         text = when {
-                            aiGenerating -> "Generating a clean catalog image from the product details."
                             image != null -> displayLogoFileName(image.fileName)
-                            currentImageAvailable -> "Upload or generate a new image to replace it."
-                            aiAvailable -> "Upload a photo or create an AI catalog image."
+                            currentImageAvailable -> "Upload a new image to replace it."
                             else -> "Upload a PNG, JPG, or WebP product image."
                         },
                         style = MaterialTheme.typography.bodyMedium,
@@ -16678,14 +17336,7 @@ private fun ProductImagePickerCard(
                 OrmaSecondaryButton(
                     text = "Upload",
                     onClick = onUpload,
-                    modifier = Modifier.weight(1f),
-                    enabled = !aiGenerating,
-                )
-                OrmaSecondaryButton(
-                    text = if (aiAvailable) "Create AI" else "AI on web",
-                    onClick = onGenerate,
-                    modifier = Modifier.weight(1f),
-                    enabled = aiAvailable && !aiGenerating,
+                    modifier = Modifier.fillMaxWidth(),
                 )
             }
             if (image != null) {
@@ -16693,7 +17344,6 @@ private fun ProductImagePickerCard(
                     text = "Remove selected image",
                     onClick = onRemove,
                     modifier = Modifier.fillMaxWidth(),
-                    enabled = !aiGenerating,
                 )
             }
             errorMessage?.takeIf { it.isNotBlank() }?.let {
@@ -16722,23 +17372,6 @@ private fun handleProductImagePickerResult(
                 onSuccess(result.image)
             }
         }
-    }
-}
-
-private fun productAiImagePrompt(
-    name: String,
-    description: String,
-    industry: String,
-): String? {
-    val cleanName = name.trim().takeIf { it.length >= 2 } ?: return null
-    val details = description.trim().takeIf { it.isNotBlank() }
-    val businessType = industry.trim().takeIf { it.isNotBlank() } ?: "local business"
-    return buildString {
-        append("Create a realistic clean product catalog image for ORMA. ")
-        append("Product or service: $cleanName. ")
-        details?.let { append("Details: $it. ") }
-        append("Business type: $businessType. ")
-        append("Warm neutral background, professional ecommerce lighting, centered composition, no text, no watermark, no logo.")
     }
 }
 
@@ -16911,13 +17544,13 @@ private fun OfferFormSheet(
 }
 
 @Composable
-private fun ProductFormSheet(
+private fun ProductEditorScreen(
     state: OnboardingUiState,
     product: OrmaProduct? = null,
+    wide: Boolean,
     onDismiss: () -> Unit,
     onSubmit: (OrmaProductDraft) -> Unit,
 ) {
-    val scope = rememberCoroutineScope()
     val editing = product != null
     val allowedItemTypes = state.allowedDashboardItemTypes()
     val initialItemType = product?.itemType
@@ -16925,7 +17558,6 @@ private fun ProductFormSheet(
         ?: state.activeDashboardItemType().takeIf { it in allowedItemTypes }
         ?: allowedItemTypes.first()
     var imageError by remember { mutableStateOf<String?>(null) }
-    var aiGenerating by remember { mutableStateOf(false) }
     var attemptedSubmit by rememberSaveable { mutableStateOf(false) }
     var draft by remember(product?.id) {
         mutableStateOf(
@@ -16937,6 +17569,8 @@ private fun ProductFormSheet(
                         "service" -> "service"
                         else -> "pcs"
                     },
+                    stockQuantity = "",
+                    reorderLevel = "",
                     trackStock = initialItemType == "product",
                     bookingRequired = initialItemType == "appointment",
                     currency = state.dashboard.summary.currency.ifBlank { state.draft.currency.ifBlank { "INR" } },
@@ -16968,8 +17602,8 @@ private fun ProductFormSheet(
     val costPriceError = optionalNonNegativeDecimalError(draft.costPrice, "Cost price must be zero or higher.")
     val stockFieldsVisible = draft.itemType == "product"
     val durationVisible = draft.itemType != "product"
-    val stockError = if (stockFieldsVisible) requiredNonNegativeDecimalError(draft.stockQuantity, "Opening stock must be zero or higher.") else null
-    val reorderError = if (stockFieldsVisible) requiredNonNegativeDecimalError(draft.reorderLevel, "Reorder level must be zero or higher.") else null
+    val stockError = if (stockFieldsVisible) optionalNonNegativeDecimalError(draft.stockQuantity, "Opening stock must be zero or higher.") else null
+    val reorderError = if (stockFieldsVisible) optionalNonNegativeDecimalError(draft.reorderLevel, "Reorder level must be zero or higher.") else null
     val durationError = when {
         draft.itemType != "appointment" -> null
         (draft.durationMinutes.toIntOrNull() ?: 0) > 0 -> null
@@ -16986,15 +17620,68 @@ private fun ProductFormSheet(
         durationError,
         taxError,
     ).all { it == null }
-    DashboardFormSheet(
-        title = if (editing) "Edit ${draft.itemType.sellableItemTypeLabel().lowercase()}" else draft.itemType.catalogActionText(),
-        body = if (editing) {
+    val editorTitle = if (editing) "Edit ${draft.itemType.sellableItemTypeLabel().lowercase()}" else draft.itemType.catalogActionText()
+    val editorBody = if (editing) {
             "Update the details customers, staff, stock, and orders use for this ${draft.itemType.sellableItemTypeLabel().lowercase()}."
         } else {
             draft.itemType.catalogSectionDescription()
-        },
-        onDismiss = onDismiss,
+        }
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = OrmaShapes.SmallCard,
+            color = OrmaColors.CardBackground,
+            contentColor = OrmaColors.TextPrimary,
+            border = BorderStroke(0.6.dp, OrmaColors.Hairline),
+            tonalElevation = 0.dp,
+            shadowElevation = OrmaElevation.Subtle,
+        ) {
+            Row(
+                modifier = Modifier.padding(if (wide) 18.dp else 14.dp),
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Surface(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clickable(onClick = onDismiss),
+                    shape = OrmaShapes.Capsule,
+                    color = OrmaColors.CellBackground,
+                    contentColor = OrmaColors.Accent,
+                    tonalElevation = 0.dp,
+                    shadowElevation = 0.dp,
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        OrmaFlatIcon(kind = OrmaFlatIconKind.Back, modifier = Modifier.size(18.dp))
+                    }
+                }
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        text = editorTitle,
+                        style = MaterialTheme.typography.titleLarge,
+                        color = OrmaColors.TextPrimary,
+                    )
+                    Text(
+                        text = editorBody,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = OrmaColors.TextSecondary,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                OrmaBadge(
+                    text = draft.itemType.sellableItemTypeLabel().uppercase(),
+                    tone = OrmaStatusTone.Info,
+                )
+            }
+        }
+        DashboardRecordCard {
         OrmaTextField(
             draft.name,
             { draft = draft.copy(name = it) },
@@ -17029,8 +17716,8 @@ private fun ProductFormSheet(
                             else -> "service"
                         },
                         trackStock = itemType == "product" && draft.trackStock,
-                        stockQuantity = if (itemType == "product") draft.stockQuantity else "0",
-                        reorderLevel = if (itemType == "product") draft.reorderLevel else "0",
+                        stockQuantity = if (itemType == "product") draft.stockQuantity else "",
+                        reorderLevel = if (itemType == "product") draft.reorderLevel else "",
                         bookingRequired = itemType == "appointment",
                         expiryDate = if (itemType == "product") draft.expiryDate else "",
                     )
@@ -17042,68 +17729,55 @@ private fun ProductFormSheet(
                 tone = OrmaStatusTone.Info,
             )
         }
-        if (categoryOptions.isNotEmpty()) {
-            DashboardChipPicker(
-                label = "${draft.itemType.sellableItemTypeLabel()} category",
-                options = categoryOptions,
-                selectedId = draft.categoryId,
-                optionId = { it.id },
-                optionLabel = { it.categoryOptionLabel() },
-                onSelected = { draft = draft.copy(categoryId = it.id, categoryName = "") },
-            )
-        }
+        DashboardDropdownPicker(
+            label = "${draft.itemType.sellableItemTypeLabel()} category",
+            selected = categoryOptions.firstOrNull { it.id == draft.categoryId },
+            placeholder = if (categoryOptions.isEmpty()) "No categories yet" else "Choose category",
+            options = categoryOptions,
+            optionLabel = { it.categoryOptionLabel() },
+            onSelected = { draft = draft.copy(categoryId = it.id, categoryName = "") },
+            supportingText = if (categoryOptions.isEmpty()) {
+                "Type a new category below to create it with this item."
+            } else {
+                "Use an existing category or type a new one below."
+            },
+            onClear = if (draft.categoryId.isNotBlank()) {
+                { draft = draft.copy(categoryId = "", categoryName = "") }
+            } else {
+                null
+            },
+        )
         OrmaTextField(
             value = draft.categoryName,
             onValueChange = { draft = draft.copy(categoryName = it.take(80), categoryId = "") },
-            label = "New category",
+            label = "Create new category",
             placeholder = when (draft.itemType) {
                 "service" -> "Repairs, consulting"
                 "appointment" -> "Consultation, salon"
                 else -> "Bakery, lunch menu"
             },
         )
-        if (draft.categoryId.isNotBlank() || draft.categoryName.isNotBlank()) {
-            OrmaTextButton(
-                text = "Clear category",
-                onClick = { draft = draft.copy(categoryId = "", categoryName = "") },
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
         ProductImagePickerCard(
             productName = draft.name,
             image = draft.image,
             currentImageAvailable = !product?.imageUrl.isNullOrBlank(),
-            aiGenerating = aiGenerating,
-            aiAvailable = isOrmaProductAiImageGenerationAvailable(),
             errorMessage = imageError,
             onUpload = { productImagePicker.launch() },
-            onGenerate = {
-                val prompt = productAiImagePrompt(
-                    name = draft.name,
-                    description = draft.description,
-                    industry = state.draft.industry,
-                )
-                if (prompt == null) {
-                    imageError = "Enter a product name before creating an AI image."
-                    return@ProductImagePickerCard
-                }
-                scope.launch {
-                    aiGenerating = true
-                    imageError = null
-                    when (val result = generateOrmaProductAiImage(prompt)) {
-                        is OrmaProductAiImageResult.Success -> draft = draft.copy(image = result.image)
-                        is OrmaProductAiImageResult.Failure -> imageError = result.message
-                    }
-                    aiGenerating = false
-                }
-            },
             onRemove = { draft = draft.copy(image = null) },
         )
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             if (stockFieldsVisible) {
                 OrmaTextField(draft.sku, { draft = draft.copy(sku = it.uppercase().take(40)) }, "SKU", modifier = Modifier.weight(1f), placeholder = "Optional")
             }
-            OrmaTextField(draft.unit, { draft = draft.copy(unit = it.take(12)) }, "Unit", modifier = Modifier.weight(1f), placeholder = if (stockFieldsVisible) "pcs" else "service")
+            DashboardDropdownPicker(
+                label = "Unit",
+                selected = draft.unit.takeIf { it.isNotBlank() },
+                placeholder = if (stockFieldsVisible) "Choose unit" else "Choose billing unit",
+                options = draft.itemType.catalogUnitOptions(),
+                optionLabel = { it },
+                onSelected = { draft = draft.copy(unit = it) },
+                modifier = Modifier.weight(1f),
+            )
         }
         if (attemptedSubmit) unitError?.let { FormValidationText(it) }
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -17186,8 +17860,9 @@ private fun ProductFormSheet(
             },
             primaryEnabled = draft.name.trim().isNotBlank(),
             secondaryText = "Cancel",
-            onSecondary = LocalSmoothSheetDismiss.current ?: onDismiss,
+            onSecondary = onDismiss,
         )
+        }
     }
 }
 
@@ -17206,8 +17881,8 @@ private fun OrmaProduct.toProductDraft(): OrmaProductDraft =
         currency = currency,
         taxRate = taxRate,
         pricesIncludeTax = pricesIncludeTax,
-        stockQuantity = stockQuantity,
-        reorderLevel = reorderLevel,
+        stockQuantity = stockQuantity.blankWhenZeroForProductForm(),
+        reorderLevel = reorderLevel.blankWhenZeroForProductForm(),
         trackStock = trackStock,
         durationMinutes = durationMinutes?.toString().orEmpty(),
         bookingRequired = bookingRequired,
@@ -17216,6 +17891,9 @@ private fun OrmaProduct.toProductDraft(): OrmaProductDraft =
         image = null,
     )
 
+private fun String.blankWhenZeroForProductForm(): String =
+    takeUnless { trim().toDoubleOrNull() == 0.0 }.orEmpty()
+
 @Composable
 private fun ProductImageSheet(
     product: OrmaProduct,
@@ -17223,10 +17901,8 @@ private fun ProductImageSheet(
     onDismiss: () -> Unit,
     onSubmit: (OrmaPickedImage) -> Unit,
 ) {
-    val scope = rememberCoroutineScope()
     var image by remember(product.id) { mutableStateOf<OrmaPickedImage?>(null) }
     var imageError by remember(product.id) { mutableStateOf<String?>(null) }
-    var aiGenerating by remember(product.id) { mutableStateOf(false) }
     val productImagePicker = rememberOrmaBusinessLogoPicker { result ->
         handleProductImagePickerResult(
             result = result,
@@ -17239,43 +17915,21 @@ private fun ProductImageSheet(
     }
     DashboardFormSheet(
         title = "Product image",
-        body = "Upload a catalog photo or create an AI image from the product details.",
+        body = "Upload a catalog photo for this product, service, or appointment item.",
         onDismiss = onDismiss,
     ) {
         ProductImagePickerCard(
             productName = product.name,
             image = image,
             currentImageAvailable = product.imageUrl != null,
-            aiGenerating = aiGenerating,
-            aiAvailable = isOrmaProductAiImageGenerationAvailable(),
             errorMessage = imageError,
             onUpload = { productImagePicker.launch() },
-            onGenerate = {
-                val prompt = productAiImagePrompt(
-                    name = product.name,
-                    description = product.description.orEmpty(),
-                    industry = state.draft.industry,
-                )
-                if (prompt == null) {
-                    imageError = "Add a product name before creating an AI image."
-                    return@ProductImagePickerCard
-                }
-                scope.launch {
-                    aiGenerating = true
-                    imageError = null
-                    when (val result = generateOrmaProductAiImage(prompt)) {
-                        is OrmaProductAiImageResult.Success -> image = result.image
-                        is OrmaProductAiImageResult.Failure -> imageError = result.message
-                    }
-                    aiGenerating = false
-                }
-            },
             onRemove = { image = null },
         )
         OrmaActionRow(
             primaryText = if (state.dashboard.actionLoading) "Saving..." else "Save image",
             onPrimary = { image?.let(onSubmit) },
-            primaryEnabled = image != null && !state.dashboard.actionLoading && !aiGenerating,
+            primaryEnabled = image != null && !state.dashboard.actionLoading,
             secondaryText = "Cancel",
             onSecondary = LocalSmoothSheetDismiss.current ?: onDismiss,
         )
@@ -17292,18 +17946,18 @@ private fun ProductTransferSheet(
     val template = state.dashboard.productImportTemplate
     val fallbackTemplate = productImportCsvTemplate()
     val templateCsv = template?.csv?.takeIf { it.isNotBlank() }
-    val templateColumns = template?.columns?.takeIf { it.isNotEmpty() }
     val requiredColumns = template?.requiredColumns?.takeIf { it.isNotEmpty() } ?: listOf("name")
     var csvText by rememberSaveable { mutableStateOf(templateCsv ?: fallbackTemplate) }
     var csvFileMessage by rememberSaveable { mutableStateOf<String?>(null) }
     var csvFileError by rememberSaveable { mutableStateOf<String?>(null) }
     val actionLoading = state.dashboard.actionLoading
+    val csvProfile = remember(csvText) { productImportCsvProfile(csvText) }
     val csvFilePicker = rememberOrmaCsvFilePicker { result ->
         when (result) {
             is OrmaCsvFilePickerResult.Success -> {
                 csvText = result.file.text
                 val rows = countCsvDataRows(result.file.text)
-                csvFileMessage = "Loaded ${result.file.fileName} · $rows product rows"
+                csvFileMessage = "Loaded ${result.file.fileName}: $rows catalog rows"
                 csvFileError = null
             }
             OrmaCsvFilePickerResult.Cancelled -> Unit
@@ -17322,8 +17976,8 @@ private fun ProductTransferSheet(
         }
     }
     DashboardFormSheet(
-        title = "Import / export catalog",
-        body = "Move catalog, barcode, price, stock, and supplier data with ORMA CSV.",
+        title = "Bulk catalog import/export",
+        body = "Move products, services, appointments, categories, prices, stock, and suppliers with ORMA CSV.",
         onDismiss = onDismiss,
     ) {
         OrmaSegmentedRow(
@@ -17333,22 +17987,62 @@ private fun ProductTransferSheet(
             onSelected = { importMode = it },
         )
         if (importMode) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                OrmaPrimaryButton(
+                    text = "Upload CSV",
+                    onClick = { csvFilePicker.launch() },
+                    modifier = Modifier.weight(1f),
+                    enabled = !actionLoading,
+                )
+                OrmaSecondaryButton(
+                    text = "Download template",
+                    onClick = actions.onDownloadProductImportTemplate,
+                    modifier = Modifier.weight(1f),
+                    enabled = !actionLoading,
+                )
+            }
             DashboardModuleChecklistCard(
-                title = "CSV columns",
+                title = "Sheet format",
                 items = listOf(
                     "Required column: ${requiredColumns.joinToString(", ")}.",
-                    "Columns: ${(templateColumns ?: fallbackTemplate.lineSequence().first().split(",")).joinToString(", ")}.",
+                    "Use itemType as product, service, or appointment.",
+                    "Use categoryName to reuse or create product, service, and appointment categories.",
+                    "Stock and reorder can stay blank. ORMA saves them as zero.",
+                    "Appointment rows need durationMinutes.",
                     "SKU or barcode duplicates are skipped to protect existing catalog items.",
                     "Supplier names are matched or created automatically.",
                 ),
-                tertiaryText = "${countCsvDataRows(csvText)} rows",
+                tertiaryText = "${csvProfile.rows} rows",
             )
-            OrmaSecondaryButton(
-                text = "Choose CSV file",
-                onClick = { csvFilePicker.launch() },
-                modifier = Modifier.fillMaxWidth(),
-                enabled = !actionLoading,
-            )
+            DashboardRecordCard {
+                Text(
+                    text = "Bulk preview",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = OrmaColors.TextPrimary,
+                )
+                OrmaKeyValueList(
+                    rows = listOf(
+                        "Rows" to "${csvProfile.rows} / 500",
+                        "Products" to csvProfile.products.toString(),
+                        "Services" to csvProfile.services.toString(),
+                        "Appointments" to csvProfile.appointments.toString(),
+                        "With category" to csvProfile.withCategory.toString(),
+                    ),
+                )
+                Text(
+                    text = if (csvProfile.hasCategoryColumn) {
+                        "categoryName is present. New category names will be created during import."
+                    } else {
+                        "Add categoryName to group catalog items during import."
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = OrmaColors.TextSecondary,
+                )
+            }
             csvFileMessage?.let { message ->
                 Text(
                     text = message,
@@ -17369,17 +18063,20 @@ private fun ProductTransferSheet(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 OrmaSecondaryButton(
-                    text = "Download template",
-                    onClick = actions.onDownloadProductImportTemplate,
-                    modifier = Modifier.weight(1f),
-                    enabled = !actionLoading,
-                )
-                OrmaSecondaryButton(
                     text = "Use template",
                     onClick = {
                         val nextTemplate = state.dashboard.productImportTemplate?.csv?.takeIf { it.isNotBlank() }
                         if (nextTemplate == null) actions.onLoadProductImportTemplate()
                         csvText = nextTemplate ?: fallbackTemplate
+                    },
+                    modifier = Modifier.weight(1f),
+                    enabled = !actionLoading,
+                )
+                OrmaSecondaryButton(
+                    text = "Clear CSV",
+                    onClick = {
+                        actions.onClearProductTransfer()
+                        csvText = fallbackTemplate
                     },
                     modifier = Modifier.weight(1f),
                     enabled = !actionLoading,
@@ -17417,9 +18114,9 @@ private fun ProductTransferSheet(
                 }
             }
             OrmaActionRow(
-                primaryText = if (actionLoading) "Importing..." else "Import catalog",
+                primaryText = if (actionLoading) "Importing..." else "Bulk upload catalog",
                 onPrimary = { actions.onImportProductsCsv(csvText) },
-                primaryEnabled = !actionLoading && countCsvDataRows(csvText) > 0,
+                primaryEnabled = !actionLoading && csvProfile.rows > 0,
                 secondaryText = "Reset template",
                 onSecondary = {
                     actions.onClearProductTransfer()
@@ -19313,6 +20010,13 @@ private fun String.catalogActionText(): String =
         else -> "Add product"
     }
 
+private fun String.catalogUnitOptions(): List<String> =
+    when (trim().lowercase()) {
+        "service" -> listOf("service", "hour", "session", "visit", "job", "day")
+        "appointment" -> listOf("booking", "session", "slot", "visit", "hour")
+        else -> listOf("pcs", "piece", "kg", "g", "ltr", "ml", "box", "pack", "plate", "bottle")
+    }
+
 private fun String.catalogSectionEyebrow(): String =
     when (trim().lowercase()) {
         "service" -> "SERVICES"
@@ -20630,6 +21334,23 @@ private fun OrmaProduct.toOrderItemDraft(): OrmaOrderItemDraft =
         taxRate = taxRate.ifBlank { "0" },
     )
 
+private fun OrmaSupplier.toSupplierDraft(): OrmaSupplierDraft =
+    OrmaSupplierDraft(
+        name = name,
+        phoneNumber = phoneNumber.orEmpty(),
+        email = email.orEmpty(),
+        taxNumber = taxNumber.orEmpty(),
+        addressLine = addressLine.orEmpty(),
+        paymentTerms = paymentTerms.orEmpty(),
+        paymentMode = paymentMode.orEmpty(),
+        paymentReference = paymentReference.orEmpty(),
+        payableTotal = payableTotal.ifBlank { "0" },
+        paidTotal = paidTotal.ifBlank { "0" },
+        currency = currency.ifBlank { "INR" },
+        lastPaymentAt = lastPaymentAt.orEmpty().take(10),
+        notes = notes.orEmpty(),
+    )
+
 private fun OrmaOrder.toOrderDraft(): OrmaOrderDraft =
     OrmaOrderDraft(
         customerId = customerId.orEmpty(),
@@ -21042,6 +21763,33 @@ private fun filteredDashboardCustomers(state: OnboardingUiState): List<OrmaCusto
     }
 }
 
+private fun filteredDashboardSuppliers(state: OnboardingUiState): List<OrmaSupplier> {
+    val filters = state.dashboard.filters
+    val tokens = dashboardSearchTokens(filters.query)
+    return state.dashboard.suppliers.filter { supplier ->
+        val dateMatches = supplier.createdAt.matchesDashboardDateRange(filters)
+        val textMatches = listOf(
+            supplier.name,
+            supplier.phoneNumber.orEmpty(),
+            supplier.email.orEmpty(),
+            supplier.taxNumber.orEmpty(),
+            supplier.addressLine.orEmpty(),
+            supplier.paymentTerms.orEmpty(),
+            supplier.paymentMode.orEmpty(),
+            supplier.paymentReference.orEmpty(),
+            supplier.payableTotal,
+            supplier.paidTotal,
+            supplier.balanceDue,
+            supplier.currency,
+            supplier.lastPaymentAt.orEmpty(),
+            supplier.notes.orEmpty(),
+            supplier.status,
+            supplier.createdAt,
+        ).joinToString(" ").containsAllDashboardTokens(tokens)
+        dateMatches && textMatches
+    }
+}
+
 private fun filteredDashboardProducts(state: OnboardingUiState): List<OrmaProduct> {
     val filters = state.dashboard.filters
     val allowedItemTypes = state.allowedDashboardItemTypes()
@@ -21073,6 +21821,7 @@ private fun productImportCsvTemplate(): String =
     listOf(
         "name",
         "itemType",
+        "categoryName",
         "sku",
         "barcode",
         "description",
@@ -21091,10 +21840,64 @@ private fun productImportCsvTemplate(): String =
         "supplierName",
     ).joinToString(",") { it.csvCell() } + "\n"
 
+private data class ProductImportCsvProfile(
+    val rows: Int,
+    val products: Int,
+    val services: Int,
+    val appointments: Int,
+    val withCategory: Int,
+    val hasCategoryColumn: Boolean,
+)
+
+private fun productImportCsvProfile(csv: String): ProductImportCsvProfile {
+    val lines = csv.lineSequence()
+        .filter { line -> line.split(',').any { it.trim().isNotBlank() } }
+        .toList()
+    if (lines.isEmpty()) {
+        return ProductImportCsvProfile(
+            rows = 0,
+            products = 0,
+            services = 0,
+            appointments = 0,
+            withCategory = 0,
+            hasCategoryColumn = false,
+        )
+    }
+    val headers = lines.first().split(',').map { it.trim().trim('"').catalogCsvHeaderKey() }
+    val itemTypeIndex = headers.indexOfFirst { it in setOf("itemtype", "type", "sellabletype") }
+    val categoryIndex = headers.indexOfFirst { it in setOf("categoryname", "category") }
+    var products = 0
+    var services = 0
+    var appointments = 0
+    var withCategory = 0
+    lines.drop(1).forEach { line ->
+        val cells = line.split(',')
+        when (cells.getOrNull(itemTypeIndex).orEmpty().trim().trim('"').lowercase()) {
+            "service" -> services += 1
+            "appointment" -> appointments += 1
+            else -> products += 1
+        }
+        if (categoryIndex >= 0 && cells.getOrNull(categoryIndex).orEmpty().trim().trim('"').isNotBlank()) {
+            withCategory += 1
+        }
+    }
+    return ProductImportCsvProfile(
+        rows = lines.size - 1,
+        products = products,
+        services = services,
+        appointments = appointments,
+        withCategory = withCategory,
+        hasCategoryColumn = categoryIndex >= 0,
+    )
+}
+
 private fun countCsvDataRows(csv: String): Int =
     csv.lineSequence()
         .drop(1)
         .count { line -> line.split(',').any { it.trim().isNotBlank() } }
+
+private fun String.catalogCsvHeaderKey(): String =
+    lowercase().filter(Char::isLetterOrDigit)
 
 private fun String.csvCell(): String =
     if (any { it == '"' || it == ',' || it == '\n' || it == '\r' }) {
@@ -21393,7 +22196,11 @@ private fun DashboardTeamContent(
             loading = state.dashboard.loading,
             wide = false,
         ) {
-            DashboardTeamMembersCard(state = state, canInviteMembers = canInviteMembers)
+            DashboardTeamMembersSurface(
+                state = state,
+                actions = actions,
+                canInviteMembers = canInviteMembers,
+            )
             DashboardTeamAccessPanel(state = state, canInviteMembers = canInviteMembers)
             DashboardTeamGuideCard(canInviteMembers = canInviteMembers)
         }
@@ -21665,6 +22472,278 @@ private fun DashboardTeamMembersSurface(
 }
 
 @Composable
+private fun DashboardTeamInvitesQueue(
+    invites: List<OrmaTeamInvite>,
+    actionLoading: Boolean,
+    onOpenInvite: (OrmaTeamInvite) -> Unit,
+    onRevokeInvite: (OrmaTeamInvite) -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "Pending invites",
+                style = MaterialTheme.typography.titleSmall,
+                color = OrmaColors.TextPrimary,
+            )
+            OrmaBadge(
+                text = invites.size.toString(),
+                tone = if (invites.isEmpty()) OrmaStatusTone.Info else OrmaStatusTone.Warning,
+            )
+        }
+        if (invites.isEmpty()) {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = OrmaShapes.StandardCell,
+                color = OrmaColors.ScreenBackground.copy(alpha = 0.46f),
+                contentColor = OrmaColors.TextPrimary,
+                border = BorderStroke(0.6.dp, OrmaColors.Hairline.copy(alpha = 0.12f)),
+                tonalElevation = 0.dp,
+                shadowElevation = 0.dp,
+            ) {
+                Text(
+                    text = "No pending invites. Add an invite when a new staff account needs access.",
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = OrmaColors.TextSecondary,
+                )
+            }
+        } else {
+            invites.forEach { invite ->
+                DashboardTeamInviteRow(
+                    invite = invite,
+                    actionLoading = actionLoading,
+                    onOpenInvite = onOpenInvite,
+                    onRevokeInvite = onRevokeInvite,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DashboardTeamInviteRow(
+    invite: OrmaTeamInvite,
+    actionLoading: Boolean,
+    onOpenInvite: (OrmaTeamInvite) -> Unit,
+    onRevokeInvite: (OrmaTeamInvite) -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = OrmaShapes.StandardCell,
+        color = OrmaColors.ScreenBackground,
+        contentColor = OrmaColors.TextPrimary,
+        border = BorderStroke(0.6.dp, OrmaColors.Hairline.copy(alpha = 0.12f)),
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            DashboardWideCell(
+                primary = invite.dashboardInviteName(),
+                secondary = invite.dashboardInviteContact(),
+                modifier = Modifier.weight(1.35f),
+            )
+            Box(modifier = Modifier.weight(0.75f), contentAlignment = Alignment.CenterStart) {
+                OrmaBadge(
+                    text = teamRoleLabel(invite.role).uppercase(),
+                    tone = OrmaStatusTone.Info,
+                )
+            }
+            DashboardWideCell(
+                primary = invite.expiresAt?.dashboardDateLabel() ?: "No expiry",
+                secondary = "Expires",
+                modifier = Modifier.weight(0.9f),
+            )
+            Row(
+                modifier = Modifier.weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                DashboardTableActionButton(
+                    text = "Details",
+                    onClick = { onOpenInvite(invite) },
+                    iconKind = OrmaFlatIconKind.View,
+                )
+                DashboardTableActionButton(
+                    text = "Revoke",
+                    onClick = { onRevokeInvite(invite) },
+                    enabled = !actionLoading,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DashboardTeamInviteSheet(
+    onDismiss: () -> Unit,
+    onSubmit: (OrmaTeamInviteDraft) -> Unit,
+) {
+    var draft by remember { mutableStateOf(OrmaTeamInviteDraft()) }
+    var attemptedSubmit by rememberSaveable { mutableStateOf(false) }
+    val emailError = optionalOrmaEmailError(draft.inviteeEmail)
+    val phoneError = optionalOrmaPhoneError(draft.inviteePhoneNumber)
+    val hasContact = draft.inviteeEmail.trim().isNotBlank() || draft.inviteePhoneNumber.trim().isNotBlank()
+    val formReady = hasContact && emailError == null && phoneError == null
+    DashboardFormSheet(
+        title = "Invite team member",
+        body = "Prepare workspace access for a staff account. Owners can revoke the invite before it is used.",
+        onDismiss = onDismiss,
+    ) {
+        OrmaTextField(
+            value = draft.inviteeName,
+            onValueChange = { draft = draft.copy(inviteeName = it.take(120)) },
+            label = "Name",
+            placeholder = "Staff name",
+        )
+        OrmaTextField(
+            value = draft.inviteeEmail,
+            onValueChange = { draft = draft.copy(inviteeEmail = it.trim().take(160)) },
+            label = "Email",
+            placeholder = "staff@example.com",
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+        )
+        if (attemptedSubmit) emailError?.let { FormValidationText(it) }
+        OrmaCountryPhoneField(
+            value = draft.inviteePhoneNumber,
+            onValueChange = { draft = draft.copy(inviteePhoneNumber = it) },
+            supportingText = "Add phone when the staff member signs in with OTP.",
+            errorText = if (attemptedSubmit) phoneError else null,
+        )
+        Text(
+            text = "Role",
+            style = MaterialTheme.typography.labelLarge,
+            color = OrmaColors.TextSecondary,
+        )
+        OrmaSegmentedRow(
+            options = DashboardTeamInviteRoles,
+            selected = draft.role,
+            label = { teamRoleLabel(it) },
+            onSelected = { draft = draft.copy(role = it) },
+        )
+        if (attemptedSubmit && !hasContact) {
+            FormValidationText("Add an email or phone number.")
+        }
+        OrmaActionRow(
+            primaryText = "Create invite",
+            onPrimary = {
+                attemptedSubmit = true
+                if (formReady) {
+                    onSubmit(
+                        draft.copy(
+                            inviteeName = draft.inviteeName.trim(),
+                            inviteeEmail = draft.inviteeEmail.trim(),
+                            inviteePhoneNumber = draft.inviteePhoneNumber.trim(),
+                            role = draft.role.ifBlank { "team_member" },
+                        ),
+                    )
+                }
+            },
+            primaryEnabled = hasContact,
+            secondaryText = "Cancel",
+            onSecondary = LocalSmoothSheetDismiss.current ?: onDismiss,
+        )
+    }
+}
+
+@Composable
+private fun DashboardTeamMemberDetailsSheet(
+    member: OrmaTeamMember,
+    canRemove: Boolean,
+    actionLoading: Boolean,
+    onDismiss: () -> Unit,
+    onRemove: () -> Unit,
+) {
+    DashboardFormSheet(
+        title = "Team member details",
+        body = "Review this account before changing workspace access.",
+        onDismiss = onDismiss,
+    ) {
+        OrmaKeyValueList(
+            rows = listOf(
+                "Name" to member.dashboardDisplayName(),
+                "Email" to (member.email ?: "Not saved"),
+                "Phone" to (member.phoneNumber ?: "Not saved"),
+                "Role" to teamRoleLabel(member.role),
+                "Status" to member.status.dashboardTeamStatusLabel(),
+                "Joined" to member.joinedAt.dashboardDateLabel(),
+            ),
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OrmaSecondaryButton(
+                text = "Close details",
+                onClick = LocalSmoothSheetDismiss.current ?: onDismiss,
+                modifier = Modifier.weight(1f),
+            )
+            OrmaPrimaryButton(
+                text = "Remove",
+                onClick = onRemove,
+                modifier = Modifier.weight(1f),
+                enabled = canRemove && !actionLoading,
+            )
+        }
+    }
+}
+
+@Composable
+private fun DashboardTeamInviteDetailsSheet(
+    invite: OrmaTeamInvite,
+    actionLoading: Boolean,
+    onDismiss: () -> Unit,
+    onRevoke: () -> Unit,
+) {
+    DashboardFormSheet(
+        title = "Invite details",
+        body = "Review the pending invite before sharing or revoking it.",
+        onDismiss = onDismiss,
+    ) {
+        OrmaKeyValueList(
+            rows = listOf(
+                "Invitee" to invite.dashboardInviteName(),
+                "Contact" to invite.dashboardInviteContact(),
+                "Role" to teamRoleLabel(invite.role),
+                "Status" to invite.status.dashboardInviteStatusLabel(),
+                "Code" to invite.code.ifBlank { "Not available" },
+                "Created" to invite.createdAt.dashboardDateLabel(),
+                "Expires" to (invite.expiresAt?.dashboardDateLabel() ?: "No expiry"),
+                "Created by" to (invite.createdByDisplayName ?: invite.createdByEmail ?: "Workspace owner"),
+            ),
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OrmaSecondaryButton(
+                text = "Close details",
+                onClick = LocalSmoothSheetDismiss.current ?: onDismiss,
+                modifier = Modifier.weight(1f),
+            )
+            OrmaPrimaryButton(
+                text = "Revoke",
+                onClick = onRevoke,
+                modifier = Modifier.weight(1f),
+                enabled = !actionLoading,
+            )
+        }
+    }
+}
+
+@Composable
 @OptIn(ExperimentalFoundationApi::class)
 private fun DashboardTeamMembersTable(
     members: List<OrmaTeamMember>,
@@ -21677,92 +22756,98 @@ private fun DashboardTeamMembersTable(
     onRemoveMember: (OrmaTeamMember) -> Unit,
     onSortChange: (String) -> Unit,
 ) {
-    LazyColumn(
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(max = 520.dp),
-    ) {
-        stickyHeader {
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                color = OrmaColors.CardBackground,
-                contentColor = OrmaColors.TextPrimary,
-                tonalElevation = 0.dp,
-                shadowElevation = 0.dp,
+    val minTableWidth = if (canInviteMembers) 940.dp else 680.dp
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val tableWidth = if (maxWidth > minTableWidth) maxWidth else minTableWidth
+        Box(modifier = Modifier.horizontalScroll(rememberScrollState())) {
+            LazyColumn(
+                modifier = Modifier
+                    .width(tableWidth)
+                    .heightIn(max = 520.dp),
             ) {
-                Column {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 10.dp, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
+                stickyHeader {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = OrmaColors.CardBackground,
+                        contentColor = OrmaColors.TextPrimary,
+                        tonalElevation = 0.dp,
+                        shadowElevation = 0.dp,
                     ) {
-                        DashboardSaleHeaderCell(
-                            text = "Member",
-                            sortKey = DashboardTeamSortMember,
-                            activeSortKey = sortKey,
-                            sortAscending = sortAscending,
-                            onSortChange = onSortChange,
-                            modifier = Modifier.weight(1.05f),
-                        )
-                        DashboardSaleHeaderCell(
-                            text = "Contact",
-                            sortKey = DashboardTeamSortContact,
-                            activeSortKey = sortKey,
-                            sortAscending = sortAscending,
-                            onSortChange = onSortChange,
-                            modifier = Modifier.weight(1.15f),
-                        )
-                        DashboardSaleHeaderCell(
-                            text = "Role",
-                            sortKey = DashboardTeamSortRole,
-                            activeSortKey = sortKey,
-                            sortAscending = sortAscending,
-                            onSortChange = onSortChange,
-                            modifier = Modifier.weight(0.85f),
-                        )
-                        DashboardSaleHeaderCell(
-                            text = "Joined",
-                            sortKey = DashboardTeamSortJoined,
-                            activeSortKey = sortKey,
-                            sortAscending = sortAscending,
-                            onSortChange = onSortChange,
-                            modifier = Modifier.weight(0.85f),
-                        )
-                        if (canInviteMembers) {
-                            Text(
-                                text = "ACTIONS",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = OrmaColors.TextSecondary,
-                                letterSpacing = 1.8.sp,
-                                modifier = Modifier.weight(0.95f),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
+                        Column {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                DashboardSaleHeaderCell(
+                                    text = "Member",
+                                    sortKey = DashboardTeamSortMember,
+                                    activeSortKey = sortKey,
+                                    sortAscending = sortAscending,
+                                    onSortChange = onSortChange,
+                                    modifier = Modifier.weight(1.05f),
+                                )
+                                DashboardSaleHeaderCell(
+                                    text = "Contact",
+                                    sortKey = DashboardTeamSortContact,
+                                    activeSortKey = sortKey,
+                                    sortAscending = sortAscending,
+                                    onSortChange = onSortChange,
+                                    modifier = Modifier.weight(1.15f),
+                                )
+                                DashboardSaleHeaderCell(
+                                    text = "Role",
+                                    sortKey = DashboardTeamSortRole,
+                                    activeSortKey = sortKey,
+                                    sortAscending = sortAscending,
+                                    onSortChange = onSortChange,
+                                    modifier = Modifier.weight(0.85f),
+                                )
+                                DashboardSaleHeaderCell(
+                                    text = "Joined",
+                                    sortKey = DashboardTeamSortJoined,
+                                    activeSortKey = sortKey,
+                                    sortAscending = sortAscending,
+                                    onSortChange = onSortChange,
+                                    modifier = Modifier.weight(0.85f),
+                                )
+                                if (canInviteMembers) {
+                                    Text(
+                                        text = "ACTIONS",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = OrmaColors.TextSecondary,
+                                        letterSpacing = 1.8.sp,
+                                        modifier = Modifier.weight(0.95f),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                            HorizontalDivider(
+                                modifier = Modifier.padding(horizontal = 10.dp),
+                                thickness = 0.8.dp,
+                                color = OrmaColors.CellBackground.copy(alpha = 0.72f),
                             )
                         }
                     }
-                    HorizontalDivider(
-                        modifier = Modifier.padding(horizontal = 10.dp),
-                        thickness = 0.8.dp,
-                        color = OrmaColors.CellBackground.copy(alpha = 0.72f),
+                }
+                itemsIndexed(
+                    items = members,
+                    key = { _, member -> member.id },
+                ) { index, member ->
+                    DashboardWideTeamMemberRow(
+                        member = member,
+                        zebra = index % 2 == 1,
+                        canInviteMembers = canInviteMembers,
+                        currentMemberId = currentMemberId,
+                        actionLoading = actionLoading,
+                        onOpenMember = onOpenMember,
+                        onRemoveMember = onRemoveMember,
                     )
                 }
             }
-        }
-        itemsIndexed(
-            items = members,
-            key = { _, member -> member.id },
-        ) { index, member ->
-            DashboardWideTeamMemberRow(
-                member = member,
-                zebra = index % 2 == 1,
-                canInviteMembers = canInviteMembers,
-                currentMemberId = currentMemberId,
-                actionLoading = actionLoading,
-                onOpenMember = onOpenMember,
-                onRemoveMember = onRemoveMember,
-            )
         }
     }
 }
@@ -21864,7 +22949,7 @@ private fun DashboardTeamAccessPanel(
         ?: if (state.accessPath == AccessPath.TeamMember) "Active" else "Owner"
     val title = if (canInviteMembers) "Access policy" else "My workspace access"
     val body = if (canInviteMembers) {
-        "Use this page as the workspace access audit before changing account or business setup."
+        "Owner access can invite staff, revoke pending invites, and remove active team members."
     } else {
         "This is the role and contact ORMA resolved for your signed-in account."
     }
@@ -21898,8 +22983,8 @@ private fun DashboardTeamAccessPanel(
         }
         if (canInviteMembers) {
             DashboardChecklistRow(text = "${state.dashboard.teamMembers.size} members are currently linked to this workspace.")
-            DashboardChecklistRow(text = "Owner access can manage workspace-level team changes.")
-            DashboardChecklistRow(text = "Refresh after backend role or invite changes.")
+            DashboardChecklistRow(text = "${state.dashboard.teamInvites.size} pending invites can be reviewed or revoked.")
+            DashboardChecklistRow(text = "Owner and current-session access are protected from accidental removal.")
         } else {
             OrmaKeyValueList(
                 rows = listOf(
@@ -22037,6 +23122,35 @@ private fun String.dashboardTeamStatusLabel(): String = when (trim().lowercase()
     else -> trim().replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }.ifBlank { "Active" }
 }
 
+private val DashboardTeamInviteRoles = listOf(
+    "team_member",
+    "manager",
+    "cashier",
+    "sales_staff",
+    "inventory_manager",
+    "accountant",
+)
+
+private fun OrmaTeamInvite.dashboardInviteName(): String =
+    inviteeName?.takeIf { it.isNotBlank() }
+        ?: inviteeEmail?.substringBefore("@")?.takeIf { it.isNotBlank() }
+        ?: inviteePhoneNumber?.takeIf { it.isNotBlank() }
+        ?: "Team invite"
+
+private fun OrmaTeamInvite.dashboardInviteContact(): String =
+    listOfNotNull(
+        inviteeEmail?.takeIf { it.isNotBlank() },
+        inviteePhoneNumber?.takeIf { it.isNotBlank() },
+    ).joinToString(" / ").ifBlank { "No contact saved" }
+
+private fun String.dashboardInviteStatusLabel(): String = when (trim().lowercase()) {
+    "active", "pending" -> "Pending"
+    "revoked" -> "Revoked"
+    "accepted" -> "Accepted"
+    "expired" -> "Expired"
+    else -> trim().replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }.ifBlank { "Pending" }
+}
+
 private fun String.dashboardDateLabel(): String =
     trim()
         .replace("T", " ")
@@ -22058,9 +23172,9 @@ private fun DashboardTeamGuideCard(
         title = if (canInviteMembers) "Team access" else "Team member setup",
         items = if (canInviteMembers) {
             listOf(
-                "Active members are linked to this workspace by the backend.",
-                "Use Account when you need to switch or sign out.",
-                "Team access is shown here after the backend links a user to this workspace.",
+                "Create an invite with email or phone for each staff member.",
+                "Open Details before removing any active member.",
+                "Revoked invites disappear from the pending queue after sync.",
             )
         } else {
             listOf(

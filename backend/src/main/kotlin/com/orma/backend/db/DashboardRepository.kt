@@ -109,6 +109,7 @@ sealed interface PublicCatalogOrderSubmitResult {
 private val ProductCsvColumns = listOf(
     "name",
     "itemType",
+    "categoryName",
     "sku",
     "barcode",
     "description",
@@ -2291,11 +2292,14 @@ class DashboardRepository(
                         or coalesce(phone_number, '') ilike ?
                         or coalesce(email, '') ilike ?
                         or coalesce(tax_number, '') ilike ?
+                        or coalesce(payment_terms, '') ilike ?
+                        or coalesce(payment_mode, '') ilike ?
+                        or coalesce(payment_reference, '') ilike ?
                         or coalesce(notes, '') ilike ?
                     )
                     """.trimIndent(),
                 )
-                repeat(5) { params.add(search.ilikePattern()) }
+                repeat(8) { params.add(search.ilikePattern()) }
             }
             appendCreatedDateWhere(filters, params, "created_at")
             append(" order by created_at desc")
@@ -2320,9 +2324,11 @@ class DashboardRepository(
     private fun Connection.insertSupplier(workspaceId: String, request: SupplierRequest): SupplierResponse {
         val sql = """
             insert into suppliers (
-                workspace_id, name, phone_number, email, tax_number, address_line, notes, updated_at
+                workspace_id, name, phone_number, email, tax_number, address_line,
+                payment_terms, payment_mode, payment_reference, payable_total, paid_total,
+                currency, last_payment_at, notes, updated_at
             )
-            values (?::uuid, ?, ?, ?, ?, ?, ?, now())
+            values (?::uuid, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::timestamptz, ?, now())
             returning *
         """.trimIndent()
         return prepareStatement(sql).use { statement ->
@@ -2343,14 +2349,16 @@ class DashboardRepository(
         val sql = """
             update suppliers
             set name = ?, phone_number = ?, email = ?, tax_number = ?,
-                address_line = ?, notes = ?, updated_at = now()
+                address_line = ?, payment_terms = ?, payment_mode = ?, payment_reference = ?,
+                payable_total = ?, paid_total = ?, currency = ?, last_payment_at = ?::timestamptz,
+                notes = ?, updated_at = now()
             where id = ?::uuid and workspace_id = ?::uuid
             returning *
         """.trimIndent()
         return prepareStatement(sql).use { statement ->
             statement.bindSupplierRequest(request, startIndex = 1)
-            statement.setString(7, supplierId)
-            statement.setString(8, workspaceId)
+            statement.setString(14, supplierId)
+            statement.setString(15, workspaceId)
             statement.executeQuery().use { result ->
                 if (result.next()) result.toSupplierResponse() else null
             }
@@ -3701,7 +3709,14 @@ class DashboardRepository(
         setNullableString(startIndex + 2, request.email?.cleanOptional()?.lowercase())
         setNullableString(startIndex + 3, request.taxNumber?.cleanOptionalUpper())
         setNullableString(startIndex + 4, request.addressLine?.cleanOptional())
-        setNullableString(startIndex + 5, request.notes?.cleanOptional())
+        setNullableString(startIndex + 5, request.paymentTerms?.cleanOptional())
+        setNullableString(startIndex + 6, request.paymentMode?.cleanOptional())
+        setNullableString(startIndex + 7, request.paymentReference?.cleanOptional())
+        setBigDecimal(startIndex + 8, request.payableTotal.orEmpty().moneyOrZero())
+        setBigDecimal(startIndex + 9, request.paidTotal.orEmpty().moneyOrZero())
+        setString(startIndex + 10, request.currency?.cleanOptionalUpper() ?: "INR")
+        setNullableString(startIndex + 11, request.lastPaymentAt?.cleanOptional())
+        setNullableString(startIndex + 12, request.notes?.cleanOptional())
     }
 
     private fun PreparedStatement.bindProductRequest(
@@ -3869,19 +3884,31 @@ class DashboardRepository(
             updatedAt = getString("updated_at"),
         )
 
-    private fun ResultSet.toSupplierResponse(): SupplierResponse =
-        SupplierResponse(
+    private fun ResultSet.toSupplierResponse(): SupplierResponse {
+        val payableTotal = getBigDecimal("payable_total") ?: BigDecimal.ZERO
+        val paidTotal = getBigDecimal("paid_total") ?: BigDecimal.ZERO
+        val balanceDue = (payableTotal - paidTotal).coerceAtLeast(BigDecimal.ZERO)
+        return SupplierResponse(
             id = getString("id"),
             name = getString("name"),
             phoneNumber = getString("phone_number"),
             email = getString("email"),
             taxNumber = getString("tax_number"),
             addressLine = getString("address_line"),
+            paymentTerms = getString("payment_terms"),
+            paymentMode = getString("payment_mode"),
+            paymentReference = getString("payment_reference"),
+            payableTotal = payableTotal.moneyString(),
+            paidTotal = paidTotal.moneyString(),
+            balanceDue = balanceDue.moneyString(),
+            currency = getString("currency") ?: "INR",
+            lastPaymentAt = getString("last_payment_at"),
             notes = getString("notes"),
             status = getString("status"),
             createdAt = getString("created_at"),
             updatedAt = getString("updated_at"),
         )
+    }
 
     private fun ResultSet.toProductResponse(): ProductResponse {
         val stockQuantity = getBigDecimal("stock_quantity") ?: BigDecimal.ZERO
@@ -4728,6 +4755,7 @@ class DashboardRepository(
                 ProductImportRowRequest(
                     name = row.value("name", "productName", "itemName", "item"),
                     itemType = row.value("itemType", "item type", "type", "sellableType").ifBlank { "product" },
+                    categoryName = row.value("categoryName", "category name", "category"),
                     sku = row.value("sku"),
                     barcode = row.value("barcode", "barCode", "ean", "upc"),
                     description = row.value("description", "details"),
@@ -4851,6 +4879,7 @@ class DashboardRepository(
         ProductRequest(
             name = productName,
             itemType = itemType,
+            categoryName = categoryName,
             sku = sku,
             barcode = barcode,
             description = description,
@@ -4874,6 +4903,7 @@ class DashboardRepository(
             listOf(
                 product.name,
                 product.itemType,
+                product.categoryName.orEmpty(),
                 product.sku.orEmpty(),
                 product.barcode.orEmpty(),
                 product.description.orEmpty(),
