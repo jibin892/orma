@@ -2362,10 +2362,11 @@ class DashboardRepository(
     ): PagedResult<ProductCategoryResponse> {
         val params = mutableListOf(workspaceId)
         val search = filters.query.cleanSearchTerm()
+        val itemType = filters.itemType.cleanItemTypeFilter()
         val sql = buildString {
             append(
                 """
-                select id::text, name, sort_order, status, created_at::text, updated_at::text,
+                select id::text, name, item_type, sort_order, status, created_at::text, updated_at::text,
                     count(*) over()::int as total_count
                 from product_categories
                 where workspace_id = ?::uuid and status = 'active'
@@ -2375,8 +2376,13 @@ class DashboardRepository(
                 append(" and name ilike ?")
                 params.add(search.ilikePattern())
             }
+            if (itemType != null) {
+                append(" and (item_type = ? or item_type = 'all')")
+                params.add(itemType)
+            }
             appendCreatedDateWhere(filters, params, "created_at")
-            append(" order by sort_order asc, name asc limit ${filters.limit.sanitizedLimit()} offset ${filters.offset()}")
+            append(" order by case when item_type = 'all' then 0 else 1 end, sort_order asc, name asc")
+            append(" limit ${filters.limit.sanitizedLimit()} offset ${filters.offset()}")
         }
         return prepareStatement(sql).use { statement ->
             statement.bindStringParams(params)
@@ -2397,17 +2403,63 @@ class DashboardRepository(
         workspaceId: String,
         request: ProductCategoryRequest,
     ): ProductCategoryResponse {
+        val name = request.name.cleanName()
+        val itemType = request.itemType.cleanCategoryItemType()
+        prepareStatement(
+            """
+            select id::text, name, item_type, sort_order, status, created_at::text, updated_at::text
+            from product_categories
+            where workspace_id = ?::uuid
+              and item_type = ?
+              and lower(name) = lower(?)
+            limit 1
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setString(1, workspaceId)
+            statement.setString(2, itemType)
+            statement.setString(3, name)
+            statement.executeQuery().use { result ->
+                if (result.next()) {
+                    return updateProductCategorySort(
+                        workspaceId = workspaceId,
+                        categoryId = result.getString("id"),
+                        sortOrder = request.sortOrder,
+                    )
+                }
+            }
+        }
         val sql = """
-            insert into product_categories (workspace_id, name, sort_order, updated_at)
-            values (?::uuid, ?, ?, now())
-            on conflict (workspace_id, name) do update
-            set sort_order = excluded.sort_order, status = 'active', updated_at = now()
-            returning id::text, name, sort_order, status, created_at::text, updated_at::text
+            insert into product_categories (workspace_id, name, item_type, sort_order, updated_at)
+            values (?::uuid, ?, ?, ?, now())
+            returning id::text, name, item_type, sort_order, status, created_at::text, updated_at::text
         """.trimIndent()
         return prepareStatement(sql).use { statement ->
             statement.setString(1, workspaceId)
-            statement.setString(2, request.name.cleanName())
-            statement.setInt(3, request.sortOrder.coerceIn(0, 999))
+            statement.setString(2, name)
+            statement.setString(3, itemType)
+            statement.setInt(4, request.sortOrder.coerceIn(0, 999))
+            statement.executeQuery().use { result ->
+                result.next()
+                result.toProductCategoryResponse()
+            }
+        }
+    }
+
+    private fun Connection.updateProductCategorySort(
+        workspaceId: String,
+        categoryId: String,
+        sortOrder: Int,
+    ): ProductCategoryResponse {
+        val sql = """
+            update product_categories
+            set sort_order = ?, status = 'active', updated_at = now()
+            where id = ?::uuid and workspace_id = ?::uuid
+            returning id::text, name, item_type, sort_order, status, created_at::text, updated_at::text
+        """.trimIndent()
+        return prepareStatement(sql).use { statement ->
+            statement.setInt(1, sortOrder.coerceIn(0, 999))
+            statement.setString(2, categoryId)
+            statement.setString(3, workspaceId)
             statement.executeQuery().use { result ->
                 result.next()
                 result.toProductCategoryResponse()
