@@ -80,6 +80,11 @@ data class DashboardQueryFilters(
     val scheduledOnly: Boolean = false,
 )
 
+class DashboardOrderValidationException(
+    val code: String,
+    publicMessage: String,
+) : IllegalArgumentException(publicMessage)
+
 data class PagedResult<T>(
     val items: List<T>,
     val pagination: PaginationResponse,
@@ -2664,8 +2669,11 @@ class DashboardRepository(
     ): OrderResponse {
         val status = request.status.normalizedOrderStatus()
         val orderType = request.orderType.cleanOrderType()
-        require(orderType != "appointment" || request.scheduledAt.cleanOptional() != null) {
-            "Appointment orders require a preferred date/time."
+        if (orderType == "appointment" && request.scheduledAt.cleanOptional() == null) {
+            throw DashboardOrderValidationException(
+                code = "appointment_time_required",
+                publicMessage = "Choose a preferred date and time for this appointment.",
+            )
         }
         val currency = request.currency?.cleanOptionalUpper() ?: access.currency
         val customerId = request.customerId.cleanUuidOrNull()
@@ -2684,6 +2692,7 @@ class DashboardRepository(
                 ).id
             }
         val preparedItems = request.items.map { it.toPreparedOrderItem() }
+        validateOrderCatalogItemTypes(access.workspaceId, orderType, preparedItems)
         val subtotal = preparedItems.fold(BigDecimal.ZERO) { total, item -> total.add(item.lineSubtotal) }.scaled()
         val taxTotal = preparedItems.fold(BigDecimal.ZERO) { total, item -> total.add(item.lineTax) }.scaled()
         val total = preparedItems.fold(BigDecimal.ZERO) { sum, item -> sum.add(item.lineTotal) }.scaled()
@@ -2751,8 +2760,11 @@ class DashboardRepository(
         val cleanOrderId = orderId.cleanUuidOrNull() ?: return null
         val status = request.status.normalizedOrderStatus()
         val orderType = request.orderType.cleanOrderType()
-        require(orderType != "appointment" || request.scheduledAt.cleanOptional() != null) {
-            "Appointment orders require a preferred date/time."
+        if (orderType == "appointment" && request.scheduledAt.cleanOptional() == null) {
+            throw DashboardOrderValidationException(
+                code = "appointment_time_required",
+                publicMessage = "Choose a preferred date and time for this appointment.",
+            )
         }
         val currentSql = """
             select order_number, inventory_applied
@@ -2788,6 +2800,7 @@ class DashboardRepository(
                 ).id
             }
         val preparedItems = request.items.map { it.toPreparedOrderItem() }
+        validateOrderCatalogItemTypes(access.workspaceId, orderType, preparedItems)
         val subtotal = preparedItems.fold(BigDecimal.ZERO) { total, item -> total.add(item.lineSubtotal) }.scaled()
         val taxTotal = preparedItems.fold(BigDecimal.ZERO) { total, item -> total.add(item.lineTax) }.scaled()
         val total = preparedItems.fold(BigDecimal.ZERO) { sum, item -> sum.add(item.lineTotal) }.scaled()
@@ -3422,6 +3435,62 @@ class DashboardRepository(
             lineTotal = lineSubtotal.add(lineTax).scaled(),
         )
     }
+
+    private fun Connection.validateOrderCatalogItemTypes(
+        workspaceId: String,
+        orderType: String,
+        items: List<PreparedOrderItem>,
+    ) {
+        val productIds = items.mapNotNull { it.productId }.distinct()
+        if (productIds.isEmpty()) return
+
+        val expectedItemType = orderType.expectedCatalogItemType()
+        val placeholders = productIds.joinToString(", ") { "?::uuid" }
+        val products = mutableMapOf<String, Pair<String, String>>()
+        prepareStatement(
+            """
+            select id::text, item_type, name
+            from products
+            where workspace_id = ?::uuid and status = 'active' and id in ($placeholders)
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setString(1, workspaceId)
+            productIds.forEachIndexed { index, productId ->
+                statement.setString(index + 2, productId)
+            }
+            statement.executeQuery().use { result ->
+                while (result.next()) {
+                    products[result.getString("id")] = result.getString("item_type") to result.getString("name")
+                }
+            }
+        }
+
+        if (productIds.any { it !in products }) {
+            throw DashboardOrderValidationException(
+                code = "order_item_catalog_missing",
+                publicMessage = "One or more selected catalog items are no longer available.",
+            )
+        }
+        val wrongType = products.values.firstOrNull { (itemType, _) -> itemType != expectedItemType } ?: return
+        throw DashboardOrderValidationException(
+            code = "order_item_type_mismatch",
+            publicMessage = orderType.orderCatalogMismatchMessage(wrongType.second),
+        )
+    }
+
+    private fun String.expectedCatalogItemType(): String =
+        when (cleanOrderType()) {
+            "service" -> "service"
+            "appointment" -> "appointment"
+            else -> "product"
+        }
+
+    private fun String.orderCatalogMismatchMessage(itemName: String): String =
+        when (cleanOrderType()) {
+            "service" -> "Service requests can only use service catalog items. Remove $itemName or change the order type."
+            "appointment" -> "Appointment bookings can only use appointment catalog items. Remove $itemName or change the order type."
+            else -> "Sales can only use product catalog items. Remove $itemName or change the order type."
+        }
 
     private fun OrderRequest.toCustomerRequest(name: String): CustomerRequest =
         CustomerRequest(

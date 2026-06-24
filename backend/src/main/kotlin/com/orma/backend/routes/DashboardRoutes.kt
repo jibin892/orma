@@ -1,7 +1,9 @@
 package com.orma.backend.routes
 
+import com.orma.backend.auth.VerifiedFirebaseUser
 import com.orma.backend.config.AppConfig
 import com.orma.backend.db.DashboardQueryFilters
+import com.orma.backend.db.DashboardOrderValidationException
 import com.orma.backend.db.DashboardRepository
 import com.orma.backend.db.PublicCatalogOrderSubmitResult
 import com.orma.backend.models.CustomerListResponse
@@ -35,6 +37,8 @@ import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.put
+import java.math.BigDecimal
+import java.math.RoundingMode
 import java.time.LocalDate
 
 fun Route.dashboardRoutes(
@@ -332,7 +336,12 @@ fun Route.dashboardRoutes(
             call.respondValidation("appointment_time_required", "Choose a preferred date and time for this appointment.")
             return@post
         }
-        val order = repository.createOrder(firebaseUser, request)
+        val order = try {
+            repository.createOrder(firebaseUser, request)
+        } catch (error: DashboardOrderValidationException) {
+            call.respondValidation(error.code, error.message ?: "Check the order details.")
+            return@post
+        }
         if (order != null) {
             orderNotificationService?.notifyOrderCreated(order)
         }
@@ -359,7 +368,13 @@ fun Route.dashboardRoutes(
             call.respondValidation("appointment_time_required", "Choose a preferred date and time for this appointment.")
             return@put
         }
-        call.respondWorkspaceResult(repository.updateOrder(firebaseUser, orderId, request))
+        val order = try {
+            repository.updateOrder(firebaseUser, orderId, request)
+        } catch (error: DashboardOrderValidationException) {
+            call.respondValidation(error.code, error.message ?: "Check the order details.")
+            return@put
+        }
+        call.respondWorkspaceResult(order)
     }
 
     put("/orders/{id}/status") {
@@ -371,6 +386,7 @@ fun Route.dashboardRoutes(
             call.respondValidation("order_status_required", "Choose an order status.")
             return@put
         }
+        if (call.respondOrderStatusPaymentValidation(repository, firebaseUser, orderId, request)) return@put
         call.respondWorkspaceResult(repository.updateOrderStatus(firebaseUser, orderId, request.status, request.paidTotal))
     }
 
@@ -383,6 +399,7 @@ fun Route.dashboardRoutes(
             call.respondValidation("order_status_required", "Choose an order status.")
             return@post
         }
+        if (call.respondOrderStatusPaymentValidation(repository, firebaseUser, orderId, request)) return@post
         call.respondWorkspaceResult(repository.updateOrderStatus(firebaseUser, orderId, request.status, request.paidTotal))
     }
 
@@ -468,6 +485,47 @@ private fun String.normalizedDashboardOrderType(): String {
         else -> "sale"
     }
 }
+
+private suspend fun ApplicationCall.respondOrderStatusPaymentValidation(
+    repository: DashboardRepository,
+    firebaseUser: VerifiedFirebaseUser,
+    orderId: String,
+    request: OrderStatusRequest,
+): Boolean {
+    if (request.status.normalizedDashboardOrderStatus() != "part_paid") return false
+    val order = repository.order(firebaseUser, orderId) ?: run {
+        workspaceNotFound()
+        return true
+    }
+    val validation = partPaidAmountValidation(request.paidTotal, order.total) ?: return false
+    respondValidation(validation.first, validation.second)
+    return true
+}
+
+private fun partPaidAmountValidation(amount: String?, total: String): Pair<String, String>? {
+    val cleanAmount = amount?.trim().orEmpty()
+    if (cleanAmount.isBlank()) {
+        return "part_paid_amount_required" to "Enter the amount collected."
+    }
+    val paidAmount = cleanAmount.dashboardMoneyOrNull()
+        ?: return "part_paid_amount_invalid" to "Enter a valid amount."
+    val totalAmount = total.dashboardMoneyOrNull() ?: BigDecimal.ZERO
+    return when {
+        totalAmount <= BigDecimal.ZERO -> "part_paid_total_invalid" to "Order total must be above zero before recording payment."
+        paidAmount <= BigDecimal.ZERO -> "part_paid_amount_invalid" to "Enter an amount above zero."
+        paidAmount >= totalAmount -> "part_paid_amount_too_high" to "For full collection, choose Paid instead of Part paid."
+        else -> null
+    }
+}
+
+private fun String.normalizedDashboardOrderStatus(): String =
+    trim().lowercase().replace("-", "_").filter { it.isLetterOrDigit() || it == '_' }
+
+private fun String.dashboardMoneyOrNull(): BigDecimal? =
+    trim()
+        .replace(",", "")
+        .toBigDecimalOrNull()
+        ?.setScale(2, RoundingMode.HALF_UP)
 
 private fun String.normalizedOfferScope(): String {
     val normalized = trim().lowercase().replace("-", "_").filter { it.isLetterOrDigit() || it == '_' }
