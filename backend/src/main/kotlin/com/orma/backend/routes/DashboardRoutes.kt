@@ -286,7 +286,13 @@ fun Route.dashboardRoutes(
             call.respondValidation("product_expiry_invalid", "Choose a valid expiry date.")
             return@post
         }
-        call.respondWorkspaceResult(repository.createProduct(firebaseUser, request))
+        val product = try {
+            repository.createProduct(firebaseUser, request)
+        } catch (error: DashboardOrderValidationException) {
+            call.respondValidation(error.code, error.message ?: "Check the item details.")
+            return@post
+        }
+        call.respondWorkspaceResult(product)
     }
 
     put("/products/{id}") {
@@ -302,7 +308,13 @@ fun Route.dashboardRoutes(
             call.respondValidation("product_expiry_invalid", "Choose a valid expiry date.")
             return@put
         }
-        call.respondWorkspaceResult(repository.updateProduct(firebaseUser, productId, request))
+        val product = try {
+            repository.updateProduct(firebaseUser, productId, request)
+        } catch (error: DashboardOrderValidationException) {
+            call.respondValidation(error.code, error.message ?: "Check the item details.")
+            return@put
+        }
+        call.respondWorkspaceResult(product)
     }
 
     post("/products/{id}/stock-adjustments") {

@@ -758,6 +758,7 @@ class DashboardRepository(
                     connection.rollback()
                     return@withContext null
                 }
+                request.validateCatalogItemForSave()
                 val product = connection.insertProduct(access, request)
                 if (request.trackStock && request.stockQuantity.decimalOrZero() != BigDecimal.ZERO) {
                     connection.insertStockMovement(
@@ -787,6 +788,7 @@ class DashboardRepository(
     ): ProductResponse? = withContext(Dispatchers.IO) {
         dataSource.connection.use { connection ->
             val access = connection.resolveWorkspaceAccess(firebaseUser) ?: return@withContext null
+            request.validateCatalogItemForSave()
             connection.updateProduct(access, productId, request)
         }
     }
@@ -2696,6 +2698,8 @@ class DashboardRepository(
         val subtotal = preparedItems.fold(BigDecimal.ZERO) { total, item -> total.add(item.lineSubtotal) }.scaled()
         val taxTotal = preparedItems.fold(BigDecimal.ZERO) { total, item -> total.add(item.lineTax) }.scaled()
         val total = preparedItems.fold(BigDecimal.ZERO) { sum, item -> sum.add(item.lineTotal) }.scaled()
+        val paymentMode = request.paymentMode.cleanPaymentMode()
+        validateCreditPaymentStatus(paymentMode, status)
         val requestedPaidTotal = request.paidTotal.moneyOrZero().coerceAtMost(total)
         val paidTotal = if (status.impliesFullPayment() && requestedPaidTotal <= BigDecimal.ZERO) {
             total
@@ -2735,7 +2739,7 @@ class DashboardRepository(
             statement.setString(14, access.userId)
             statement.setString(15, request.source.cleanOrderSource())
             statement.setString(16, request.fulfillmentType.cleanFulfillmentType())
-            statement.setString(17, request.paymentMode.cleanPaymentMode())
+            statement.setString(17, paymentMode)
             statement.executeQuery().use { result ->
                 result.next()
                 result.getString("id")
@@ -2804,6 +2808,8 @@ class DashboardRepository(
         val subtotal = preparedItems.fold(BigDecimal.ZERO) { total, item -> total.add(item.lineSubtotal) }.scaled()
         val taxTotal = preparedItems.fold(BigDecimal.ZERO) { total, item -> total.add(item.lineTax) }.scaled()
         val total = preparedItems.fold(BigDecimal.ZERO) { sum, item -> sum.add(item.lineTotal) }.scaled()
+        val paymentMode = request.paymentMode.cleanPaymentMode()
+        validateCreditPaymentStatus(paymentMode, status)
         val requestedPaidTotal = request.paidTotal.moneyOrZero().coerceAtMost(total)
         val paidTotal = if (status.impliesFullPayment() && requestedPaidTotal <= BigDecimal.ZERO) {
             total
@@ -2861,7 +2867,7 @@ class DashboardRepository(
             statement.setBoolean(11, inventoryShouldBeApplied)
             statement.setString(12, request.source.cleanOrderSource())
             statement.setString(13, request.fulfillmentType.cleanFulfillmentType())
-            statement.setString(14, request.paymentMode.cleanPaymentMode())
+            statement.setString(14, paymentMode)
             statement.setString(15, cleanOrderId)
             statement.setString(16, access.workspaceId)
             statement.executeUpdate()
@@ -2885,7 +2891,7 @@ class DashboardRepository(
     ): OrderResponse? {
         val status = requestedStatus.normalizedOrderStatus()
         val currentSql = """
-            select status, inventory_applied, total
+            select status, inventory_applied, total, payment_mode
             from orders
             where id = ?::uuid and workspace_id = ?::uuid
             for update
@@ -2899,6 +2905,7 @@ class DashboardRepository(
                     status = result.getString("status"),
                     inventoryApplied = result.getBoolean("inventory_applied"),
                     total = result.getBigDecimal("total") ?: BigDecimal.ZERO,
+                    paymentMode = result.getString("payment_mode") ?: "pay_on_spot",
                 )
             }
         }
@@ -2918,6 +2925,10 @@ class DashboardRepository(
                     when ? and coalesce(paid_total, 0) <= 0 then total
                     else paid_total
                 end,
+                payment_mode = case
+                    when ? then 'pay_on_spot'
+                    else payment_mode
+                end,
                 updated_at = now()
             where id = ?::uuid and workspace_id = ?::uuid
             """.trimIndent(),
@@ -2927,8 +2938,9 @@ class DashboardRepository(
             statement.setBoolean(3, cleanRequestedPaidTotal != null)
             statement.setBigDecimal(4, cleanRequestedPaidTotal ?: BigDecimal.ZERO)
             statement.setBoolean(5, status.impliesFullPayment())
-            statement.setString(6, orderId)
-            statement.setString(7, access.workspaceId)
+            statement.setBoolean(6, current.paymentMode == "credit" && status.impliesFullPayment())
+            statement.setString(7, orderId)
+            statement.setString(8, access.workspaceId)
             statement.executeUpdate()
         }
         if (shouldApplyInventory) {
@@ -3830,10 +3842,19 @@ class DashboardRepository(
 
     private fun String.cleanPaymentMode(): String {
         val normalized = trim().lowercase().replace("-", "_").filter { it.isLetterOrDigit() || it == '_' }
-        return if (normalized in setOf("pay_on_spot", "upi", "cash", "card", "online", "bank_transfer")) {
+        return if (normalized in setOf("pay_on_spot", "upi", "cash", "card", "credit", "online", "bank_transfer")) {
             normalized
         } else {
             "pay_on_spot"
+        }
+    }
+
+    private fun validateCreditPaymentStatus(paymentMode: String, status: String) {
+        if (paymentMode == "credit" && status.impliesFullPayment()) {
+            throw DashboardOrderValidationException(
+                code = "credit_payment_status_invalid",
+                publicMessage = "Credit sales must stay open until payment is collected.",
+            )
         }
     }
 
@@ -4099,6 +4120,15 @@ class DashboardRepository(
         }
     }
 
+    private fun ProductRequest.validateCatalogItemForSave() {
+        if (itemType.cleanItemType() == "appointment" && (durationMinutes ?: 0) <= 0) {
+            throw DashboardOrderValidationException(
+                code = "appointment_duration_required",
+                publicMessage = "Appointment items need a duration in minutes.",
+            )
+        }
+    }
+
     private fun String.isValidNonNegativeDecimal(): Boolean {
         val value = trim().replace(",", "")
         if (value.isBlank()) return true
@@ -4204,6 +4234,7 @@ class DashboardRepository(
         val status: String,
         val inventoryApplied: Boolean,
         val total: BigDecimal,
+        val paymentMode: String,
     )
 
     private data class PublicCatalogPreparedItem(
