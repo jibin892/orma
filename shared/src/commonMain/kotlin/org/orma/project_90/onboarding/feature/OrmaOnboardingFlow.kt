@@ -18,6 +18,7 @@ import org.orma.project_90.backend.OrmaBackendSession
 import org.orma.project_90.backend.OrmaCustomerDraft
 import org.orma.project_90.backend.OrmaDashboardFilters
 import org.orma.project_90.backend.OrmaMetaConnectionDraft
+import org.orma.project_90.backend.OrmaMetaWhatsAppTemplateDraft
 import org.orma.project_90.backend.OrmaOrder
 import org.orma.project_90.backend.OrmaOrderDraft
 import org.orma.project_90.backend.OrmaPagedList
@@ -828,6 +829,10 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
                 is OrmaBackendResult.Success -> result.value
                 is OrmaBackendResult.Failure -> null
             }
+            val metaTemplates = when (val result = backendClient.listMetaWhatsAppTemplates(idToken)) {
+                is OrmaBackendResult.Success -> result.value.templates
+                is OrmaBackendResult.Failure -> state.dashboard.metaWhatsAppTemplates
+            }
             state = state.copy(
                 dashboard = state.dashboard.copy(
                     hasLoaded = true,
@@ -856,6 +861,7 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
                     teamInvites = teamOverview?.invites.orEmpty(),
                     paymentMethods = paymentMethods?.items.orEmpty(),
                     metaConnection = metaConnection,
+                    metaWhatsAppTemplates = metaTemplates,
                     metaActionLoading = false,
                     filters = filters,
                 ),
@@ -1368,6 +1374,32 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
         }
     }
 
+    fun updateDashboardPrinter(printerId: String, draft: OrmaPrinterDraft) {
+        val snapshot = state
+        if (snapshot.dashboard.actionLoading || printerId.isBlank() || draft.name.trim().length < 2) return
+        markDashboardActionLoading()
+        scope.launch {
+            val idToken = freshDashboardTokenOrError(snapshot) ?: return@launch
+            when (val result = backendClient.updatePrinter(idToken, printerId, draft)) {
+                is OrmaBackendResult.Success -> refreshDashboard("Printer updated.")
+                is OrmaBackendResult.Failure -> applyDashboardFailure(result.title, result.message, result.code)
+            }
+        }
+    }
+
+    fun deleteDashboardPrinter(printerId: String) {
+        val snapshot = state
+        if (snapshot.dashboard.actionLoading || printerId.isBlank()) return
+        markDashboardActionLoading()
+        scope.launch {
+            val idToken = freshDashboardTokenOrError(snapshot) ?: return@launch
+            when (val result = backendClient.deletePrinter(idToken, printerId)) {
+                is OrmaBackendResult.Success -> refreshDashboard("Printer removed.")
+                is OrmaBackendResult.Failure -> applyDashboardFailure(result.title, result.message, result.code)
+            }
+        }
+    }
+
     fun createDashboardPaymentMethod(draft: OrmaWorkspacePaymentMethodDraft) {
         val snapshot = state
         if (snapshot.dashboard.actionLoading || draft.label.trim().length < 2 || !draft.upiId.contains("@")) return
@@ -1497,6 +1529,147 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
                         metaConnection = result.value,
                     ),
                 )
+                is OrmaBackendResult.Failure -> state = state.copy(
+                    dashboard = state.dashboard.copy(
+                        actionLoading = false,
+                        metaActionLoading = false,
+                        errorTitle = result.title,
+                        errorMessage = result.message,
+                        statusMessage = null,
+                    ),
+                    authErrorCode = result.code,
+                )
+            }
+        }
+    }
+
+    fun loadDashboardMetaWhatsAppTemplates() {
+        val snapshot = state
+        if (snapshot.dashboard.actionLoading || snapshot.dashboard.metaActionLoading) return
+        state = snapshot.copy(
+            dashboard = snapshot.dashboard.copy(
+                actionLoading = true,
+                metaActionLoading = true,
+                errorTitle = null,
+                errorMessage = null,
+                statusMessage = null,
+            ),
+        )
+        scope.launch {
+            val idToken = freshDashboardTokenOrError(snapshot) ?: return@launch
+            when (val result = backendClient.listMetaWhatsAppTemplates(idToken)) {
+                is OrmaBackendResult.Success -> state = state.copy(
+                    dashboard = state.dashboard.copy(
+                        actionLoading = false,
+                        metaActionLoading = false,
+                        errorTitle = null,
+                        errorMessage = null,
+                        statusMessage = result.value.message,
+                        metaWhatsAppTemplates = result.value.templates,
+                    ),
+                )
+                is OrmaBackendResult.Failure -> state = state.copy(
+                    dashboard = state.dashboard.copy(
+                        actionLoading = false,
+                        metaActionLoading = false,
+                        errorTitle = result.title,
+                        errorMessage = result.message,
+                        statusMessage = null,
+                    ),
+                    authErrorCode = result.code,
+                )
+            }
+        }
+    }
+
+    fun createDashboardMetaWhatsAppTemplate(draft: OrmaMetaWhatsAppTemplateDraft) {
+        val snapshot = state
+        if (snapshot.dashboard.actionLoading || snapshot.dashboard.metaActionLoading) return
+        if (draft.name.trim().length < 3 || draft.bodyText.trim().length < 10) return
+        state = snapshot.copy(
+            dashboard = snapshot.dashboard.copy(
+                actionLoading = true,
+                metaActionLoading = true,
+                errorTitle = null,
+                errorMessage = null,
+                statusMessage = null,
+            ),
+        )
+        scope.launch {
+            val idToken = freshDashboardTokenOrError(snapshot) ?: return@launch
+            when (val result = backendClient.createMetaWhatsAppTemplate(idToken, draft)) {
+                is OrmaBackendResult.Success -> {
+                    val templates = when (val listResult = backendClient.listMetaWhatsAppTemplates(idToken)) {
+                        is OrmaBackendResult.Success -> listResult.value.templates
+                        is OrmaBackendResult.Failure -> state.dashboard.metaWhatsAppTemplates
+                    }
+                    val status = when (val statusResult = backendClient.getMetaConnectionStatus(idToken)) {
+                        is OrmaBackendResult.Success -> statusResult.value
+                        is OrmaBackendResult.Failure -> state.dashboard.metaConnection
+                    }
+                    state = state.copy(
+                        dashboard = state.dashboard.copy(
+                            actionLoading = false,
+                            metaActionLoading = false,
+                            errorTitle = null,
+                            errorMessage = null,
+                            statusMessage = result.value.message,
+                            metaConnection = status,
+                            metaWhatsAppTemplates = templates,
+                        ),
+                    )
+                }
+                is OrmaBackendResult.Failure -> state = state.copy(
+                    dashboard = state.dashboard.copy(
+                        actionLoading = false,
+                        metaActionLoading = false,
+                        errorTitle = result.title,
+                        errorMessage = result.message,
+                        statusMessage = null,
+                    ),
+                    authErrorCode = result.code,
+                )
+            }
+        }
+    }
+
+    fun syncDashboardMetaWhatsAppTemplates() {
+        val snapshot = state
+        if (snapshot.dashboard.actionLoading || snapshot.dashboard.metaActionLoading) return
+        state = snapshot.copy(
+            dashboard = snapshot.dashboard.copy(
+                actionLoading = true,
+                metaActionLoading = true,
+                errorTitle = null,
+                errorMessage = null,
+                statusMessage = null,
+            ),
+        )
+        scope.launch {
+            val idToken = freshDashboardTokenOrError(snapshot) ?: return@launch
+            when (val result = backendClient.syncMetaWhatsAppTemplates(idToken)) {
+                is OrmaBackendResult.Success -> {
+                    val templates = when (val listResult = backendClient.listMetaWhatsAppTemplates(idToken)) {
+                        is OrmaBackendResult.Success -> listResult.value.templates
+                        is OrmaBackendResult.Failure -> state.dashboard.metaWhatsAppTemplates
+                    }
+                    val status = when (val statusResult = backendClient.getMetaConnectionStatus(idToken)) {
+                        is OrmaBackendResult.Success -> statusResult.value
+                        is OrmaBackendResult.Failure -> state.dashboard.metaConnection
+                    }
+                    state = state.copy(
+                        dashboard = state.dashboard.copy(
+                            actionLoading = false,
+                            metaActionLoading = false,
+                            errorTitle = null,
+                            errorMessage = null,
+                            statusMessage = result.value.message,
+                            metaConnection = status,
+                            metaWhatsAppTemplates = templates,
+                            metaTemplateSyncItems = result.value.templates,
+                        ),
+                    )
+                }
                 is OrmaBackendResult.Failure -> state = state.copy(
                     dashboard = state.dashboard.copy(
                         actionLoading = false,
@@ -1931,12 +2104,17 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
         onRemoveTeamMember = ::removeDashboardTeamMember,
         onInvoiceGstinLookupRequest = ::lookupInvoiceGstin,
         onCreatePrinter = ::createDashboardPrinter,
+        onUpdatePrinter = ::updateDashboardPrinter,
+        onDeletePrinter = ::deleteDashboardPrinter,
         onCreatePaymentMethod = ::createDashboardPaymentMethod,
         onUpdatePaymentMethod = ::updateDashboardPaymentMethod,
         onSetDefaultPaymentMethod = ::setDefaultDashboardPaymentMethod,
         onDeletePaymentMethod = ::deleteDashboardPaymentMethod,
         onUpdateMetaConnection = ::updateDashboardMetaConnection,
         onSyncMetaCatalog = ::syncDashboardMetaCatalog,
+        onLoadMetaWhatsAppTemplates = ::loadDashboardMetaWhatsAppTemplates,
+        onCreateMetaWhatsAppTemplate = ::createDashboardMetaWhatsAppTemplate,
+        onSyncMetaWhatsAppTemplates = ::syncDashboardMetaWhatsAppTemplates,
         onCreateBusiness = {
             state = state.copy(
                 accessPath = AccessPath.BusinessOwner,

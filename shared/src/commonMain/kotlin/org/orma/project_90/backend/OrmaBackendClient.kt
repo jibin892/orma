@@ -561,6 +561,7 @@ data class OrmaOrderDraft(
     val status: String = "confirmed",
     val scheduledAt: String = "",
     val paidTotal: String = "0",
+    val discountTotal: String = "0",
     val currency: String = "INR",
     val notes: String = "",
     val fulfillmentType: String = "standard",
@@ -696,6 +697,51 @@ data class OrmaMetaCatalogSyncResult(
     val productsBlocked: Int,
     val productsSynced: Int,
     val productReadiness: List<OrmaMetaProductReadiness>,
+    val message: String,
+)
+
+data class OrmaMetaWhatsAppTemplate(
+    val id: String?,
+    val name: String,
+    val status: String,
+    val category: String,
+    val languageCode: String,
+    val bodyText: String?,
+    val rejectedReason: String?,
+)
+
+data class OrmaMetaWhatsAppTemplateDraft(
+    val name: String = "",
+    val category: String = "UTILITY",
+    val languageCode: String = "en_US",
+    val bodyText: String = "",
+    val sampleParameters: List<String> = emptyList(),
+)
+
+data class OrmaMetaWhatsAppTemplateListResult(
+    val connected: Boolean,
+    val templates: List<OrmaMetaWhatsAppTemplate>,
+    val message: String,
+)
+
+data class OrmaMetaWhatsAppTemplateCreateResult(
+    val created: Boolean,
+    val status: String,
+    val template: OrmaMetaWhatsAppTemplate?,
+    val message: String,
+)
+
+data class OrmaMetaWhatsAppTemplateSyncItem(
+    val name: String,
+    val status: String,
+    val message: String,
+)
+
+data class OrmaMetaWhatsAppTemplateSyncResult(
+    val connected: Boolean,
+    val created: Int,
+    val failed: Int,
+    val templates: List<OrmaMetaWhatsAppTemplateSyncItem>,
     val message: String,
 )
 
@@ -1352,18 +1398,40 @@ class OrmaBackendClient(
                 ormaPostJsonAuthorized(
                     url = config.url("/printers"),
                     bearerToken = idToken,
-                    body = buildJsonObject(
-                        "name" to JsonValue.StringValue(draft.name),
-                        "connectionType" to JsonValue.StringValue(draft.connectionType),
-                        "address" to JsonValue.StringValue(draft.address.blankToNull()),
-                        "paperWidthMm" to JsonValue.RawValue(draft.paperWidthMm.intInput(default = "80")),
-                        "dpi" to JsonValue.RawValue(draft.dpi.intInput(default = "203")),
-                        "supportsReceipts" to JsonValue.BooleanValue(draft.supportsReceipts),
-                        "supportsBarcodes" to JsonValue.BooleanValue(draft.supportsBarcodes),
-                        "isDefaultReceipt" to JsonValue.BooleanValue(draft.isDefaultReceipt),
-                        "isDefaultBarcode" to JsonValue.BooleanValue(draft.isDefaultBarcode),
-                        "notes" to JsonValue.StringValue(draft.notes.blankToNull()),
-                    ),
+                    body = draft.toPrinterRequestJson(),
+                )
+            },
+            parse = { it.toPrinterProfile() },
+        )
+
+    suspend fun updatePrinter(
+        idToken: String,
+        printerId: String,
+        draft: OrmaPrinterDraft,
+    ): OrmaBackendResult<OrmaPrinterProfile> =
+        executeBackendRequest(
+            actionTitle = "Update printer",
+            request = {
+                ormaPutJsonAuthorized(
+                    url = config.url("/printers/$printerId"),
+                    bearerToken = idToken,
+                    body = draft.toPrinterRequestJson(),
+                )
+            },
+            parse = { it.toPrinterProfile() },
+        )
+
+    suspend fun deletePrinter(
+        idToken: String,
+        printerId: String,
+    ): OrmaBackendResult<OrmaPrinterProfile> =
+        executeBackendRequest(
+            actionTitle = "Delete printer",
+            request = {
+                ormaPutJsonAuthorized(
+                    url = config.url("/printers/$printerId/delete"),
+                    bearerToken = idToken,
+                    body = "{}",
                 )
             },
             parse = { it.toPrinterProfile() },
@@ -1519,6 +1587,62 @@ class OrmaBackendClient(
                 )
             },
             parse = { it.toMetaCatalogSyncResult() },
+        )
+
+    suspend fun listMetaWhatsAppTemplates(
+        idToken: String,
+    ): OrmaBackendResult<OrmaMetaWhatsAppTemplateListResult> =
+        executeBackendRequest(
+            actionTitle = "Load WhatsApp templates",
+            request = {
+                ormaGetAuthorized(
+                    url = config.url("/integrations/meta/whatsapp/templates/created"),
+                    bearerToken = idToken,
+                )
+            },
+            parse = { it.toMetaWhatsAppTemplateListResult() },
+        )
+
+    suspend fun createMetaWhatsAppTemplate(
+        idToken: String,
+        draft: OrmaMetaWhatsAppTemplateDraft,
+    ): OrmaBackendResult<OrmaMetaWhatsAppTemplateCreateResult> =
+        executeBackendRequest(
+            actionTitle = "Create WhatsApp template",
+            request = {
+                val samplesJson = draft.sampleParameters
+                    .filter { it.isNotBlank() }
+                    .joinToString(prefix = "[", postfix = "]") { sample ->
+                        "\"${sample.jsonEscaped()}\""
+                    }
+                ormaPostJsonAuthorized(
+                    url = config.url("/integrations/meta/whatsapp/templates"),
+                    bearerToken = idToken,
+                    body = buildJsonObject(
+                        "name" to JsonValue.StringValue(draft.name),
+                        "category" to JsonValue.StringValue(draft.category),
+                        "languageCode" to JsonValue.StringValue(draft.languageCode.blankToNull()),
+                        "bodyText" to JsonValue.StringValue(draft.bodyText),
+                        "sampleParameters" to JsonValue.RawValue(samplesJson),
+                    ),
+                )
+            },
+            parse = { it.toMetaWhatsAppTemplateCreateResult() },
+        )
+
+    suspend fun syncMetaWhatsAppTemplates(
+        idToken: String,
+    ): OrmaBackendResult<OrmaMetaWhatsAppTemplateSyncResult> =
+        executeBackendRequest(
+            actionTitle = "Create WhatsApp templates",
+            request = {
+                ormaPostJsonAuthorized(
+                    url = config.url("/integrations/meta/whatsapp/templates/sync"),
+                    bearerToken = idToken,
+                    body = "{}",
+                )
+            },
+            parse = { it.toMetaWhatsAppTemplateSyncResult() },
         )
 
     suspend fun loadPublicCatalog(
@@ -2244,6 +2368,36 @@ private fun String.toMetaCatalogSyncResult(): OrmaMetaCatalogSyncResult =
         message = jsonString("message") ?: "Catalog readiness checked.",
     )
 
+private fun String.toMetaWhatsAppTemplateListResult(): OrmaMetaWhatsAppTemplateListResult =
+    OrmaMetaWhatsAppTemplateListResult(
+        connected = jsonBoolean("connected") ?: false,
+        templates = jsonObjectsInArray("templates").map { it.toMetaWhatsAppTemplate() },
+        message = jsonString("message") ?: "WhatsApp templates loaded.",
+    )
+
+private fun String.toMetaWhatsAppTemplateCreateResult(): OrmaMetaWhatsAppTemplateCreateResult =
+    OrmaMetaWhatsAppTemplateCreateResult(
+        created = jsonBoolean("created") ?: false,
+        status = jsonString("status") ?: "unknown",
+        template = jsonObject("template")?.toMetaWhatsAppTemplate(),
+        message = jsonString("message") ?: "WhatsApp template submitted.",
+    )
+
+private fun String.toMetaWhatsAppTemplateSyncResult(): OrmaMetaWhatsAppTemplateSyncResult =
+    OrmaMetaWhatsAppTemplateSyncResult(
+        connected = jsonBoolean("connected") ?: false,
+        created = jsonInt("created") ?: 0,
+        failed = jsonInt("failed") ?: 0,
+        templates = jsonObjectsInArray("templates").map {
+            OrmaMetaWhatsAppTemplateSyncItem(
+                name = it.jsonString("name").orEmpty(),
+                status = it.jsonString("status") ?: "unknown",
+                message = it.jsonString("message") ?: "",
+            )
+        },
+        message = jsonString("message") ?: "WhatsApp template sync finished.",
+    )
+
 private fun String.toMetaProductReadiness(): OrmaMetaProductReadiness =
     OrmaMetaProductReadiness(
         productId = jsonString("productId").orEmpty(),
@@ -2253,6 +2407,17 @@ private fun String.toMetaProductReadiness(): OrmaMetaProductReadiness =
         issues = jsonStringArray("issues"),
         metaProductId = jsonString("metaProductId"),
         lastSyncAt = jsonString("lastSyncAt"),
+    )
+
+private fun String.toMetaWhatsAppTemplate(): OrmaMetaWhatsAppTemplate =
+    OrmaMetaWhatsAppTemplate(
+        id = jsonString("id"),
+        name = jsonString("name").orEmpty(),
+        status = jsonString("status") ?: "unknown",
+        category = jsonString("category") ?: "UTILITY",
+        languageCode = jsonString("languageCode") ?: "en_US",
+        bodyText = jsonString("bodyText"),
+        rejectedReason = jsonString("rejectedReason"),
     )
 
 private fun String.normalizedGstin(): String =
@@ -2323,6 +2488,20 @@ private fun OrmaProductDraft.toProductRequestJson(): String =
         "supplierId" to JsonValue.StringValue(supplierId.blankToNull()),
     )
 
+private fun OrmaPrinterDraft.toPrinterRequestJson(): String =
+    buildJsonObject(
+        "name" to JsonValue.StringValue(name.trim()),
+        "connectionType" to JsonValue.StringValue(connectionType),
+        "address" to JsonValue.StringValue(address.blankToNull()),
+        "paperWidthMm" to JsonValue.RawValue(paperWidthMm.intInput(default = "80")),
+        "dpi" to JsonValue.RawValue(dpi.intInput(default = "203")),
+        "supportsReceipts" to JsonValue.BooleanValue(supportsReceipts),
+        "supportsBarcodes" to JsonValue.BooleanValue(supportsBarcodes),
+        "isDefaultReceipt" to JsonValue.BooleanValue(isDefaultReceipt && supportsReceipts),
+        "isDefaultBarcode" to JsonValue.BooleanValue(isDefaultBarcode && supportsBarcodes),
+        "notes" to JsonValue.StringValue(notes.blankToNull()),
+    )
+
 private fun OrmaOrderDraft.toOrderRequestJson(): String {
     val itemsJson = items
         .filter { it.description.isNotBlank() || it.productId.isNotBlank() }
@@ -2350,6 +2529,7 @@ private fun OrmaOrderDraft.toOrderRequestJson(): String {
         "status" to JsonValue.StringValue(status),
         "scheduledAt" to JsonValue.StringValue(scheduledAt.blankToNull()),
         "paidTotal" to JsonValue.StringValue(paidTotal.blankToZero()),
+        "discountTotal" to JsonValue.StringValue(discountTotal.blankToZero()),
         "currency" to JsonValue.StringValue(currency),
         "notes" to JsonValue.StringValue(notes.blankToNull()),
         "fulfillmentType" to JsonValue.StringValue(fulfillmentType),

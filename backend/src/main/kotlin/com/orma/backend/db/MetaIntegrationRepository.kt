@@ -12,6 +12,10 @@ import com.orma.backend.models.MetaOrderUpdateResponse
 import com.orma.backend.models.MetaProductReadinessResponse
 import com.orma.backend.models.MetaSystemUserConnectResponse
 import com.orma.backend.models.MetaWebhookEventResponse
+import com.orma.backend.models.MetaWhatsAppCreatedTemplateListResponse
+import com.orma.backend.models.MetaWhatsAppCreatedTemplateResponse
+import com.orma.backend.models.MetaWhatsAppTemplateCreateRequest
+import com.orma.backend.models.MetaWhatsAppTemplateCreateResponse
 import com.orma.backend.models.MetaWhatsAppTemplateListResponse
 import com.orma.backend.models.MetaWhatsAppTemplateResponse
 import com.orma.backend.models.MetaWhatsAppTemplateSyncItemResponse
@@ -20,6 +24,7 @@ import com.orma.backend.meta.MetaAccessToken
 import com.orma.backend.meta.MetaGraphCatalogProductRequest
 import com.orma.backend.meta.MetaGraphClient
 import com.orma.backend.meta.MetaGraphException
+import com.orma.backend.meta.MetaGraphWhatsAppTemplate
 import com.orma.backend.meta.MetaGraphWhatsAppTemplateRequest
 import com.orma.backend.meta.MetaTokenCrypto
 import java.math.BigDecimal
@@ -179,6 +184,138 @@ class MetaIntegrationRepository(
         MetaWhatsAppTemplateListResponse(
             templates = OrmaWhatsAppTemplates.map { it.toResponse(config.metaDefaultLanguageCode) },
         )
+
+    suspend fun listCreatedWhatsAppTemplates(
+        firebaseUser: VerifiedFirebaseUser,
+    ): MetaWhatsAppCreatedTemplateListResponse? = withContext(Dispatchers.IO) {
+        val context = dataSource.connection.use { connection ->
+            val access = connection.resolveMetaWorkspaceAccess(firebaseUser) ?: return@withContext null
+            MetaTemplateSyncContext(
+                workspaceId = access.workspaceId,
+                connection = connection.findMetaConnection(access.workspaceId),
+            )
+        }
+        val connectionState = context.connection
+        val accessToken = connectionState?.resolveAccessToken()
+        val whatsappBusinessAccountId = connectionState
+            ?.whatsappBusinessAccountId
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+        if (accessToken.isNullOrBlank() || whatsappBusinessAccountId == null) {
+            return@withContext MetaWhatsAppCreatedTemplateListResponse(
+                connected = false,
+                message = "Connect WhatsApp Business Account and backend Meta token before loading templates.",
+            )
+        }
+
+        try {
+            val templates = graphClient.listWhatsAppTemplates(
+                accessToken = accessToken,
+                whatsappBusinessAccountId = whatsappBusinessAccountId,
+            )
+            dataSource.connection.use { connection ->
+                connection.updateMetaMessagingStatus(context.workspaceId, "ready", null)
+            }
+            MetaWhatsAppCreatedTemplateListResponse(
+                connected = true,
+                templates = templates.map { it.toResponse() },
+                message = "Loaded ${templates.size} WhatsApp template(s) from Meta.",
+            )
+        } catch (error: MetaGraphException) {
+            val publicMessage = error.publicMetaMessage()
+            dataSource.connection.use { connection ->
+                connection.updateMetaMessagingStatus(context.workspaceId, "template_list_failed", publicMessage)
+            }
+            MetaWhatsAppCreatedTemplateListResponse(
+                connected = false,
+                message = "Meta could not load WhatsApp templates. $publicMessage",
+            )
+        }
+    }
+
+    suspend fun createWhatsAppTemplate(
+        firebaseUser: VerifiedFirebaseUser,
+        request: MetaWhatsAppTemplateCreateRequest,
+    ): MetaWhatsAppTemplateCreateResponse? = withContext(Dispatchers.IO) {
+        val context = dataSource.connection.use { connection ->
+            val access = connection.resolveMetaWorkspaceAccess(firebaseUser) ?: return@withContext null
+            MetaTemplateSyncContext(
+                workspaceId = access.workspaceId,
+                connection = connection.findMetaConnection(access.workspaceId),
+            )
+        }
+        val connectionState = context.connection
+        val accessToken = connectionState?.resolveAccessToken()
+        val whatsappBusinessAccountId = connectionState
+            ?.whatsappBusinessAccountId
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+        if (accessToken.isNullOrBlank() || whatsappBusinessAccountId == null) {
+            return@withContext MetaWhatsAppTemplateCreateResponse(
+                created = false,
+                status = "setup_required",
+                message = "Connect WhatsApp Business Account and backend Meta token before creating templates.",
+            )
+        }
+
+        val templateName = request.name.cleanMetaTemplateName()
+        val bodyText = request.bodyText.cleanMetaTemplateBody()
+        if (templateName.length < 3 || bodyText.length < 10) {
+            return@withContext MetaWhatsAppTemplateCreateResponse(
+                created = false,
+                status = "invalid_request",
+                message = "Template name and body are required. Name must be at least 3 characters and body at least 10 characters.",
+            )
+        }
+
+        val graphRequest = MetaGraphWhatsAppTemplateRequest(
+            name = templateName,
+            category = request.category.cleanMetaTemplateCategory(),
+            languageCode = request.languageCode.cleanMetaTemplateLanguage(config.metaDefaultLanguageCode),
+            bodyText = bodyText,
+            sampleParameters = bodyText.metaTemplateSamples(request.sampleParameters),
+        )
+
+        try {
+            val result = graphClient.createWhatsAppTemplate(
+                accessToken = accessToken,
+                whatsappBusinessAccountId = whatsappBusinessAccountId,
+                template = graphRequest,
+            )
+            dataSource.connection.use { connection ->
+                connection.updateMetaMessagingStatus(context.workspaceId, "templates_submitted", null)
+            }
+            MetaWhatsAppTemplateCreateResponse(
+                created = true,
+                status = result.status?.lowercase()?.takeIf { it.isNotBlank() } ?: "submitted",
+                template = MetaWhatsAppCreatedTemplateResponse(
+                    id = result.id,
+                    name = graphRequest.name,
+                    status = result.status?.lowercase()?.takeIf { it.isNotBlank() } ?: "submitted",
+                    category = graphRequest.category,
+                    languageCode = graphRequest.languageCode,
+                    bodyText = graphRequest.bodyText,
+                ),
+                message = "Template submitted to Meta for approval.",
+            )
+        } catch (error: MetaGraphException) {
+            val publicMessage = error.publicMetaMessage()
+            if (!publicMessage.isTemplateAlreadyCreatedError()) {
+                dataSource.connection.use { connection ->
+                    connection.updateMetaMessagingStatus(context.workspaceId, "template_create_failed", publicMessage)
+                }
+            }
+            MetaWhatsAppTemplateCreateResponse(
+                created = false,
+                status = if (publicMessage.isTemplateAlreadyCreatedError()) "exists" else "failed",
+                message = if (publicMessage.isTemplateAlreadyCreatedError()) {
+                    "Template already exists in Meta."
+                } else {
+                    publicMessage
+                },
+            )
+        }
+    }
 
     suspend fun syncWhatsAppTemplates(firebaseUser: VerifiedFirebaseUser): MetaWhatsAppTemplateSyncResponse? = withContext(Dispatchers.IO) {
         val context = dataSource.connection.use { connection ->
@@ -1657,6 +1794,75 @@ private data class OrmaWhatsAppTemplateSpec(
             sampleParameters = sampleParameters,
         )
 }
+
+private fun MetaGraphWhatsAppTemplate.toResponse(): MetaWhatsAppCreatedTemplateResponse =
+    MetaWhatsAppCreatedTemplateResponse(
+        id = id,
+        name = name,
+        status = status.lowercase(),
+        category = category,
+        languageCode = languageCode,
+        bodyText = bodyText,
+        rejectedReason = rejectedReason,
+    )
+
+private fun String.cleanMetaTemplateName(): String =
+    lowercase()
+        .map { char -> if (char.isLetterOrDigit()) char else '_' }
+        .joinToString("")
+        .replace(Regex("_+"), "_")
+        .trim('_')
+        .take(512)
+
+private fun String.cleanMetaTemplateBody(): String =
+    trim()
+        .replace(Regex("\\s+"), " ")
+        .take(1024)
+
+private fun String?.cleanMetaTemplateCategory(): String =
+    when (this?.trim()?.uppercase()) {
+        "AUTHENTICATION" -> "AUTHENTICATION"
+        "MARKETING" -> "MARKETING"
+        else -> "UTILITY"
+    }
+
+private fun String?.cleanMetaTemplateLanguage(defaultLanguageCode: String): String {
+    val clean = this
+        ?.trim()
+        ?.replace("-", "_")
+        ?.filter { it.isLetterOrDigit() || it == '_' }
+        ?.take(12)
+        ?.takeIf { it.isNotBlank() }
+    return clean ?: defaultLanguageCode
+}
+
+private fun String.metaTemplateSamples(requestSamples: List<String>): List<String> {
+    val parameterCount = Regex("""\{\{\s*(\d+)\s*}}""")
+        .findAll(this)
+        .mapNotNull { it.groupValues.getOrNull(1)?.toIntOrNull() }
+        .maxOrNull()
+        ?: 0
+    if (parameterCount <= 0) return emptyList()
+    val samples = requestSamples
+        .map { it.trim().take(120) }
+        .filter { it.isNotBlank() }
+        .toMutableList()
+    MetaTemplateSampleDefaults.forEach { sample ->
+        if (samples.size < parameterCount) samples += sample
+    }
+    while (samples.size < parameterCount) {
+        samples += "Sample ${samples.size + 1}"
+    }
+    return samples.take(parameterCount)
+}
+
+private val MetaTemplateSampleDefaults = listOf(
+    "ORD-123456",
+    "Jibin Cherian",
+    "INR 1500.00",
+    "confirmed",
+    "Tomorrow 10 AM",
+)
 
 private data class MetaWebhookPayload(
     val objectType: String?,

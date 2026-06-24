@@ -2106,7 +2106,7 @@ private fun PublicCatalogProductTile(
                     modifier = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
-                    OrmaPrice(amount = product.customerPrice, currency = product.currency)
+                    PublicCatalogOfferPrice(product = product)
                     Text(
                         text = product.publicCatalogAvailabilityLabel(),
                         style = MaterialTheme.typography.labelMedium,
@@ -2219,18 +2219,13 @@ private fun PublicCatalogProductRow(
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Row(
+                        Column(
                             modifier = Modifier.weight(1f),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
+                            verticalArrangement = Arrangement.spacedBy(3.dp),
                         ) {
-                            OrmaPrice(amount = product.customerPrice, currency = product.currency)
-                            product.offer?.let {
-                                OrmaBadge(text = it.name.uppercase(), tone = OrmaStatusTone.Success)
-                            }
+                            PublicCatalogOfferPrice(product = product)
                             Text(
                                 text = product.publicCatalogAvailabilityLabel(),
-                                modifier = Modifier.weight(1f),
                                 style = MaterialTheme.typography.labelMedium,
                                 color = OrmaColors.TextSecondary,
                                 maxLines = 1,
@@ -2286,14 +2281,10 @@ private fun PublicCatalogProductRow(
                                 overflow = TextOverflow.Ellipsis,
                             )
                         }
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
+                        Column(
+                            verticalArrangement = Arrangement.spacedBy(3.dp),
                         ) {
-                            OrmaPrice(amount = product.customerPrice, currency = product.currency)
-                            product.offer?.let {
-                                OrmaBadge(text = it.name.uppercase(), tone = OrmaStatusTone.Success)
-                            }
+                            PublicCatalogOfferPrice(product = product)
                             Text(
                                 text = product.publicCatalogAvailabilityLabel(),
                                 style = MaterialTheme.typography.labelMedium,
@@ -2311,6 +2302,40 @@ private fun PublicCatalogProductRow(
                     )
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun PublicCatalogOfferPrice(
+    product: OrmaPublicCatalogProduct,
+) {
+    val offer = product.offer
+    val discountAmount = offer?.discountAmount?.toDoubleOrNull().orZero()
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        OrmaPrice(amount = product.customerPrice, currency = product.currency)
+        if (offer != null && discountAmount > 0.0) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(7.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "${product.currency} ${product.sellingPrice}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = OrmaColors.TextTertiary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textDecoration = androidx.compose.ui.text.style.TextDecoration.LineThrough,
+                )
+                Text(
+                    text = "Save ${product.currency} ${money(discountAmount)}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = OrmaColors.Success,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            OrmaBadge(text = offer.name.uppercase(), tone = OrmaStatusTone.Success)
         }
     }
 }
@@ -2587,6 +2612,18 @@ private fun PublicCatalogSummaryLine(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            selection.product.offer?.let { offer ->
+                val savings = offer.discountAmount.toDoubleOrNull().orZero() * selection.quantity
+                if (savings > 0.0) {
+                    Text(
+                        text = "${offer.name}: save ${selection.product.currency} ${money(savings)}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = OrmaColors.Success,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
         }
         Text(
             text = "${selection.product.currency} ${money(selection.lineTotal)}",

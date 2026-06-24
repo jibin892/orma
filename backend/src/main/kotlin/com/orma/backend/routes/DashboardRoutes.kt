@@ -504,6 +504,13 @@ fun Route.dashboardRoutes(
         }
         call.respondWorkspaceResult(repository.updatePrinter(firebaseUser, printerId, request))
     }
+
+    put("/printers/{id}/delete") {
+        val repository = dashboardRepository ?: return@put call.dashboardDatabaseNotConfigured()
+        val firebaseUser = call.verifiedFirebaseUser(config) ?: return@put
+        val printerId = call.parameters["id"].orEmpty()
+        call.respondWorkspaceResult(repository.deletePrinter(firebaseUser, printerId))
+    }
 }
 
 private fun ApplicationCall.dashboardFilters(): DashboardQueryFilters {

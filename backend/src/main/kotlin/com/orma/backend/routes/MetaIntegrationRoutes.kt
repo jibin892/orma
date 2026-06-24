@@ -5,6 +5,7 @@ import com.orma.backend.db.MetaIntegrationRepository
 import com.orma.backend.models.ErrorResponse
 import com.orma.backend.models.MetaConnectionRequest
 import com.orma.backend.models.MetaOrderUpdateRequest
+import com.orma.backend.models.MetaWhatsAppTemplateCreateRequest
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.request.receive
@@ -83,7 +84,28 @@ fun Route.metaIntegrationRoutes(
         val repository = metaIntegrationRepository ?: return@post call.metaDatabaseNotConfigured()
         val firebaseUser = call.verifiedFirebaseUser(config) ?: return@post
         val sync = repository.syncWhatsAppTemplates(firebaseUser) ?: return@post call.metaWorkspaceNotFound()
-        call.respond(if (sync.connected && sync.failed == 0) HttpStatusCode.OK else HttpStatusCode.Conflict, sync)
+        call.respond(sync)
+    }
+
+    get("/integrations/meta/whatsapp/templates/created") {
+        val repository = metaIntegrationRepository ?: return@get call.metaDatabaseNotConfigured()
+        val firebaseUser = call.verifiedFirebaseUser(config) ?: return@get
+        val response = repository.listCreatedWhatsAppTemplates(firebaseUser) ?: return@get call.metaWorkspaceNotFound()
+        call.respond(if (response.connected) HttpStatusCode.OK else HttpStatusCode.Conflict, response)
+    }
+
+    post("/integrations/meta/whatsapp/templates") {
+        val repository = metaIntegrationRepository ?: return@post call.metaDatabaseNotConfigured()
+        val firebaseUser = call.verifiedFirebaseUser(config) ?: return@post
+        val request = call.receive<MetaWhatsAppTemplateCreateRequest>()
+        val response = repository.createWhatsAppTemplate(firebaseUser, request) ?: return@post call.metaWorkspaceNotFound()
+        val status = when {
+            response.created -> HttpStatusCode.OK
+            response.status == "exists" -> HttpStatusCode.OK
+            response.status == "invalid_request" -> HttpStatusCode.BadRequest
+            else -> HttpStatusCode.Conflict
+        }
+        call.respond(status, response)
     }
 
     post("/integrations/meta/whatsapp/send-order-update") {

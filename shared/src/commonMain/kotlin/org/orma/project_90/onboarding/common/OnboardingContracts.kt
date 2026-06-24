@@ -7,6 +7,9 @@ import org.orma.project_90.backend.OrmaDashboardSummary
 import org.orma.project_90.backend.OrmaGstinLookup
 import org.orma.project_90.backend.OrmaMetaConnectionDraft
 import org.orma.project_90.backend.OrmaMetaConnectionStatus
+import org.orma.project_90.backend.OrmaMetaWhatsAppTemplate
+import org.orma.project_90.backend.OrmaMetaWhatsAppTemplateDraft
+import org.orma.project_90.backend.OrmaMetaWhatsAppTemplateSyncItem
 import org.orma.project_90.backend.OrmaOrder
 import org.orma.project_90.backend.OrmaOrderDraft
 import org.orma.project_90.backend.OrmaPagination
@@ -157,6 +160,8 @@ internal data class DashboardDataState(
     val teamInvites: List<OrmaTeamInvite> = emptyList(),
     val paymentMethods: List<OrmaWorkspacePaymentMethod> = emptyList(),
     val metaConnection: OrmaMetaConnectionStatus? = null,
+    val metaWhatsAppTemplates: List<OrmaMetaWhatsAppTemplate> = emptyList(),
+    val metaTemplateSyncItems: List<OrmaMetaWhatsAppTemplateSyncItem> = emptyList(),
     val metaActionLoading: Boolean = false,
     val productExport: OrmaProductExport? = null,
     val productImportTemplate: OrmaProductImportTemplate? = null,
@@ -223,12 +228,17 @@ internal data class OnboardingActions(
     val onRemoveTeamMember: (String) -> Unit,
     val onInvoiceGstinLookupRequest: (String) -> Unit,
     val onCreatePrinter: (OrmaPrinterDraft) -> Unit,
+    val onUpdatePrinter: (String, OrmaPrinterDraft) -> Unit,
+    val onDeletePrinter: (String) -> Unit,
     val onCreatePaymentMethod: (OrmaWorkspacePaymentMethodDraft) -> Unit,
     val onUpdatePaymentMethod: (String, OrmaWorkspacePaymentMethodDraft) -> Unit,
     val onSetDefaultPaymentMethod: (String) -> Unit,
     val onDeletePaymentMethod: (String) -> Unit,
     val onUpdateMetaConnection: (OrmaMetaConnectionDraft) -> Unit,
     val onSyncMetaCatalog: () -> Unit,
+    val onLoadMetaWhatsAppTemplates: () -> Unit,
+    val onCreateMetaWhatsAppTemplate: (OrmaMetaWhatsAppTemplateDraft) -> Unit,
+    val onSyncMetaWhatsAppTemplates: () -> Unit,
     val onCreateBusiness: () -> Unit,
     val onBack: () -> Unit,
     val onContinue: () -> Unit,

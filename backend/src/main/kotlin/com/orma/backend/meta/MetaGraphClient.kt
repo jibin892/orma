@@ -189,10 +189,34 @@ class MetaGraphClient(
         )
     }
 
+    fun listWhatsAppTemplates(
+        accessToken: String,
+        whatsappBusinessAccountId: String,
+    ): List<MetaGraphWhatsAppTemplate> {
+        val response = graphGetJson(
+            pathWithQuery = "$whatsappBusinessAccountId/message_templates?fields=id,name,status,category,language,components,rejected_reason&limit=100",
+            accessToken = accessToken,
+        ).parseJsonObject()
+        return response["data"]
+            ?.jsonArrayOrNull()
+            ?.mapNotNull { it.jsonObjectOrNull()?.toWhatsAppTemplate() }
+            .orEmpty()
+    }
+
     private fun graphGet(pathWithQuery: String): String {
         val request = HttpRequest.newBuilder()
             .uri(URI.create("${graphBaseUrl()}/$pathWithQuery"))
             .timeout(Duration.ofSeconds(18))
+            .GET()
+            .build()
+        return client.send(request, HttpResponse.BodyHandlers.ofString()).successfulBody()
+    }
+
+    private fun graphGetJson(pathWithQuery: String, accessToken: String): String {
+        val request = HttpRequest.newBuilder()
+            .uri(URI.create("${graphBaseUrl()}/$pathWithQuery"))
+            .timeout(Duration.ofSeconds(18))
+            .header("Authorization", "Bearer $accessToken")
             .GET()
             .build()
         return client.send(request, HttpResponse.BodyHandlers.ofString()).successfulBody()
@@ -256,6 +280,16 @@ data class MetaGraphTemplateResult(
     val status: String?,
 )
 
+data class MetaGraphWhatsAppTemplate(
+    val id: String?,
+    val name: String,
+    val status: String,
+    val category: String,
+    val languageCode: String,
+    val bodyText: String?,
+    val rejectedReason: String?,
+)
+
 data class MetaGraphMessageResult(
     val messageId: String?,
 )
@@ -300,3 +334,25 @@ private fun String.onlyDialableCharacters(): String =
 private fun JsonElement?.jsonObjectOrNull(): JsonObject? = this as? JsonObject
 
 private fun JsonElement?.jsonArrayOrNull(): JsonArray? = this as? JsonArray
+
+private fun JsonObject.toWhatsAppTemplate(): MetaGraphWhatsAppTemplate? {
+    val name = get("name")?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() } ?: return null
+    val bodyText = get("components")
+        ?.jsonArrayOrNull()
+        ?.mapNotNull { it.jsonObjectOrNull() }
+        ?.firstOrNull { component ->
+            component["type"]?.jsonPrimitive?.contentOrNull.equals("BODY", ignoreCase = true)
+        }
+        ?.get("text")
+        ?.jsonPrimitive
+        ?.contentOrNull
+    return MetaGraphWhatsAppTemplate(
+        id = get("id")?.jsonPrimitive?.contentOrNull,
+        name = name,
+        status = get("status")?.jsonPrimitive?.contentOrNull ?: "unknown",
+        category = get("category")?.jsonPrimitive?.contentOrNull ?: "UTILITY",
+        languageCode = get("language")?.jsonPrimitive?.contentOrNull ?: "en_US",
+        bodyText = bodyText,
+        rejectedReason = get("rejected_reason")?.jsonPrimitive?.contentOrNull,
+    )
+}

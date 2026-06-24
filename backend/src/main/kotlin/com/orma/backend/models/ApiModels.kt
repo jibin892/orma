@@ -649,6 +649,7 @@ data class OrderRequest(
     val status: String = "confirmed",
     val scheduledAt: String? = null,
     val paidTotal: String = "0",
+    val discountTotal: String = "0",
     val currency: String? = null,
     val notes: String? = null,
     val fulfillmentType: String = "standard",
@@ -897,6 +898,41 @@ data class MetaWhatsAppTemplateResponse(
 @Serializable
 data class MetaWhatsAppTemplateListResponse(
     val templates: List<MetaWhatsAppTemplateResponse>,
+)
+
+@Serializable
+data class MetaWhatsAppCreatedTemplateResponse(
+    val id: String? = null,
+    val name: String,
+    val status: String,
+    val category: String,
+    val languageCode: String,
+    val bodyText: String? = null,
+    val rejectedReason: String? = null,
+)
+
+@Serializable
+data class MetaWhatsAppCreatedTemplateListResponse(
+    val connected: Boolean,
+    val templates: List<MetaWhatsAppCreatedTemplateResponse> = emptyList(),
+    val message: String,
+)
+
+@Serializable
+data class MetaWhatsAppTemplateCreateRequest(
+    val name: String,
+    val category: String = "UTILITY",
+    val languageCode: String? = null,
+    val bodyText: String,
+    val sampleParameters: List<String> = emptyList(),
+)
+
+@Serializable
+data class MetaWhatsAppTemplateCreateResponse(
+    val created: Boolean,
+    val status: String,
+    val template: MetaWhatsAppCreatedTemplateResponse? = null,
+    val message: String,
 )
 
 @Serializable

@@ -83,6 +83,10 @@ POST /integrations/meta/connect/start
 GET  /integrations/meta/connect/callback
 POST /integrations/meta/connect/system-user
 POST /integrations/meta/catalog/sync
+GET  /integrations/meta/whatsapp/templates
+GET  /integrations/meta/whatsapp/templates/created
+POST /integrations/meta/whatsapp/templates
+POST /integrations/meta/whatsapp/templates/sync
 POST /integrations/meta/whatsapp/send-order-update
 GET  /webhooks/meta
 POST /webhooks/meta
@@ -116,7 +120,7 @@ Content-Type: multipart/form-data
 
 `GET /gstin/{gstin}` is protected by Firebase auth. It checks Postgres first and returns the cached lookup when available. If the GSTIN is not cached, it calls GSTINCheck, saves the provider response in `gstin_lookups`, then returns it. The response includes `source: "cache"` or `source: "provider"`.
 
-Meta/WhatsApp integration is workspace-scoped. App clients save non-secret business identifiers through `POST /integrations/meta/connection`; access tokens are stored only in the backend through OAuth callback or the optional Render `META_SYSTEM_USER_ACCESS_TOKEN`. Catalog sync and WhatsApp order updates never expose Meta tokens to Android, iOS, desktop, or web clients.
+Meta/WhatsApp integration is workspace-scoped. App clients save non-secret business identifiers through `POST /integrations/meta/connection`; per-workspace access tokens are stored only in the backend through OAuth callback, encrypted with `META_TOKEN_ENCRYPTION_SECRET`. The optional Render `META_SYSTEM_USER_ACCESS_TOKEN` is a backend-only pilot fallback. Catalog sync, WhatsApp templates, and order updates never expose Meta tokens to Android, iOS, desktop, or web clients.
 
 See `docs/backend-onboarding-handoff.md` for the pilot onboarding contract.
 

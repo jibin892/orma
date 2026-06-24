@@ -39,8 +39,11 @@ import com.patrykandpatrick.vico.compose.cartesian.axis.VerticalAxis
 import com.patrykandpatrick.vico.compose.cartesian.data.CartesianChartModelProducer
 import com.patrykandpatrick.vico.compose.cartesian.data.CartesianLayerRangeProvider
 import com.patrykandpatrick.vico.compose.cartesian.data.CartesianValueFormatter
+import com.patrykandpatrick.vico.compose.cartesian.data.columnModel
 import com.patrykandpatrick.vico.compose.cartesian.data.lineModel
+import com.patrykandpatrick.vico.compose.cartesian.layer.ColumnCartesianLayer
 import com.patrykandpatrick.vico.compose.cartesian.layer.LineCartesianLayer
+import com.patrykandpatrick.vico.compose.cartesian.layer.rememberColumnCartesianLayer
 import com.patrykandpatrick.vico.compose.cartesian.layer.rememberLine
 import com.patrykandpatrick.vico.compose.cartesian.layer.rememberLineCartesianLayer
 import com.patrykandpatrick.vico.compose.cartesian.rememberCartesianChart
@@ -257,6 +260,183 @@ fun OrmaDashboardRevenueChart(
             .height(chartHeight)
             .semantics {
                 contentDescription = "Revenue chart for ${series.size} days. Highest value $currency ${maxAmount.toMoneyLabel()}."
+            },
+        scrollState = rememberVicoScrollState(scrollEnabled = false),
+    )
+}
+
+@Composable
+fun OrmaDashboardCustomerMovementChart(
+    values: List<Double>,
+    labels: List<String>,
+    modifier: Modifier = Modifier,
+    chartHeight: Dp = 156.dp,
+) {
+    val chartValues = remember(values) { values.map { it.coerceAtLeast(0.0) } }
+    val xValues = remember(chartValues) { chartValues.indices.map { it } }
+    val maxValue = chartValues.maxOrNull() ?: 0.0
+    val modelProducer = remember { CartesianChartModelProducer() }
+    val rangeProvider = remember(maxValue) {
+        CartesianLayerRangeProvider.fixed(
+            minY = 0.0,
+            maxY = (maxValue * 1.22).coerceAtLeast(1.0),
+        )
+    }
+
+    LaunchedEffect(chartValues) {
+        if (chartValues.isNotEmpty()) {
+            modelProducer.runTransaction {
+                lineModel { series(x = xValues, y = chartValues) }
+            }
+        }
+    }
+
+    val lineColor = OrmaColors.Success
+    val gridLine = rememberLineComponent(
+        fill = Fill(OrmaColors.Accent.copy(alpha = 0.065f)),
+        thickness = 1.dp,
+    )
+    val baselineLine = rememberLineComponent(
+        fill = Fill(OrmaColors.Accent.copy(alpha = 0.14f)),
+        thickness = 1.dp,
+    )
+    val movementLine = LineCartesianLayer.rememberLine(
+        fill = LineCartesianLayer.LineFill.single(Fill(lineColor)),
+        stroke = LineCartesianLayer.LineStroke.Continuous(
+            thickness = 2.4.dp,
+            cap = StrokeCap.Round,
+        ),
+        areaFill = LineCartesianLayer.AreaFill.single(
+            Fill(
+                Brush.verticalGradient(
+                    listOf(
+                        lineColor.copy(alpha = 0.34f),
+                        lineColor.copy(alpha = 0.15f),
+                        Color.Transparent,
+                    ),
+                ),
+            ),
+        ),
+        interpolator = LineCartesianLayer.Interpolator.catmullRom(),
+    )
+    val bottomAxisValueFormatter = remember(labels) {
+        object : CartesianValueFormatter {
+            override fun format(
+                context: CartesianMeasuringContext,
+                value: Double,
+                verticalAxisPosition: Axis.Position.Vertical?,
+            ): CharSequence {
+                val index = value.roundToInt()
+                return labels.getOrNull(index).orEmpty()
+            }
+        }
+    }
+    CartesianChartHost(
+        chart = rememberCartesianChart(
+            rememberLineCartesianLayer(
+                lineProvider = LineCartesianLayer.LineProvider.series(movementLine),
+                rangeProvider = rangeProvider,
+            ),
+            startAxis = VerticalAxis.rememberStart(
+                line = null,
+                label = null,
+                tick = null,
+                guideline = gridLine,
+                itemPlacer = remember { VerticalAxis.ItemPlacer.count({ 4 }, shiftTopLines = false) },
+            ),
+            bottomAxis = HorizontalAxis.rememberBottom(
+                line = baselineLine,
+                label = null,
+                tick = null,
+                guideline = null,
+                valueFormatter = bottomAxisValueFormatter,
+            ),
+        ),
+        modelProducer = modelProducer,
+        modifier = modifier
+            .height(chartHeight)
+            .semantics {
+                contentDescription = "Customer movement chart for ${chartValues.size} periods. Highest value ${maxValue.roundToInt()} customers."
+            },
+        scrollState = rememberVicoScrollState(scrollEnabled = false),
+    )
+}
+
+@Composable
+fun OrmaDashboardInventoryRiskChart(
+    values: List<Double>,
+    labels: List<String>,
+    modifier: Modifier = Modifier,
+    chartHeight: Dp = 156.dp,
+) {
+    val chartValues = remember(values) { values.map { it.coerceAtLeast(0.0) } }
+    val maxValue = chartValues.maxOrNull() ?: 0.0
+    val modelProducer = remember { CartesianChartModelProducer() }
+    val rangeProvider = remember(maxValue) {
+        CartesianLayerRangeProvider.fixed(
+            minY = 0.0,
+            maxY = (maxValue * 1.24).coerceAtLeast(1.0),
+        )
+    }
+
+    LaunchedEffect(chartValues) {
+        if (chartValues.isNotEmpty()) {
+            modelProducer.runTransaction {
+                columnModel { series(chartValues) }
+            }
+        }
+    }
+
+    val column = rememberLineComponent(
+        fill = Fill(OrmaColors.Warning.copy(alpha = 0.86f)),
+        thickness = 14.dp,
+    )
+    val gridLine = rememberLineComponent(
+        fill = Fill(OrmaColors.Accent.copy(alpha = 0.065f)),
+        thickness = 1.dp,
+    )
+    val baselineLine = rememberLineComponent(
+        fill = Fill(OrmaColors.Accent.copy(alpha = 0.14f)),
+        thickness = 1.dp,
+    )
+    val bottomAxisValueFormatter = remember(labels) {
+        object : CartesianValueFormatter {
+            override fun format(
+                context: CartesianMeasuringContext,
+                value: Double,
+                verticalAxisPosition: Axis.Position.Vertical?,
+            ): CharSequence {
+                val index = value.roundToInt()
+                return labels.getOrNull(index).orEmpty()
+            }
+        }
+    }
+    CartesianChartHost(
+        chart = rememberCartesianChart(
+            rememberColumnCartesianLayer(
+                columnProvider = ColumnCartesianLayer.ColumnProvider.series(column),
+                rangeProvider = rangeProvider,
+            ),
+            startAxis = VerticalAxis.rememberStart(
+                line = null,
+                label = null,
+                tick = null,
+                guideline = gridLine,
+                itemPlacer = remember { VerticalAxis.ItemPlacer.count({ 4 }, shiftTopLines = false) },
+            ),
+            bottomAxis = HorizontalAxis.rememberBottom(
+                line = baselineLine,
+                label = null,
+                tick = null,
+                guideline = null,
+                valueFormatter = bottomAxisValueFormatter,
+            ),
+        ),
+        modelProducer = modelProducer,
+        modifier = modifier
+            .height(chartHeight)
+            .semantics {
+                contentDescription = "Inventory risk chart for ${chartValues.size} stock groups. Highest group ${maxValue.roundToInt()} items."
             },
         scrollState = rememberVicoScrollState(scrollEnabled = false),
     )

@@ -259,6 +259,9 @@ class DashboardRepository(
                         source = "public_catalog",
                         items = publicItems.map { it.orderItem },
                     ),
+                    discountTotalOverride = publicItems.fold(BigDecimal.ZERO) { total, item ->
+                        total.add(item.discountTotal)
+                    }.scaled(),
                 )
                 connection.insertWorkspaceActivity(
                     access = access,
@@ -1211,6 +1214,7 @@ class DashboardRepository(
                     return@withContext null
                 }
                 val printer = connection.insertPrinter(access.workspaceId, request)
+                connection.ensurePrinterDefaults(access.workspaceId)
                 connection.insertWorkspaceActivity(
                     access = access,
                     activityType = "printer_created",
@@ -1246,6 +1250,7 @@ class DashboardRepository(
                 }
                 val printer = connection.updatePrinter(access.workspaceId, printerId, request)
                 if (printer != null) {
+                    connection.ensurePrinterDefaults(access.workspaceId)
                     connection.insertWorkspaceActivity(
                         access = access,
                         activityType = "printer_updated",
@@ -1256,6 +1261,43 @@ class DashboardRepository(
                         body = printer.name,
                     )
                 }
+                connection.commit()
+                printer
+            } catch (error: Throwable) {
+                connection.rollback()
+                throw error
+            } finally {
+                connection.autoCommit = true
+            }
+        }
+    }
+
+    suspend fun deletePrinter(
+        firebaseUser: VerifiedFirebaseUser,
+        printerId: String,
+    ): PrinterProfileResponse? = withContext(Dispatchers.IO) {
+        dataSource.connection.use { connection ->
+            connection.autoCommit = false
+            try {
+                val access = connection.resolveWorkspaceAccess(firebaseUser) ?: run {
+                    connection.rollback()
+                    return@withContext null
+                }
+                val printer = connection.deletePrinter(access.workspaceId, printerId) ?: run {
+                    connection.rollback()
+                    return@withContext null
+                }
+                connection.ensurePrinterDefaults(access.workspaceId)
+                connection.insertWorkspaceActivity(
+                    access = access,
+                    activityType = "printer_deleted",
+                    entityType = "printer",
+                    entityId = printer.id,
+                    entityLabel = printer.name,
+                    title = "Printer removed",
+                    body = printer.name,
+                    tone = "warning",
+                )
                 connection.commit()
                 printer
             } catch (error: Throwable) {
@@ -1522,7 +1564,7 @@ class DashboardRepository(
                 where po.workspace_id = products.workspace_id
                   and po.status = 'active'
                   and (po.starts_at is null or po.starts_at <= now())
-                  and (po.ends_at is null or po.ends_at >= now())
+                  and (po.ends_at is null or po.ends_at >= current_date)
                   and (
                     po.applies_to = 'all'
                     or (po.applies_to = 'category' and po.category_id = products.category_id)
@@ -1530,7 +1572,10 @@ class DashboardRepository(
                   )
                 order by
                   case po.applies_to when 'product' then 0 when 'category' then 1 else 2 end,
-                  po.discount_value desc,
+                  case
+                    when po.discount_type = 'fixed' then least(po.discount_value, products.selling_price)
+                    else least(products.selling_price, products.selling_price * least(po.discount_value, 100) / 100)
+                  end desc,
                   po.created_at desc
                 limit 1
             ) offer on true
@@ -1665,6 +1710,10 @@ class DashboardRepository(
                         unitPrice = product.offer?.finalPrice ?: product.sellingPrice,
                         taxRate = product.taxRate,
                     ),
+                    discountTotal = (product.offer?.discountAmount ?: "0")
+                        .moneyOrZero()
+                        .multiply(quantity)
+                        .scaled(),
                 )
             }
 
@@ -1711,7 +1760,7 @@ class DashboardRepository(
                 where po.workspace_id = products.workspace_id
                   and po.status = 'active'
                   and (po.starts_at is null or po.starts_at <= now())
-                  and (po.ends_at is null or po.ends_at >= now())
+                  and (po.ends_at is null or po.ends_at >= current_date)
                   and (
                     po.applies_to = 'all'
                     or (po.applies_to = 'category' and po.category_id = products.category_id)
@@ -1719,7 +1768,10 @@ class DashboardRepository(
                   )
                 order by
                   case po.applies_to when 'product' then 0 when 'category' then 1 else 2 end,
-                  po.discount_value desc,
+                  case
+                    when po.discount_type = 'fixed' then least(po.discount_value, products.selling_price)
+                    else least(products.selling_price, products.selling_price * least(po.discount_value, 100) / 100)
+                  end desc,
                   po.created_at desc
                 limit 1
             ) offer on true
@@ -3428,7 +3480,8 @@ class DashboardRepository(
         printerId: String,
         request: PrinterProfileRequest,
     ): PrinterProfileResponse? {
-        clearPrinterDefaultsIfNeeded(workspaceId, request, exceptPrinterId = printerId.cleanUuidOrNull())
+        val cleanPrinterId = printerId.cleanUuidOrNull() ?: return null
+        clearPrinterDefaultsIfNeeded(workspaceId, request, exceptPrinterId = cleanPrinterId)
         val sql = """
             update printer_profiles
             set name = ?, connection_type = ?, address = ?, paper_width_mm = ?, dpi = ?,
@@ -3439,8 +3492,31 @@ class DashboardRepository(
         """.trimIndent()
         return prepareStatement(sql).use { statement ->
             statement.bindPrinterRequest(request, startIndex = 1)
-            statement.setString(11, printerId)
+            statement.setString(11, cleanPrinterId)
             statement.setString(12, workspaceId)
+            statement.executeQuery().use { result ->
+                if (result.next()) result.toPrinterProfileResponse() else null
+            }
+        }
+    }
+
+    private fun Connection.deletePrinter(
+        workspaceId: String,
+        printerId: String,
+    ): PrinterProfileResponse? {
+        val cleanPrinterId = printerId.cleanUuidOrNull() ?: return null
+        val sql = """
+            update printer_profiles
+            set status = 'deleted',
+                is_default_receipt = false,
+                is_default_barcode = false,
+                updated_at = now()
+            where id = ?::uuid and workspace_id = ?::uuid and status = 'active'
+            returning *
+        """.trimIndent()
+        return prepareStatement(sql).use { statement ->
+            statement.setString(1, cleanPrinterId)
+            statement.setString(2, workspaceId)
             statement.executeQuery().use { result ->
                 if (result.next()) result.toPrinterProfileResponse() else null
             }
@@ -3470,9 +3546,54 @@ class DashboardRepository(
         }
     }
 
+    private fun Connection.ensurePrinterDefaults(workspaceId: String) {
+        ensurePrinterDefault(
+            workspaceId = workspaceId,
+            defaultColumn = "is_default_receipt",
+            supportColumn = "supports_receipts",
+        )
+        ensurePrinterDefault(
+            workspaceId = workspaceId,
+            defaultColumn = "is_default_barcode",
+            supportColumn = "supports_barcodes",
+        )
+    }
+
+    private fun Connection.ensurePrinterDefault(
+        workspaceId: String,
+        defaultColumn: String,
+        supportColumn: String,
+    ) {
+        val sql = """
+            update printer_profiles
+            set $defaultColumn = true, updated_at = now()
+            where id = (
+                select id
+                from printer_profiles
+                where workspace_id = ?::uuid
+                    and status = 'active'
+                    and $supportColumn = true
+                    and not exists (
+                        select 1
+                        from printer_profiles existing
+                        where existing.workspace_id = printer_profiles.workspace_id
+                            and existing.status = 'active'
+                            and existing.$defaultColumn = true
+                    )
+                order by created_at desc
+                limit 1
+            )
+        """.trimIndent()
+        prepareStatement(sql).use { statement ->
+            statement.setString(1, workspaceId)
+            statement.executeUpdate()
+        }
+    }
+
     private fun Connection.insertOrder(
         access: DashboardWorkspaceAccess,
         request: OrderRequest,
+        discountTotalOverride: BigDecimal = BigDecimal.ZERO,
     ): OrderResponse {
         val status = request.status.normalizedOrderStatus()
         val orderType = request.orderType.cleanOrderType()
@@ -3503,6 +3624,13 @@ class DashboardRepository(
         val subtotal = preparedItems.fold(BigDecimal.ZERO) { total, item -> total.add(item.lineSubtotal) }.scaled()
         val taxTotal = preparedItems.fold(BigDecimal.ZERO) { total, item -> total.add(item.lineTax) }.scaled()
         val total = preparedItems.fold(BigDecimal.ZERO) { sum, item -> sum.add(item.lineTotal) }.scaled()
+        val discountTotal = (if (discountTotalOverride > BigDecimal.ZERO) {
+            discountTotalOverride
+        } else {
+            request.discountTotal.moneyOrZero()
+        })
+            .coerceAtLeast(BigDecimal.ZERO)
+            .scaled()
         val paymentMode = request.paymentMode.cleanPaymentMode()
         validateCreditPaymentStatus(paymentMode, status)
         val requestedPaidTotal = request.paidTotal.moneyOrZero().coerceAtMost(total)
@@ -3523,7 +3651,7 @@ class DashboardRepository(
             )
             values (
                 ?::uuid, ?::uuid, ?, ?, ?, ?::timestamptz,
-                ?, ?, 0, ?, ?, ?, ?, ?, ?::uuid, ?, ?, ?, now()
+                ?, ?, ?, ?, ?, ?, ?, ?, ?::uuid, ?, ?, ?, now()
             )
             returning id::text
         """.trimIndent()
@@ -3536,15 +3664,16 @@ class DashboardRepository(
             statement.setNullableString(6, request.scheduledAt?.cleanOptional())
             statement.setBigDecimal(7, subtotal)
             statement.setBigDecimal(8, taxTotal)
-            statement.setBigDecimal(9, paidTotal)
-            statement.setBigDecimal(10, total)
-            statement.setString(11, currency)
-            statement.setNullableString(12, request.notes?.cleanOptional())
-            statement.setBoolean(13, inventoryApplied)
-            statement.setString(14, access.userId)
-            statement.setString(15, request.source.cleanOrderSource())
-            statement.setString(16, request.fulfillmentType.cleanFulfillmentType())
-            statement.setString(17, paymentMode)
+            statement.setBigDecimal(9, discountTotal)
+            statement.setBigDecimal(10, paidTotal)
+            statement.setBigDecimal(11, total)
+            statement.setString(12, currency)
+            statement.setNullableString(13, request.notes?.cleanOptional())
+            statement.setBoolean(14, inventoryApplied)
+            statement.setString(15, access.userId)
+            statement.setString(16, request.source.cleanOrderSource())
+            statement.setString(17, request.fulfillmentType.cleanFulfillmentType())
+            statement.setString(18, paymentMode)
             statement.executeQuery().use { result ->
                 result.next()
                 result.getString("id")
@@ -3613,6 +3742,7 @@ class DashboardRepository(
         val subtotal = preparedItems.fold(BigDecimal.ZERO) { total, item -> total.add(item.lineSubtotal) }.scaled()
         val taxTotal = preparedItems.fold(BigDecimal.ZERO) { total, item -> total.add(item.lineTax) }.scaled()
         val total = preparedItems.fold(BigDecimal.ZERO) { sum, item -> sum.add(item.lineTotal) }.scaled()
+        val discountTotal = request.discountTotal.moneyOrZero().coerceAtLeast(BigDecimal.ZERO).scaled()
         val paymentMode = request.paymentMode.cleanPaymentMode()
         validateCreditPaymentStatus(paymentMode, status)
         val requestedPaidTotal = request.paidTotal.moneyOrZero().coerceAtMost(total)
@@ -3646,7 +3776,7 @@ class DashboardRepository(
                 scheduled_at = ?::timestamptz,
                 subtotal = ?,
                 tax_total = ?,
-                discount_total = 0,
+                discount_total = ?,
                 paid_total = ?,
                 total = ?,
                 currency = ?,
@@ -3665,16 +3795,17 @@ class DashboardRepository(
             statement.setNullableString(4, request.scheduledAt?.cleanOptional())
             statement.setBigDecimal(5, subtotal)
             statement.setBigDecimal(6, taxTotal)
-            statement.setBigDecimal(7, paidTotal)
-            statement.setBigDecimal(8, total)
-            statement.setString(9, currency)
-            statement.setNullableString(10, request.notes?.cleanOptional())
-            statement.setBoolean(11, inventoryShouldBeApplied)
-            statement.setString(12, request.source.cleanOrderSource())
-            statement.setString(13, request.fulfillmentType.cleanFulfillmentType())
-            statement.setString(14, paymentMode)
-            statement.setString(15, cleanOrderId)
-            statement.setString(16, access.workspaceId)
+            statement.setBigDecimal(7, discountTotal)
+            statement.setBigDecimal(8, paidTotal)
+            statement.setBigDecimal(9, total)
+            statement.setString(10, currency)
+            statement.setNullableString(11, request.notes?.cleanOptional())
+            statement.setBoolean(12, inventoryShouldBeApplied)
+            statement.setString(13, request.source.cleanOrderSource())
+            statement.setString(14, request.fulfillmentType.cleanFulfillmentType())
+            statement.setString(15, paymentMode)
+            statement.setString(16, cleanOrderId)
+            statement.setString(17, access.workspaceId)
             statement.executeUpdate()
         }
 
@@ -3985,8 +4116,8 @@ class DashboardRepository(
         setInt(startIndex + 4, request.dpi.coerceIn(120, 600))
         setBoolean(startIndex + 5, request.supportsReceipts)
         setBoolean(startIndex + 6, request.supportsBarcodes)
-        setBoolean(startIndex + 7, request.isDefaultReceipt)
-        setBoolean(startIndex + 8, request.isDefaultBarcode)
+        setBoolean(startIndex + 7, request.isDefaultReceipt && request.supportsReceipts)
+        setBoolean(startIndex + 8, request.isDefaultBarcode && request.supportsBarcodes)
         setNullableString(startIndex + 9, request.notes?.cleanOptional())
     }
 
@@ -5195,6 +5326,7 @@ class DashboardRepository(
     private data class PublicCatalogPreparedItem(
         val orderItem: OrderItemRequest,
         val itemType: String,
+        val discountTotal: BigDecimal = BigDecimal.ZERO,
     )
 
     private companion object {
