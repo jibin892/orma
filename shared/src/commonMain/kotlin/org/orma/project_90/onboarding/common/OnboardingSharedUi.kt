@@ -17945,7 +17945,7 @@ private fun ProductTransferSheet(
     var importMode by rememberSaveable { mutableStateOf(true) }
     val template = state.dashboard.productImportTemplate
     val fallbackTemplate = productImportCsvTemplate()
-    val templateCsv = template?.csv?.takeIf { it.isNotBlank() }
+    val templateCsv = template?.csv?.takeIf { it.isNotBlank() }?.withProductImportCategoryColumn()
     val requiredColumns = template?.requiredColumns?.takeIf { it.isNotEmpty() } ?: listOf("name")
     var csvText by rememberSaveable { mutableStateOf(templateCsv ?: fallbackTemplate) }
     var csvFileMessage by rememberSaveable { mutableStateOf<String?>(null) }
@@ -18065,7 +18065,9 @@ private fun ProductTransferSheet(
                 OrmaSecondaryButton(
                     text = "Use template",
                     onClick = {
-                        val nextTemplate = state.dashboard.productImportTemplate?.csv?.takeIf { it.isNotBlank() }
+                        val nextTemplate = state.dashboard.productImportTemplate?.csv
+                            ?.takeIf { it.isNotBlank() }
+                            ?.withProductImportCategoryColumn()
                         if (nextTemplate == null) actions.onLoadProductImportTemplate()
                         csvText = nextTemplate ?: fallbackTemplate
                     },
@@ -18120,7 +18122,10 @@ private fun ProductTransferSheet(
                 secondaryText = "Reset template",
                 onSecondary = {
                     actions.onClearProductTransfer()
-                    csvText = state.dashboard.productImportTemplate?.csv?.takeIf { it.isNotBlank() } ?: fallbackTemplate
+                    csvText = state.dashboard.productImportTemplate?.csv
+                        ?.takeIf { it.isNotBlank() }
+                        ?.withProductImportCategoryColumn()
+                        ?: fallbackTemplate
                 },
             )
         } else {
@@ -21839,6 +21844,20 @@ private fun productImportCsvTemplate(): String =
         "expiryDate",
         "supplierName",
     ).joinToString(",") { it.csvCell() } + "\n"
+
+private fun String.withProductImportCategoryColumn(): String {
+    val lines = lineSequence().toList()
+    if (lines.isEmpty()) return this
+    val header = lines.first().split(",").map { it.trim().trim('"') }
+    if (header.any { it.catalogCsvHeaderKey() in setOf("categoryname", "category") }) return this
+    val insertAt = (header.indexOfFirst { it.catalogCsvHeaderKey() == "itemtype" }.takeIf { it >= 0 } ?: 0) + 1
+    return lines.mapIndexed { index, line ->
+        val cells = line.split(",").toMutableList()
+        val value = if (index == 0) "categoryName" else ""
+        cells.add(insertAt.coerceIn(0, cells.size), value)
+        cells.joinToString(",")
+    }.joinToString("\n") + if (endsWith("\n")) "\n" else ""
+}
 
 private data class ProductImportCsvProfile(
     val rows: Int,
