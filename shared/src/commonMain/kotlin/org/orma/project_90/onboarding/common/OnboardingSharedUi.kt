@@ -4685,6 +4685,9 @@ private fun DashboardSectionContent(
             state = state,
             actions = actions,
             wide = wide,
+            mobileSelectedProductId = mobileSelectedProductId,
+            onMobileSelectedProductChange = onMobileSelectedProductChange,
+            onRequestScrollTop = onRequestScrollTop,
         )
         DashboardSection.Marketing -> DashboardMarketingContent(
             state = state,
@@ -9043,6 +9046,53 @@ private const val DashboardProductSortStock = "product_stock"
 private const val DashboardProductSortPrice = "product_price"
 private val DashboardProductActionColumnWidth = 324.dp
 
+private data class DashboardCatalogAvailabilityOption(
+    val key: String,
+    val label: String,
+    val body: String,
+)
+
+private fun dashboardCatalogAvailabilityOptions(itemType: String): List<DashboardCatalogAvailabilityOption> =
+    buildList {
+        add(
+            DashboardCatalogAvailabilityOption(
+                key = "active",
+                label = "Active",
+                body = "Visible and available for new work.",
+            ),
+        )
+        add(
+            DashboardCatalogAvailabilityOption(
+                key = "hidden",
+                label = "Hide catalog",
+                body = "Keep internally, remove from public ordering.",
+            ),
+        )
+        if (itemType == "product") {
+            add(
+                DashboardCatalogAvailabilityOption(
+                    key = "out_of_stock",
+                    label = "Out of stock",
+                    body = "Stop orders until stock is added.",
+                ),
+            )
+        }
+        add(
+            DashboardCatalogAvailabilityOption(
+                key = "unavailable",
+                label = "Unavailable",
+                body = "Temporarily block sales and bookings.",
+            ),
+        )
+        add(
+            DashboardCatalogAvailabilityOption(
+                key = "inactive",
+                label = "Inactive",
+                body = "Turn off until reactivated.",
+            ),
+        )
+    }
+
 private val DashboardProductDescendingFirstSorts: Set<String> = setOf(
     DashboardProductSortStock,
     DashboardProductSortPrice,
@@ -9060,6 +9110,61 @@ private fun sortedDashboardProducts(
         else -> products.sortedBy { it.name.lowercase() }
     }
     return if (ascending) sorted else sorted.asReversed()
+}
+
+private fun String.normalizedCatalogAvailabilityStatus(): String {
+    val normalized = trim().lowercase().replace("-", "_").filter { it.isLetterOrDigit() || it == '_' }
+    return when (normalized) {
+        "inactive", "disabled", "paused", "off" -> "inactive"
+        "hidden", "hide", "catalog_hidden", "hidden_from_catalog", "off_catalog", "turn_off_catalog", "turnoffcatalog" -> "hidden"
+        "unavailable", "not_available", "notavailable", "temporarily_unavailable", "service_unavailable", "appointment_unavailable" -> "unavailable"
+        "out_of_stock", "outofstock", "out_stock", "no_stock", "stock_out", "sold_out", "soldout" -> "out_of_stock"
+        "archived", "deleted" -> "archived"
+        else -> "active"
+    }
+}
+
+private fun String.catalogAvailabilityLabel(): String =
+    when (normalizedCatalogAvailabilityStatus()) {
+        "hidden" -> "Hidden"
+        "unavailable" -> "Unavailable"
+        "out_of_stock" -> "Out of stock"
+        "inactive" -> "Inactive"
+        "archived" -> "Archived"
+        else -> "Active"
+    }
+
+private fun String.catalogAvailabilityTone(): OrmaStatusTone =
+    when (normalizedCatalogAvailabilityStatus()) {
+        "active" -> OrmaStatusTone.Success
+        "hidden" -> OrmaStatusTone.Info
+        "out_of_stock", "unavailable" -> OrmaStatusTone.Warning
+        "archived" -> OrmaStatusTone.Danger
+        else -> OrmaStatusTone.Neutral
+    }
+
+private fun OrmaProduct.dashboardCatalogAvailabilityStatus(): String {
+    val normalized = status.normalizedCatalogAvailabilityStatus()
+    if (
+        itemType == "product" &&
+        normalized == "active" &&
+        trackStock &&
+        stockQuantity.toDoubleOrNull().orZero() <= 0.0
+    ) {
+        return "out_of_stock"
+    }
+    return normalized
+}
+
+private fun OrmaProductDraft.withCatalogAvailabilityStatus(status: String): OrmaProductDraft {
+    val normalized = status.normalizedCatalogAvailabilityStatus().let {
+        if (it == "archived") "inactive" else it
+    }
+    return copy(
+        status = normalized,
+        trackStock = if (itemType == "product" && normalized == "out_of_stock") true else trackStock,
+        stockQuantity = if (itemType == "product" && normalized == "out_of_stock") "0" else stockQuantity,
+    )
 }
 
 private const val DashboardInvoiceSortInvoice = "invoice_number"
@@ -14163,10 +14268,12 @@ private fun DashboardProductsContent(
     var editProductId by rememberSaveable { mutableStateOf<String?>(null) }
     var editSupplierId by rememberSaveable { mutableStateOf<String?>(null) }
     var stockProductId by rememberSaveable { mutableStateOf<String?>(null) }
+    var availabilityProductId by rememberSaveable { mutableStateOf<String?>(null) }
     var imageProductId by rememberSaveable { mutableStateOf<String?>(null) }
     val editProduct = state.dashboard.products.firstOrNull { it.id == editProductId }
     val editSupplier = state.dashboard.suppliers.firstOrNull { it.id == editSupplierId }
     val stockProduct = state.dashboard.products.firstOrNull { it.id == stockProductId }
+    val availabilityProduct = state.dashboard.products.firstOrNull { it.id == availabilityProductId }
     val imageProduct = state.dashboard.products.firstOrNull { it.id == imageProductId }
     val visibleProducts = filteredDashboardProducts(state)
     val visibleSuppliers = filteredDashboardSuppliers(state)
@@ -14215,6 +14322,7 @@ private fun DashboardProductsContent(
             onEdit = { editSelectedProduct(selectedProduct) },
             onImage = { imageProductId = selectedProduct.id },
             onStock = { stockProductId = selectedProduct.id },
+            onAvailability = { availabilityProductId = selectedProduct.id },
         )
     } else if (wide) {
         DashboardProductsWorkspace(
@@ -14232,6 +14340,7 @@ private fun DashboardProductsContent(
             onEditSupplier = { editSupplierId = it.id },
             onEditClick = { if (canCreateCatalogItem) editProductId = it.id },
             onStockClick = { if (canManageStock) stockProductId = it.id },
+            onAvailabilityClick = { if (canManageStock || canCreateCatalogItem) availabilityProductId = it.id },
             onImageClick = { imageProductId = it.id },
         )
     } else {
@@ -14306,6 +14415,7 @@ private fun DashboardProductsContent(
                     onProductClick = ::openProduct,
                     onEditClick = { if (canCreateCatalogItem) editProductId = it.id },
                     onStockClick = { if (canManageStock) stockProductId = it.id },
+                    onAvailabilityClick = { if (canManageStock || canCreateCatalogItem) availabilityProductId = it.id },
                     onImageClick = { imageProductId = it.id },
                     wide = false,
                 )
@@ -14362,6 +14472,17 @@ private fun DashboardProductsContent(
             },
         )
     }
+    availabilityProduct?.takeIf { canManageStock || canCreateCatalogItem }?.let { product ->
+        ProductAvailabilitySheet(
+            product = product,
+            state = state,
+            onDismiss = { availabilityProductId = null },
+            onSubmit = { draft ->
+                actions.onUpdateProduct(product.id, draft)
+                availabilityProductId = null
+            },
+        )
+    }
     imageProduct?.let { product ->
         ProductImageSheet(
             product = product,
@@ -14391,6 +14512,7 @@ private fun DashboardProductsWorkspace(
     onEditSupplier: (OrmaSupplier) -> Unit,
     onEditClick: (OrmaProduct) -> Unit,
     onStockClick: (OrmaProduct) -> Unit,
+    onAvailabilityClick: (OrmaProduct) -> Unit,
     onImageClick: (OrmaProduct) -> Unit,
 ) {
     Column(
@@ -14451,6 +14573,7 @@ private fun DashboardProductsWorkspace(
                 onCategoryClick = onCategoryClick,
                 onEditClick = onEditClick,
                 onStockClick = onStockClick,
+                onAvailabilityClick = onAvailabilityClick,
                 onImageClick = onImageClick,
             )
         }
@@ -14950,6 +15073,7 @@ private fun DashboardProductRecordsSurface(
     onCategoryClick: () -> Unit,
     onEditClick: (OrmaProduct) -> Unit,
     onStockClick: (OrmaProduct) -> Unit,
+    onAvailabilityClick: (OrmaProduct) -> Unit,
     onImageClick: (OrmaProduct) -> Unit,
 ) {
     val selectedItemType = state.selectedDashboardItemTypeFilter()
@@ -15018,6 +15142,7 @@ private fun DashboardProductRecordsSurface(
                     },
                     onEditClick = onEditClick,
                     onStockClick = onStockClick,
+                    onAvailabilityClick = onAvailabilityClick,
                     onImageClick = onImageClick,
                 )
             }
@@ -17142,6 +17267,7 @@ private fun DashboardProductTable(
     onSortChange: (String) -> Unit,
     onEditClick: (OrmaProduct) -> Unit,
     onStockClick: (OrmaProduct) -> Unit,
+    onAvailabilityClick: (OrmaProduct) -> Unit,
     onImageClick: (OrmaProduct) -> Unit,
 ) {
     LazyColumn(
@@ -17223,6 +17349,7 @@ private fun DashboardProductTable(
                 zebra = index % 2 == 1,
                 onEditClick = { onEditClick(product) },
                 onStockClick = { onStockClick(product) },
+                onAvailabilityClick = { onAvailabilityClick(product) },
                 onImageClick = { onImageClick(product) },
             )
         }
@@ -17302,6 +17429,7 @@ private fun DashboardWideProductRow(
     zebra: Boolean = false,
     onEditClick: () -> Unit,
     onStockClick: () -> Unit,
+    onAvailabilityClick: () -> Unit,
     onImageClick: () -> Unit,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
@@ -17390,7 +17518,10 @@ private fun DashboardWideProductRow(
                         onClick = onStockClick,
                     )
                 } else {
-                    Spacer(modifier = Modifier.width(108.dp))
+                    DashboardTableActionButton(
+                        text = "Status",
+                        onClick = onAvailabilityClick,
+                    )
                 }
             }
         }
@@ -20256,6 +20387,175 @@ private fun CustomerBookingHistoryRow(
 }
 
 @Composable
+private fun ProductDetailsScreen(
+    product: OrmaProduct,
+    canEdit: Boolean,
+    canManageStock: Boolean,
+    onEdit: () -> Unit,
+    onImage: () -> Unit,
+    onStock: () -> Unit,
+    onAvailability: () -> Unit,
+) {
+    val typeLabel = product.itemType.sellableItemTypeLabel()
+    val stockOrTime = when (product.itemType) {
+        "appointment" -> product.durationMinutes?.let { "$it min booking" } ?: "Booking item"
+        "service" -> product.durationMinutes?.let { "$it min service" } ?: "Service item"
+        else -> if (product.trackStock) {
+            "${product.stockQuantity.ifBlank { "0" }} ${product.unit.ifBlank { "unit" }}"
+        } else {
+            "Stock not tracked"
+        }
+    }
+    val readinessText = when {
+        product.status.trim().lowercase() != "active" -> "Inactive"
+        product.lowStock -> "Low stock"
+        product.imageUrl.isNullOrBlank() -> "Image missing"
+        else -> "Ready"
+    }
+    val readinessTone = when (readinessText) {
+        "Ready" -> OrmaStatusTone.Success
+        "Inactive" -> OrmaStatusTone.Info
+        else -> OrmaStatusTone.Warning
+    }
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        DashboardRecordCard {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
+                if (!product.imageUrl.isNullOrBlank()) {
+                    OrmaRemoteImage(
+                        url = product.imageUrl,
+                        contentDescription = product.name,
+                        modifier = Modifier
+                            .size(58.dp)
+                            .clip(OrmaShapes.SmallCard),
+                    )
+                } else {
+                    OrmaDashboardIconBubble(modifier = Modifier.size(58.dp)) {
+                        DashboardNavIcon(
+                            kind = DashboardNavIconKind.Products,
+                            color = OrmaColors.IconPrimary,
+                            modifier = Modifier.size(22.dp),
+                        )
+                    }
+                }
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(5.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.Top,
+                    ) {
+                        Text(
+                            text = product.name,
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.titleMedium,
+                            color = OrmaColors.TextPrimary,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        OrmaBadge(text = typeLabel.uppercase(), tone = OrmaStatusTone.Info)
+                    }
+                    Text(
+                        text = listOfNotNull(product.categoryName, product.supplierName)
+                            .joinToString(" / ")
+                            .ifBlank { product.unit.ifBlank { "Uncategorized" } },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = OrmaColors.TextSecondary,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    OrmaBadge(text = readinessText.uppercase(), tone = readinessTone)
+                }
+            }
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                if (canEdit) {
+                    OrmaPrimaryButton(
+                        text = "Edit details",
+                        onClick = onEdit,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    OrmaSecondaryButton(
+                        text = "Image",
+                        onClick = onImage,
+                        modifier = Modifier.weight(1f),
+                    )
+                    OrmaSecondaryButton(
+                        text = "Status",
+                        onClick = onAvailability,
+                        modifier = Modifier.weight(1f),
+                        enabled = canEdit || canManageStock,
+                    )
+                    if (product.itemType == "product") {
+                        OrmaSecondaryButton(
+                            text = "Stock",
+                            onClick = onStock,
+                            modifier = Modifier.weight(1f),
+                            enabled = canManageStock,
+                        )
+                    }
+                }
+            }
+        }
+        DashboardRecordCard {
+            Text(
+                text = "Selling essentials",
+                style = MaterialTheme.typography.titleSmall,
+                color = OrmaColors.TextPrimary,
+            )
+            BookingMetricGrid(
+                metrics = listOf(
+                    BookingMetric("Price", dashboardMoney(product.sellingPrice, product.currency), typeLabel),
+                    BookingMetric(
+                        if (product.itemType == "product") "Stock" else "Duration",
+                        stockOrTime,
+                        product.unit.ifBlank { typeLabel.lowercase() },
+                    ),
+                    BookingMetric("Tax", "${product.taxRate.ifBlank { "0" }}%", if (product.pricesIncludeTax) "included" else "excluded"),
+                ),
+            )
+            if (product.lowStock && product.itemType == "product") {
+                DashboardChecklistRow(text = "Stock is at or below reorder level.")
+            }
+        }
+        DashboardRecordCard {
+            Text(
+                text = "Catalog details",
+                style = MaterialTheme.typography.titleSmall,
+                color = OrmaColors.TextPrimary,
+            )
+            OrmaKeyValueList(
+                rows = buildList {
+                    add("Category" to product.categoryName.orEmpty().ifBlank { "Not added" })
+                    add("Supplier" to product.supplierName.orEmpty().ifBlank { "Not added" })
+                    add("SKU" to product.sku.orEmpty().ifBlank { "Not added" })
+                    add("Barcode" to product.barcode.orEmpty().ifBlank { "Not added" })
+                    add("Status" to product.status.dashboardTitleCase().ifBlank { "Active" })
+                    product.expiryDate.productExpiryLabel()?.let { add("Expiry" to it.removePrefix("Expires ")) }
+                    product.description.orEmpty().takeIf { it.isNotBlank() }?.let { add("Notes" to it) }
+                },
+            )
+        }
+    }
+}
+
+@Composable
 private fun DashboardProductRow(
     product: OrmaProduct,
     onOpenClick: (() -> Unit)?,
@@ -21158,6 +21458,84 @@ private fun handleProductImagePickerResult(
 }
 
 @Composable
+private fun CatalogAvailabilityPicker(
+    itemType: String,
+    selectedStatus: String,
+    onSelected: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val options = dashboardCatalogAvailabilityOptions(itemType)
+    val selected = selectedStatus.normalizedCatalogAvailabilityStatus().let { status ->
+        if (options.any { it.key == status }) status else "active"
+    }
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = "Availability",
+            style = MaterialTheme.typography.labelMedium,
+            color = OrmaColors.TextSecondary,
+        )
+        BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+            val compact = maxWidth < 620.dp
+            val columns = if (compact) 1 else 2
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                options.chunked(columns).forEach { rowOptions ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        rowOptions.forEach { option ->
+                            val checked = selected == option.key
+                            val colors = org.orma.project_90.designsystem.ormaStatusColors(option.key.catalogAvailabilityTone())
+                            Surface(
+                                onClick = { onSelected(option.key) },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .heightIn(min = 64.dp),
+                                shape = OrmaShapes.SmallCard,
+                                color = if (checked) colors.container else OrmaColors.CardBackground,
+                                contentColor = colors.content,
+                                border = BorderStroke(
+                                    width = if (checked) 1.dp else 0.7.dp,
+                                    color = if (checked) colors.border else OrmaColors.Hairline,
+                                ),
+                                tonalElevation = 0.dp,
+                                shadowElevation = 0.dp,
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalArrangement = Arrangement.spacedBy(3.dp),
+                                ) {
+                                    Text(
+                                        text = option.label,
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = if (checked) colors.content else OrmaColors.TextPrimary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Text(
+                                        text = option.body,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (checked) colors.content.copy(alpha = 0.82f) else OrmaColors.TextSecondary,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                        }
+                        repeat(columns - rowOptions.size) {
+                            Spacer(modifier = Modifier.weight(1f))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun CategoryFormSheet(
     initialItemType: String = "all",
     allowedItemTypes: List<String> = listOf("product"),
@@ -21609,12 +21987,11 @@ private fun ProductEditorScreen(
                 onSelected = { draft = draft.copy(supplierId = it.id) },
             )
         }
-        OrmaSwitchRow(
-            title = "Available for orders",
-            body = "Keep this ${draft.itemType.sellableItemTypeLabel().lowercase()} active in dashboard, catalog, and booking flows.",
-            checked = draft.status.trim().lowercase() != "inactive",
-            onCheckedChange = { available ->
-                draft = draft.copy(status = if (available) "active" else "inactive")
+        CatalogAvailabilityPicker(
+            itemType = draft.itemType,
+            selectedStatus = draft.status,
+            onSelected = { status ->
+                draft = draft.withCatalogAvailabilityStatus(status)
             },
         )
         if (stockFieldsVisible) {
@@ -21644,7 +22021,7 @@ private fun ProductEditorScreen(
                             expiryDate = if (draft.itemType == "product") draft.expiryDate.trim() else "",
                             categoryName = if (draft.categoryId.isBlank()) draft.categoryName.trim() else "",
                             taxRate = draft.taxRate.trim().ifBlank { "0" },
-                            status = if (draft.status.trim().lowercase() == "inactive") "inactive" else "active",
+                            status = draft.status.normalizedCatalogAvailabilityStatus(),
                         ),
                     )
                 }
@@ -21722,6 +22099,63 @@ private fun ProductImageSheet(
             primaryText = if (state.dashboard.actionLoading) "Saving..." else "Save image",
             onPrimary = { image?.let(onSubmit) },
             primaryEnabled = image != null && !state.dashboard.actionLoading,
+            secondaryText = "Cancel",
+            onSecondary = LocalSmoothSheetDismiss.current ?: onDismiss,
+        )
+    }
+}
+
+@Composable
+private fun ProductAvailabilitySheet(
+    product: OrmaProduct,
+    state: OnboardingUiState,
+    onDismiss: () -> Unit,
+    onSubmit: (OrmaProductDraft) -> Unit,
+) {
+    var draft by remember(product.id) { mutableStateOf(product.toProductDraft()) }
+    DashboardFormSheet(
+        title = "Catalog availability",
+        body = "${product.name}: control whether this ${product.itemType.sellableItemTypeLabel().lowercase()} can be sold, booked, or shown in the public catalog.",
+        onDismiss = onDismiss,
+    ) {
+        OrmaBadge(
+            text = product.dashboardCatalogAvailabilityStatus().catalogAvailabilityLabel().uppercase(),
+            tone = product.dashboardCatalogAvailabilityStatus().catalogAvailabilityTone(),
+        )
+        CatalogAvailabilityPicker(
+            itemType = product.itemType,
+            selectedStatus = draft.status,
+            onSelected = { status ->
+                draft = draft.withCatalogAvailabilityStatus(status)
+            },
+        )
+        OrmaKeyValueList(
+            rows = buildList {
+                add("Current status" to product.dashboardCatalogAvailabilityStatus().catalogAvailabilityLabel())
+                add("Public catalog" to if (draft.status.normalizedCatalogAvailabilityStatus() == "active") "Shown when stock is available" else "Hidden")
+                add("New sales/bookings" to if (draft.status.normalizedCatalogAvailabilityStatus() == "active") "Allowed" else "Blocked")
+                if (product.itemType == "product") {
+                    add("Stock" to "${draft.stockQuantity.ifBlank { "0" }} ${draft.unit.ifBlank { product.unit }}")
+                }
+            },
+        )
+        if (draft.status.normalizedCatalogAvailabilityStatus() == "active" &&
+            product.itemType == "product" &&
+            draft.trackStock &&
+            draft.stockQuantity.toDoubleOrNull().orZero() <= 0.0
+        ) {
+            DashboardChecklistRow(text = "Add stock before this product appears in the public catalog.")
+        }
+        OrmaActionRow(
+            primaryText = if (state.dashboard.actionLoading) "Saving..." else "Save availability",
+            onPrimary = {
+                onSubmit(
+                    draft.copy(
+                        status = draft.status.normalizedCatalogAvailabilityStatus(),
+                    ),
+                )
+            },
+            primaryEnabled = !state.dashboard.actionLoading,
             secondaryText = "Cancel",
             onSecondary = LocalSmoothSheetDismiss.current ?: onDismiss,
         )
@@ -22036,12 +22470,18 @@ private fun StockAdjustmentSheet(
                 onSelected = { draft = draft.copy(supplierId = it.id) },
             )
         }
-        OrmaSwitchRow(
-            title = "Available for orders",
-            body = "Turn off to hide this product from public catalog and order selection.",
-            checked = draft.status.trim().lowercase() != "inactive",
-            onCheckedChange = { available ->
-                draft = draft.copy(status = if (available) "active" else "inactive")
+        CatalogAvailabilityPicker(
+            itemType = product.itemType,
+            selectedStatus = draft.status,
+            onSelected = { status ->
+                val next = draft.copy(status = status.normalizedCatalogAvailabilityStatus())
+                draft = if (status.normalizedCatalogAvailabilityStatus() == "out_of_stock") {
+                    next.copy(quantityDelta = product.stockQuantity.toDoubleOrNull()?.let { current ->
+                        if (current > 0.0) (-current).toDashboardMoneyInput() else next.quantityDelta
+                    } ?: next.quantityDelta)
+                } else {
+                    next
+                }
             },
         )
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -22075,7 +22515,7 @@ private fun StockAdjustmentSheet(
                             sellingPrice = draft.sellingPrice.trim(),
                             costPrice = draft.costPrice.trim(),
                             supplierId = draft.supplierId.trim(),
-                            status = if (draft.status.trim().lowercase() == "inactive") "inactive" else "active",
+                            status = draft.status.normalizedCatalogAvailabilityStatus(),
                             expiryDate = draft.expiryDate.trim(),
                         ),
                     )

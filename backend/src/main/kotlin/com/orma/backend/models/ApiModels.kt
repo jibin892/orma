@@ -445,6 +445,7 @@ data class ProductImportRowRequest(
     val bookingRequired: Boolean = false,
     val expiryDate: String? = null,
     val supplierName: String? = null,
+    val status: String = "active",
 )
 
 @Serializable

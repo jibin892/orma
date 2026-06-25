@@ -127,6 +127,7 @@ private val ProductCsvColumns = listOf(
     "bookingRequired",
     "expiryDate",
     "supplierName",
+    "status",
 )
 
 private val RequiredProductCsvColumns = listOf("name")
@@ -4859,7 +4860,10 @@ class DashboardRepository(
     private fun String.cleanCatalogStatus(): String {
         val normalized = trim().lowercase().replace("-", "_").filter { it.isLetterOrDigit() || it == '_' }
         return when (normalized) {
-            "inactive", "unavailable", "paused", "hidden" -> "inactive"
+            "inactive", "disabled", "paused", "off" -> "inactive"
+            "hidden", "hide", "catalog_hidden", "hidden_from_catalog", "off_catalog", "turn_off_catalog", "turnoffcatalog" -> "hidden"
+            "unavailable", "not_available", "notavailable", "temporarily_unavailable", "service_unavailable", "appointment_unavailable" -> "unavailable"
+            "out_of_stock", "outofstock", "out_stock", "no_stock", "stock_out", "sold_out", "soldout" -> "out_of_stock"
             "archived", "deleted" -> "archived"
             else -> "active"
         }
@@ -5199,6 +5203,8 @@ class DashboardRepository(
                         .csvBoolean(defaultValue = false),
                     expiryDate = row.value("expiryDate", "expiry date", "expiresAt", "expiry", "bestBefore"),
                     supplierName = row.value("supplierName", "supplier name", "supplier"),
+                    status = row.value("status", "availability", "catalogStatus", "catalog status")
+                        .ifBlank { "active" },
                 )
             },
         )
@@ -5317,6 +5323,7 @@ class DashboardRepository(
             bookingRequired = bookingRequired,
             expiryDate = expiryDate,
             supplierId = supplierId,
+            status = status,
         )
 
     private fun List<ProductResponse>.toProductCsv(): String {
@@ -5341,6 +5348,7 @@ class DashboardRepository(
                 product.bookingRequired.toString(),
                 product.expiryDate.orEmpty(),
                 product.supplierName.orEmpty(),
+                product.status,
             )
         }
         return (listOf(ProductCsvColumns) + rows)
