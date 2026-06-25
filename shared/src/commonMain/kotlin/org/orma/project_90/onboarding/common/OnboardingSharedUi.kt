@@ -1902,7 +1902,7 @@ private fun DashboardMobileStage(
     }
     val fallbackRootSection = DashboardSection.entries.firstOrNull { it.name == lastRootSectionName }
         ?: DashboardSection.Dashboard
-    val showTopBarBack = hasMobileDetailSelection || selectedSection !in mobileRootSections
+    val showTopBarBack = showMobileCreateOrderSheet || hasMobileDetailSelection || selectedSection !in mobileRootSections
     val navigateBack: () -> Unit = {
         when {
             showMobileCreateOrderSheet -> {
@@ -1917,17 +1917,21 @@ private fun DashboardMobileStage(
             else -> selectMobileSection(fallbackRootSection)
         }
     }
-    val topBarTitle = selectedMobileOrder
-        ?.orderNumber
-        ?.takeIf { it.isNotBlank() }
-        ?: selectedMobileOrder?.id?.take(8)?.uppercase()
-        ?: selectedMobileCustomer?.name?.takeIf { it.isNotBlank() }
-        ?: selectedMobileProduct?.name?.takeIf { it.isNotBlank() }
-        ?: selectedSection.title(state)
-    val showMobileSalesFab = selectedMobileOrder == null && selectedSection == DashboardSection.OrdersBookings
     val mobileSalesFabOrderType = state.activeDashboardOrderType()
         .takeIf { it in DashboardCounterCreateOrderTypes }
         ?: "sale"
+    val topBarTitle = if (showMobileCreateOrderSheet) {
+        (mobileCreateOrderTypeOverride ?: mobileSalesFabOrderType).orderSheetTitle()
+    } else {
+        selectedMobileOrder
+            ?.orderNumber
+            ?.takeIf { it.isNotBlank() }
+            ?: selectedMobileOrder?.id?.take(8)?.uppercase()
+            ?: selectedMobileCustomer?.name?.takeIf { it.isNotBlank() }
+            ?: selectedMobileProduct?.name?.takeIf { it.isNotBlank() }
+            ?: selectedSection.title(state)
+    }
+    val showMobileSalesFab = selectedMobileOrder == null && selectedSection == DashboardSection.OrdersBookings
     OrmaBackHandler(
         enabled = true,
         onBack = navigateBack,
@@ -1965,46 +1969,66 @@ private fun DashboardMobileStage(
                         ),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    DashboardFeedback(state = state, actions = actions)
-                    DashboardSearchAndFilterBar(
-                        state = state,
-                        selectedSection = selectedSection,
-                        actions = actions,
-                        wide = false,
-                    )
-                    DashboardSectionContent(
-                        state = state,
-                        roleLabel = roleLabel,
-                        selectedSection = selectedSection,
-                        canInviteMembers = canInviteMembers,
-                        actions = actions,
-                        onOpenTeam = if (canInviteMembers) {
-                            { onSectionSelected(DashboardSection.Team) }
-                        } else {
-                            null
-                        },
-                        onOpenOrders = { selectMobileSection(DashboardSection.OrdersBookings) },
-                        onOpenProducts = { selectMobileSection(DashboardSection.Products) },
-                        onOpenInvoices = { selectMobileSection(DashboardSection.Invoices) },
-                        onOpenMarketing = if (canUseMarketing) {
-                            { selectMobileSection(DashboardSection.Marketing) }
-                        } else {
-                            null
-                        },
-                        wide = false,
-                        mobileSelectedOrderId = mobileSelectedOrderId,
-                        onMobileSelectedOrderChange = { mobileSelectedOrderId = it },
-                        mobileSelectedCustomerId = mobileSelectedCustomerId,
-                        onMobileSelectedCustomerChange = { mobileSelectedCustomerId = it },
-                        mobileSelectedProductId = mobileSelectedProductId,
-                        onMobileSelectedProductChange = { mobileSelectedProductId = it },
-                        onRequestScrollTop = { mobileRootScrollResetKey += 1 },
-                    )
+                    if (showMobileCreateOrderSheet) {
+                        DashboardOrderBuilderPage(
+                            state = state,
+                            initialOrderType = mobileCreateOrderTypeOverride ?: mobileSalesFabOrderType,
+                            wide = false,
+                            onBack = {
+                                showMobileCreateOrderSheet = false
+                                mobileCreateOrderTypeOverride = null
+                            },
+                            onSubmit = { draft ->
+                                actions.onCreateOrder(draft)
+                                showMobileCreateOrderSheet = false
+                                mobileCreateOrderTypeOverride = null
+                            },
+                            onHoldAndNew = { draft ->
+                                actions.onCreateOrder(draft)
+                            },
+                        )
+                    } else {
+                        DashboardFeedback(state = state, actions = actions)
+                        DashboardSearchAndFilterBar(
+                            state = state,
+                            selectedSection = selectedSection,
+                            actions = actions,
+                            wide = false,
+                        )
+                        DashboardSectionContent(
+                            state = state,
+                            roleLabel = roleLabel,
+                            selectedSection = selectedSection,
+                            canInviteMembers = canInviteMembers,
+                            actions = actions,
+                            onOpenTeam = if (canInviteMembers) {
+                                { onSectionSelected(DashboardSection.Team) }
+                            } else {
+                                null
+                            },
+                            onOpenOrders = { selectMobileSection(DashboardSection.OrdersBookings) },
+                            onOpenProducts = { selectMobileSection(DashboardSection.Products) },
+                            onOpenInvoices = { selectMobileSection(DashboardSection.Invoices) },
+                            onOpenMarketing = if (canUseMarketing) {
+                                { selectMobileSection(DashboardSection.Marketing) }
+                            } else {
+                                null
+                            },
+                            wide = false,
+                            mobileSelectedOrderId = mobileSelectedOrderId,
+                            onMobileSelectedOrderChange = { mobileSelectedOrderId = it },
+                            mobileSelectedCustomerId = mobileSelectedCustomerId,
+                            onMobileSelectedCustomerChange = { mobileSelectedCustomerId = it },
+                            mobileSelectedProductId = mobileSelectedProductId,
+                            onMobileSelectedProductChange = { mobileSelectedProductId = it },
+                            onRequestScrollTop = { mobileRootScrollResetKey += 1 },
+                        )
+                    }
                 }
             }
         }
 
-        if (!mobileDetailOpen && selectedSection in mobileRootSections) {
+        if (!showMobileCreateOrderSheet && !mobileDetailOpen && selectedSection in mobileRootSections) {
             DashboardBottomBar(
                 selectedSection = selectedSection,
                 state = state,
@@ -2022,7 +2046,7 @@ private fun DashboardMobileStage(
             )
         }
 
-        if (showMobileSalesFab) {
+        if (!showMobileCreateOrderSheet && showMobileSalesFab) {
             DashboardMobileSalesFab(
                 label = mobileSalesFabOrderType.orderActionText(),
                 expanded = scrollState.value < 12 && !scrollState.isScrollInProgress,
@@ -2047,26 +2071,6 @@ private fun DashboardMobileStage(
                 .padding(bottom = if (!mobileDetailOpen && selectedSection in mobileRootSections) 118.dp else 22.dp),
         )
 
-        if (showMobileCreateOrderSheet) {
-            OrderFormSheet(
-                state = state,
-                actions = actions,
-                initialOrderType = mobileCreateOrderTypeOverride ?: mobileSalesFabOrderType,
-                wide = false,
-                onDismiss = {
-                    showMobileCreateOrderSheet = false
-                    mobileCreateOrderTypeOverride = null
-                },
-                onSubmit = { draft ->
-                    actions.onCreateOrder(draft)
-                    showMobileCreateOrderSheet = false
-                    mobileCreateOrderTypeOverride = null
-                },
-                onHoldAndNew = { draft ->
-                    actions.onCreateOrder(draft)
-                },
-            )
-        }
     }
 }
 
@@ -7709,7 +7713,7 @@ private fun DashboardOrdersContent(
     mobileSelectedOrderId: String? = null,
     onMobileSelectedOrderChange: ((String?) -> Unit)? = null,
 ) {
-    var showOrderSheet by rememberSaveable { mutableStateOf(false) }
+    var showOrderBuilderPage by rememberSaveable { mutableStateOf(false) }
     var createOrderTypeOverride by rememberSaveable { mutableStateOf<String?>(null) }
     var editOrderId by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedOrderId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -7748,6 +7752,33 @@ private fun DashboardOrdersContent(
     }
     if (partPaymentOrderId != null && partPaymentOrder == null) {
         partPaymentOrderId = null
+    }
+    if (showOrderBuilderPage) {
+        OrmaBackHandler(
+            enabled = !wide,
+            onBack = {
+                showOrderBuilderPage = false
+                createOrderTypeOverride = null
+            },
+        )
+        DashboardOrderBuilderPage(
+            state = state,
+            initialOrderType = createOrderTypeOverride,
+            wide = wide,
+            onBack = {
+                showOrderBuilderPage = false
+                createOrderTypeOverride = null
+            },
+            onSubmit = { draft ->
+                actions.onCreateOrder(draft)
+                showOrderBuilderPage = false
+                createOrderTypeOverride = null
+            },
+            onHoldAndNew = { draft ->
+                actions.onCreateOrder(draft)
+            },
+        )
+        return
     }
     if (selectedOrder != null && !wide) {
         OrmaBackHandler(
@@ -7848,7 +7879,7 @@ private fun DashboardOrdersContent(
             onStatusChange = requestOrderStatusChange,
             onCreateOrder = { orderType ->
                 createOrderTypeOverride = orderType?.takeIf { it in DashboardCounterCreateOrderTypes }
-                showOrderSheet = true
+                showOrderBuilderPage = true
             },
         )
     } else {
@@ -7862,26 +7893,6 @@ private fun DashboardOrdersContent(
         )
     }
 
-    if (showOrderSheet) {
-        OrderFormSheet(
-            state = state,
-            actions = actions,
-            initialOrderType = createOrderTypeOverride,
-            wide = wide,
-            onDismiss = {
-                showOrderSheet = false
-                createOrderTypeOverride = null
-            },
-            onSubmit = { draft ->
-                actions.onCreateOrder(draft)
-                showOrderSheet = false
-                createOrderTypeOverride = null
-            },
-            onHoldAndNew = { draft ->
-                actions.onCreateOrder(draft)
-            },
-        )
-    }
     if (editOrder != null) {
         OrderFormSheet(
             state = state,
@@ -11979,6 +11990,500 @@ private fun DashboardInvoiceBuilderPage(
 }
 
 @Composable
+private fun DashboardOrderBuilderPage(
+    state: OnboardingUiState,
+    initialOrderType: String?,
+    wide: Boolean,
+    onBack: () -> Unit,
+    onSubmit: (OrmaOrderDraft) -> Unit,
+    onHoldAndNew: ((OrmaOrderDraft) -> Unit)? = null,
+) {
+    var attemptedSubmit by rememberSaveable { mutableStateOf(false) }
+    val allowedOrderTypes = (
+        state.allowedDashboardOrderTypes() +
+            listOfNotNull(initialOrderType?.takeIf { it in DashboardCounterCreateOrderTypes })
+        ).distinct()
+    fun blankOrderDraft(orderType: String): OrmaOrderDraft =
+        OrmaOrderDraft(
+            orderType = orderType,
+            fulfillmentType = if (orderType == "appointment") "booking" else "standard",
+            status = if (orderType == "appointment") "draft" else "confirmed",
+            currency = state.dashboard.summary.currency.ifBlank { state.draft.currency.ifBlank { "INR" } },
+            items = emptyList(),
+        )
+    var draft by remember(initialOrderType, allowedOrderTypes.joinToString("|")) {
+        val defaultOrderType = initialOrderType
+            ?.takeIf { it in allowedOrderTypes }
+            ?: state.activeDashboardOrderType()
+                .takeIf { it in allowedOrderTypes }
+            ?: allowedOrderTypes.first()
+        mutableStateOf(blankOrderDraft(defaultOrderType))
+    }
+    var itemSearch by rememberSaveable(draft.orderType) { mutableStateOf("") }
+    var selectedCategoryId by rememberSaveable(draft.orderType) { mutableStateOf(DashboardInvoiceCategoryAll) }
+    val catalogItemType = draft.orderType.orderCatalogItemType()
+    val catalogItems = remember(state.dashboard.products, catalogItemType) {
+        state.dashboard.products.filter { product ->
+            product.itemType == catalogItemType && product.status.trim().lowercase() != "archived"
+        }
+    }
+    val categoryOptions = remember(catalogItems, state.dashboard.categories, catalogItemType) {
+        dashboardInvoiceCategoryOptions(
+            products = catalogItems,
+            categories = state.dashboard.categories,
+            itemType = catalogItemType,
+        )
+    }
+    LaunchedEffect(categoryOptions.map { it.id }.joinToString("|")) {
+        if (categoryOptions.none { it.id == selectedCategoryId }) {
+            selectedCategoryId = DashboardInvoiceCategoryAll
+        }
+    }
+    val visibleProducts = remember(catalogItems, itemSearch, selectedCategoryId) {
+        catalogItems
+            .filter { product -> product.matchesOrderSearch(itemSearch) }
+            .filter { product -> product.matchesDashboardInvoiceCategory(selectedCategoryId) }
+    }
+    val offerDiscountTotal = dashboardOrderOfferDiscountTotal(
+        items = draft.items,
+        products = state.dashboard.products,
+        offers = state.dashboard.offers,
+    )
+    val itemErrors = draft.items.map(::orderItemValidationError)
+    val paidError = optionalNonNegativeDecimalError(draft.paidTotal, "Paid amount must be zero or higher.")
+    val scheduledError = if (draft.orderType == "appointment" && draft.scheduledAt.trim().length < 4) {
+        "Choose a preferred date/time for this appointment."
+    } else {
+        null
+    }
+    val formReady = draft.items.isNotEmpty() &&
+        itemErrors.all { it == null } &&
+        paidError == null &&
+        scheduledError == null
+    fun updateItem(index: Int, item: OrmaOrderItemDraft) {
+        draft = draft.copy(items = draft.items.mapIndexed { itemIndex, old -> if (itemIndex == index) item else old })
+    }
+    fun removeItem(index: Int) {
+        draft = draft.copy(items = draft.items.filterIndexed { itemIndex, _ -> itemIndex != index })
+    }
+    fun addOrIncrementProduct(product: OrmaProduct) {
+        val existingIndex = draft.items.indexOfFirst { it.productId == product.id }
+        if (existingIndex >= 0) {
+            val item = draft.items[existingIndex]
+            updateItem(
+                existingIndex,
+                item.copy(quantity = orderQuantityText((item.quantity.toDoubleOrNull() ?: 0.0) + 1.0)),
+            )
+        } else {
+            val appliedOffer = product.dashboardAppliedOffer(state.dashboard.offers)
+            draft = draft.copy(
+                items = draft.items + product.toOrderItemDraft(appliedOffer).copy(
+                    taxRate = product.taxRate.ifBlank { "0" },
+                ),
+            )
+        }
+    }
+    fun changeItemQuantity(index: Int, delta: Double) {
+        val item = draft.items.getOrNull(index) ?: return
+        val next = (item.quantity.toDoubleOrNull() ?: 0.0) + delta
+        if (next <= 0.0) {
+            removeItem(index)
+        } else {
+            updateItem(index, item.copy(quantity = orderQuantityText(next)))
+        }
+    }
+    fun addCustomLine() {
+        draft = draft.copy(items = draft.items + OrmaOrderItemDraft())
+    }
+    fun markFullyPaid() {
+        val total = orderCartTotalValue(draft.items).toDashboardMoneyInput()
+        draft = draft.copy(
+            paidTotal = total,
+            status = if (draft.status == "completed" || draft.status == "cancelled") draft.status else "paid",
+            paymentMode = if (draft.paymentMode == DashboardCreditPaymentMode) "pay_on_spot" else draft.paymentMode,
+        )
+    }
+    fun preparedOrderDraft(statusOverride: String? = null): OrmaOrderDraft {
+        val submittedItems = draft.items.map {
+            it.copy(
+                description = it.description.trim(),
+                quantity = it.quantity.trim(),
+                unitPrice = it.unitPrice.trim().ifBlank { "0" },
+                taxRate = it.taxRate.trim().ifBlank { "0" },
+            )
+        }
+        return draft.copy(
+            customerName = draft.customerName.trim(),
+            customerPhoneNumber = draft.customerPhoneNumber.trim(),
+            customerEmail = draft.customerEmail.trim(),
+            customerTaxNumber = draft.customerTaxNumber.trim(),
+            customerAddressLine = draft.customerAddressLine.trim(),
+            customerCity = draft.customerCity.trim(),
+            customerRegion = draft.customerRegion.trim(),
+            customerCountry = draft.customerCountry.trim(),
+            customerPostalCode = draft.customerPostalCode.trim(),
+            status = statusOverride ?: draft.status,
+            scheduledAt = draft.scheduledAt.trim(),
+            paidTotal = draft.paidTotal.trim().ifBlank { "0" },
+            discountTotal = dashboardOrderOfferDiscountTotal(
+                items = submittedItems,
+                products = state.dashboard.products,
+                offers = state.dashboard.offers,
+            ).toDashboardMoneyInput(),
+            notes = draft.notes.trim(),
+            fulfillmentType = if (draft.orderType == "appointment") "booking" else draft.fulfillmentType,
+            items = submittedItems,
+        )
+    }
+    fun submitOrder() {
+        attemptedSubmit = true
+        if (formReady) {
+            onSubmit(preparedOrderDraft())
+        }
+    }
+    fun holdAndStartNew() {
+        attemptedSubmit = true
+        if (formReady) {
+            onHoldAndNew?.invoke(preparedOrderDraft(statusOverride = "draft"))
+            val orderType = draft.orderType
+            draft = blankOrderDraft(orderType)
+            itemSearch = ""
+            selectedCategoryId = DashboardInvoiceCategoryAll
+            attemptedSubmit = false
+        }
+    }
+    fun selectOrderType(orderType: String) {
+        draft = draft.copy(
+            orderType = orderType,
+            status = when {
+                orderType == "appointment" -> "draft"
+                draft.status == "draft" -> "confirmed"
+                else -> draft.status
+            },
+            fulfillmentType = if (orderType == "appointment") "booking" else "standard",
+            items = emptyList(),
+        )
+        itemSearch = ""
+        selectedCategoryId = DashboardInvoiceCategoryAll
+    }
+    val totalText = orderCartTotal(draft.items, draft.currency)
+    val balancePayable = (orderCartTotalValue(draft.items) - draft.paidTotal.toDoubleOrNull().orZero()).coerceAtLeast(0.0)
+    val catalogTitle = "${draft.orderType.orderItemPickerLabel()} catalog"
+    val catalogBody = "Search first, then add ${draft.orderType.orderItemPickerLabel().lowercase()} items from category groups."
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        DashboardWorkspaceToolbarCard(
+            title = draft.orderType.orderSheetTitle(),
+            body = draft.orderType.orderBuilderPageBody(),
+            badgeText = "FULL PAGE",
+            primaryText = "Back to ${draft.orderType.orderProgressPlural()}",
+            onPrimary = onBack,
+            secondaryText = null,
+            onSecondary = null,
+        ) {
+            DashboardOrderBuilderSummary(
+                itemCount = draft.items.size,
+                totalText = totalText,
+                paidText = dashboardMoney(draft.paidTotal.ifBlank { "0" }, draft.currency),
+                balanceText = dashboardMoney(balancePayable.toDashboardMoneyInput(), draft.currency),
+                discountTotal = offerDiscountTotal,
+                currency = draft.currency,
+            )
+        }
+        BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+            val compact = maxWidth < 1240.dp || !wide
+            if (compact) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    DashboardOrderSetupCard(
+                        state = state,
+                        draft = draft,
+                        allowedOrderTypes = allowedOrderTypes,
+                        onDraftChange = { draft = it },
+                        onOrderTypeSelected = ::selectOrderType,
+                    )
+                    DashboardInvoiceCatalogGridPicker(
+                        title = catalogTitle,
+                        body = catalogBody,
+                        searchPlaceholder = draft.orderType.orderCatalogSearchPlaceholder(),
+                        query = itemSearch,
+                        onQueryChange = { itemSearch = it.take(80) },
+                        categoryOptions = categoryOptions,
+                        selectedCategoryId = selectedCategoryId,
+                        onCategorySelected = { selectedCategoryId = it },
+                        products = visibleProducts,
+                        offers = state.dashboard.offers,
+                        selectedItems = draft.items,
+                        onProductClick = ::addOrIncrementProduct,
+                    )
+                    DashboardOrderCart(
+                        orderType = draft.orderType,
+                        currency = draft.currency,
+                        items = draft.items,
+                        products = state.dashboard.products,
+                        offers = state.dashboard.offers,
+                        validationMessages = if (attemptedSubmit) itemErrors else emptyList(),
+                        invoiceMode = false,
+                        taxEnabled = true,
+                        onIncrement = { index -> changeItemQuantity(index, 1.0) },
+                        onDecrement = { index -> changeItemQuantity(index, -1.0) },
+                        onChange = ::updateItem,
+                        onRemove = ::removeItem,
+                    )
+                    DashboardWideActionButton(
+                        text = draft.orderType.addOrderLineText(),
+                        onClick = ::addCustomLine,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    DashboardOrderCheckoutCard(
+                        draft = draft,
+                        orderType = draft.orderType,
+                        totalText = totalText,
+                        discountTotal = offerDiscountTotal,
+                        attemptedSubmit = attemptedSubmit,
+                        paidError = paidError,
+                        scheduledError = scheduledError,
+                        formReady = formReady,
+                        primaryText = draft.orderType.orderActionText(),
+                        onDraftChange = { draft = it },
+                        onMarkPaid = ::markFullyPaid,
+                        onSubmit = ::submitOrder,
+                        onHoldAndNew = if (onHoldAndNew != null) ::holdAndStartNew else null,
+                        onDismiss = onBack,
+                    )
+                }
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .weight(0.88f)
+                            .widthIn(min = 340.dp, max = 440.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                    ) {
+                        DashboardOrderSetupCard(
+                            state = state,
+                            draft = draft,
+                            allowedOrderTypes = allowedOrderTypes,
+                            onDraftChange = { draft = it },
+                            onOrderTypeSelected = ::selectOrderType,
+                        )
+                    }
+                    Column(
+                        modifier = Modifier
+                            .weight(1.45f)
+                            .widthIn(min = 480.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                    ) {
+                        DashboardInvoiceCatalogGridPicker(
+                            title = catalogTitle,
+                            body = catalogBody,
+                            searchPlaceholder = draft.orderType.orderCatalogSearchPlaceholder(),
+                            query = itemSearch,
+                            onQueryChange = { itemSearch = it.take(80) },
+                            categoryOptions = categoryOptions,
+                            selectedCategoryId = selectedCategoryId,
+                            onCategorySelected = { selectedCategoryId = it },
+                            products = visibleProducts,
+                            offers = state.dashboard.offers,
+                            selectedItems = draft.items,
+                            onProductClick = ::addOrIncrementProduct,
+                        )
+                    }
+                    Column(
+                        modifier = Modifier
+                            .weight(1.08f)
+                            .widthIn(min = 400.dp, max = 520.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                    ) {
+                        DashboardOrderCart(
+                            orderType = draft.orderType,
+                            currency = draft.currency,
+                            items = draft.items,
+                            products = state.dashboard.products,
+                            offers = state.dashboard.offers,
+                            validationMessages = if (attemptedSubmit) itemErrors else emptyList(),
+                            invoiceMode = false,
+                            taxEnabled = true,
+                            onIncrement = { index -> changeItemQuantity(index, 1.0) },
+                            onDecrement = { index -> changeItemQuantity(index, -1.0) },
+                            onChange = ::updateItem,
+                            onRemove = ::removeItem,
+                        )
+                        DashboardWideActionButton(
+                            text = draft.orderType.addOrderLineText(),
+                            onClick = ::addCustomLine,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        DashboardOrderCheckoutCard(
+                            draft = draft,
+                            orderType = draft.orderType,
+                            totalText = totalText,
+                            discountTotal = offerDiscountTotal,
+                            attemptedSubmit = attemptedSubmit,
+                            paidError = paidError,
+                            scheduledError = scheduledError,
+                            formReady = formReady,
+                            primaryText = draft.orderType.orderActionText(),
+                            onDraftChange = { draft = it },
+                            onMarkPaid = ::markFullyPaid,
+                            onSubmit = ::submitOrder,
+                            onHoldAndNew = if (onHoldAndNew != null) ::holdAndStartNew else null,
+                            onDismiss = onBack,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DashboardOrderBuilderSummary(
+    itemCount: Int,
+    totalText: String,
+    paidText: String,
+    balanceText: String,
+    discountTotal: Double,
+    currency: String,
+) {
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val compact = maxWidth < 680.dp
+        val metrics = listOf(
+            DashboardFocusMetric("Lines", itemCount.toString(), "selected", OrmaStatusTone.Info),
+            DashboardFocusMetric(
+                "Total",
+                totalText,
+                if (discountTotal > 0.0) "${dashboardMoney(discountTotal.toDashboardMoneyInput(), currency)} saved" else "ready total",
+                OrmaStatusTone.Success,
+                weight = 1.2f,
+            ),
+            DashboardFocusMetric("Paid", paidText, "captured", OrmaStatusTone.Info),
+            DashboardFocusMetric("Balance", balanceText, "payable", OrmaStatusTone.Warning),
+        )
+        if (compact) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                metrics.chunked(2).forEach { row ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        row.forEach { metric ->
+                            DashboardMiniMetricCell(
+                                label = metric.label,
+                                value = metric.value,
+                                detail = metric.detail,
+                                tone = metric.tone,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                        repeat(2 - row.size) {
+                            Spacer(modifier = Modifier.weight(1f))
+                        }
+                    }
+                }
+            }
+        } else {
+            DashboardFocusMetricStrip(metrics = metrics)
+        }
+    }
+}
+
+@Composable
+private fun DashboardOrderSetupCard(
+    state: OnboardingUiState,
+    draft: OrmaOrderDraft,
+    allowedOrderTypes: List<String>,
+    onDraftChange: (OrmaOrderDraft) -> Unit,
+    onOrderTypeSelected: (String) -> Unit,
+) {
+    DashboardRecordCard {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.Top,
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    text = "Customer and flow",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = OrmaColors.TextPrimary,
+                )
+                Text(
+                    text = "Choose the customer, sale type, and starting status.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = OrmaColors.TextSecondary,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            OrmaBadge(
+                text = draft.orderType.orderTypeLabel().uppercase(),
+                tone = OrmaStatusTone.Info,
+            )
+        }
+        if (allowedOrderTypes.size > 1) {
+            DashboardCompactSegmentedPicker(
+                options = allowedOrderTypes,
+                selected = draft.orderType,
+                label = { it.orderTypeLabel() },
+                onSelected = onOrderTypeSelected,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        DashboardDropdownPicker(
+            label = "Status",
+            selected = draft.status,
+            placeholder = "Choose status",
+            options = DashboardOrderStatuses,
+            optionLabel = { it.dashboardStatusLabel() },
+            onSelected = { onDraftChange(draft.withOrderStatus(it)) },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        if (state.dashboard.customers.isNotEmpty()) {
+            DashboardChipPicker(
+                label = "Saved customer",
+                options = state.dashboard.customers,
+                selectedId = draft.customerId,
+                optionId = { it.id },
+                optionLabel = { it.name },
+                onSelected = { onDraftChange(draft.withInvoiceCustomer(it)) },
+            )
+        }
+        OrmaTextField(
+            value = draft.customerName,
+            onValueChange = { onDraftChange(draft.copy(customerName = it, customerId = "")) },
+            label = "Customer",
+            placeholder = "Walk-in or new customer",
+        )
+        OrmaCountryPhoneField(
+            value = draft.customerPhoneNumber,
+            onValueChange = { onDraftChange(draft.copy(customerPhoneNumber = it)) },
+            label = "Phone",
+            supportingText = "Optional for delivery, service updates, or appointment reminders.",
+        )
+        OrmaTextField(
+            value = draft.customerEmail,
+            onValueChange = { onDraftChange(draft.copy(customerEmail = it.trim().take(160))) },
+            label = "Email",
+            placeholder = "Optional",
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+        )
+    }
+}
+
+@Composable
 private fun DashboardInvoiceBuilderSummary(
     itemCount: Int,
     totalText: String,
@@ -12209,6 +12714,9 @@ private fun DashboardInvoiceCustomerTaxCard(
 
 @Composable
 private fun DashboardInvoiceCatalogGridPicker(
+    title: String = "Product catalog",
+    body: String = "Search first, then add products from category groups.",
+    searchPlaceholder: String = "Product, SKU, barcode, category",
     query: String,
     onQueryChange: (String) -> Unit,
     categoryOptions: List<DashboardInvoiceCategoryOption>,
@@ -12230,24 +12738,24 @@ private fun DashboardInvoiceCatalogGridPicker(
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 Text(
-                    text = "Product catalog",
+                    text = title,
                     style = MaterialTheme.typography.titleSmall,
                     color = OrmaColors.TextPrimary,
                 )
                 Text(
-                    text = "Search first, then add products from category groups.",
+                    text = body,
                     style = MaterialTheme.typography.bodyMedium,
                     color = OrmaColors.TextSecondary,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            OrmaBadge(text = "${products.size} SHOWN", tone = OrmaStatusTone.Info)
+            OrmaBadge(text = "${products.size} MATCHES", tone = OrmaStatusTone.Info)
         }
         DashboardCompactSearchField(
             value = query,
             onValueChange = onQueryChange,
-            placeholder = "Product, SKU, barcode, category",
+            placeholder = searchPlaceholder,
             modifier = Modifier.fillMaxWidth(),
             shape = OrmaShapes.Field,
         )
@@ -12276,33 +12784,60 @@ private fun DashboardInvoiceCatalogGridPicker(
             )
         } else {
             BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-                val columns = when {
+                val visibleColumns = when {
                     maxWidth < 500.dp -> 1
                     maxWidth < 960.dp -> 2
                     else -> 3
                 }
+                val rowsPerPage = 4
+                val pageSize = visibleColumns * rowsPerPage
+                val productPages = products.chunked(pageSize)
+                val pageWidth = maxWidth
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    products.chunked(columns).forEach { row ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            row.forEach { product ->
-                                val selectedQuantity = selectedItems
-                                    .filter { it.productId == product.id }
-                                    .sumOf { it.quantity.toDoubleOrNull().orZero() }
-                                DashboardInvoiceProductTile(
-                                    product = product,
-                                    appliedOffer = product.dashboardAppliedOffer(offers),
-                                    selectedQuantity = selectedQuantity,
-                                    onClick = { onProductClick(product) },
-                                    modifier = Modifier.weight(1f),
-                                )
-                            }
-                            repeat(columns - row.size) {
-                                Spacer(modifier = Modifier.weight(1f))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        productPages.forEach { pageProducts ->
+                            Column(
+                                modifier = Modifier.width(pageWidth),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                pageProducts.chunked(visibleColumns).forEach { row ->
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    ) {
+                                        row.forEach { product ->
+                                            val selectedQuantity = selectedItems
+                                                .filter { it.productId == product.id }
+                                                .sumOf { it.quantity.toDoubleOrNull().orZero() }
+                                            DashboardInvoiceProductTile(
+                                                product = product,
+                                                appliedOffer = product.dashboardAppliedOffer(offers),
+                                                selectedQuantity = selectedQuantity,
+                                                onClick = { onProductClick(product) },
+                                                modifier = Modifier.weight(1f),
+                                            )
+                                        }
+                                        repeat(visibleColumns - row.size) {
+                                            Spacer(modifier = Modifier.weight(1f))
+                                        }
+                                    }
+                                }
                             }
                         }
+                    }
+                    if (products.size > pageSize) {
+                        Text(
+                            text = "Scroll horizontally to view all ${products.size} matches, or search to narrow the catalog.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = OrmaColors.TextSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                     }
                 }
             }
@@ -12595,10 +13130,11 @@ private const val DashboardInvoiceCategoryUncategorized = "uncategorized"
 private fun dashboardInvoiceCategoryOptions(
     products: List<OrmaProduct>,
     categories: List<OrmaProductCategory>,
+    itemType: String = "product",
 ): List<DashboardInvoiceCategoryOption> {
     val registeredCategories = categories
         .filter { it.status.trim().lowercase() != "archived" }
-        .filter { it.matchesCategoryItemType("product") }
+        .filter { it.matchesCategoryItemType(itemType) }
         .sortedWith(compareBy<OrmaProductCategory> { it.sortOrder }.thenBy { it.name.lowercase() })
         .mapNotNull { category ->
             val count = products.count { it.categoryId == category.id }
@@ -25878,6 +26414,13 @@ private fun String.orderSheetBody(): String =
         else -> "Capture customer, products, quantity, payment, and fulfilment status."
     }
 
+private fun String.orderBuilderPageBody(): String =
+    when (trim().lowercase()) {
+        "service" -> "Choose customer, add services by category, review payment, and save the service request."
+        "appointment" -> "Choose customer, add appointment services by category, set time, and save the booking."
+        else -> "Choose customer, add products by category, review payment, and save the sale."
+    }
+
 private fun String.orderScheduleLabel(): String =
     when (trim().lowercase()) {
         "service" -> "Service date/time"
@@ -25903,6 +26446,13 @@ private fun String.orderLinePlaceholder(): String =
         "service" -> "Service description"
         "appointment" -> "Appointment service"
         else -> "Product"
+    }
+
+private fun String.orderCatalogSearchPlaceholder(): String =
+    when (trim().lowercase()) {
+        "service" -> "Service, category, SKU"
+        "appointment" -> "Appointment service, category"
+        else -> "Product, SKU, barcode, category"
     }
 
 private fun String.addOrderLineText(): String =

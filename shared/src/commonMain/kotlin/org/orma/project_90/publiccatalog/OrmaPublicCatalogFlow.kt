@@ -680,7 +680,7 @@ private fun PublicCatalogCheckoutSheet(
                 color = OrmaColors.CardBackground,
                 border = BorderStroke(0.8.dp, OrmaColors.Hairline),
                 tonalElevation = 0.dp,
-                shadowElevation = 14.dp,
+                shadowElevation = 0.dp,
             ) {
                 Column(
                     modifier = Modifier
@@ -739,7 +739,7 @@ private fun PublicCatalogCheckoutSidePanel(
         color = OrmaColors.CardBackground,
         border = BorderStroke(0.8.dp, OrmaColors.Hairline),
         tonalElevation = 0.dp,
-        shadowElevation = 10.dp,
+        shadowElevation = 0.dp,
     ) {
         Column(
             modifier = Modifier
