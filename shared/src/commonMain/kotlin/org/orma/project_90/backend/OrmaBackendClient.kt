@@ -609,6 +609,7 @@ data class OrmaDashboardFilters(
     val supplierId: String = "",
     val barcode: String = "",
     val scheduledOnly: Boolean = false,
+    val excludeCancelled: Boolean = false,
     val limit: Int = 50,
 )
 
@@ -1766,6 +1767,7 @@ class OrmaBackendClient(
             filters.supplierId.trim().takeIf { it.isNotBlank() }?.let { add("supplierId" to it) }
             filters.barcode.trim().takeIf { it.isNotBlank() }?.let { add("barcode" to it) }
             if (filters.scheduledOnly) add("scheduledOnly" to "true")
+            if (filters.excludeCancelled) add("excludeCancelled" to "true")
             add("page" to filters.page.coerceAtLeast(1).toString())
             add("limit" to filters.limit.coerceIn(1, 200).toString())
         }

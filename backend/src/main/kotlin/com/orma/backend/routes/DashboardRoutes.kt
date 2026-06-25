@@ -557,6 +557,7 @@ private fun ApplicationCall.dashboardFilters(): DashboardQueryFilters {
         supplierId = query["supplierId"],
         barcode = query["barcode"],
         scheduledOnly = query["scheduledOnly"].toBooleanQuery(),
+        excludeCancelled = query["excludeCancelled"].toBooleanQuery(),
     )
 }
 

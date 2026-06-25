@@ -83,6 +83,7 @@ data class DashboardQueryFilters(
     val supplierId: String? = null,
     val barcode: String? = null,
     val scheduledOnly: Boolean = false,
+    val excludeCancelled: Boolean = false,
 )
 
 class DashboardOrderValidationException(
@@ -1211,7 +1212,12 @@ class DashboardRepository(
     ): PagedResult<OrderResponse>? = withContext(Dispatchers.IO) {
         dataSource.connection.use { connection ->
             val access = connection.resolveWorkspaceAccess(firebaseUser) ?: return@withContext null
-            connection.listOrders(access.workspaceId, filters = filters, includeItems = true)
+            connection.listOrders(
+                workspaceId = access.workspaceId,
+                filters = filters,
+                includeItems = true,
+                excludeCancelledWhenStatusAll = filters.excludeCancelled,
+            )
         }
     }
 
@@ -4591,24 +4597,36 @@ class DashboardRepository(
 
     private fun DashboardQueryFilters.resolvedDateRange(): DashboardResolvedDateRange {
         val today = LocalDate.now()
+        val explicitFrom = dateFrom.cleanIsoDateOrNull()
+        val explicitTo = dateTo.cleanIsoDateOrNull()
         return when (datePreset.cleanDatePreset()) {
-            "today" -> DashboardResolvedDateRange(today.toString(), today.toString())
+            "today" -> DashboardResolvedDateRange(
+                explicitFrom ?: today.toString(),
+                explicitTo ?: explicitFrom ?: today.toString(),
+            )
             "yesterday" -> {
                 val yesterday = today.minusDays(1)
-                DashboardResolvedDateRange(yesterday.toString(), yesterday.toString())
+                DashboardResolvedDateRange(
+                    explicitFrom ?: yesterday.toString(),
+                    explicitTo ?: explicitFrom ?: yesterday.toString(),
+                )
             }
             "week" -> DashboardResolvedDateRange(
-                from = today.minusDays((today.dayOfWeek.value - 1).toLong()).toString(),
-                to = today.toString(),
+                from = explicitFrom ?: today.minusDays((today.dayOfWeek.value - 1).toLong()).toString(),
+                to = explicitTo ?: today.toString(),
             )
             "month" -> DashboardResolvedDateRange(
-                from = today.withDayOfMonth(1).toString(),
-                to = today.toString(),
+                from = explicitFrom ?: today.withDayOfMonth(1).toString(),
+                to = explicitTo ?: today.toString(),
+            )
+            "upcoming" -> DashboardResolvedDateRange(
+                from = explicitFrom ?: today.toString(),
+                to = explicitTo,
             )
             "all" -> DashboardResolvedDateRange()
             else -> DashboardResolvedDateRange(
-                from = dateFrom.cleanIsoDateOrNull(),
-                to = dateTo.cleanIsoDateOrNull(),
+                from = explicitFrom,
+                to = explicitTo,
             )
         }
     }
@@ -4840,6 +4858,7 @@ class DashboardRepository(
             "yesterday" -> "yesterday"
             "week", "this_week" -> "week"
             "month", "this_month" -> "month"
+            "upcoming", "future" -> "upcoming"
             else -> null
         }
     }

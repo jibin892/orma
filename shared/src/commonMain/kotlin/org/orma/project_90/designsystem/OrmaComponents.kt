@@ -30,6 +30,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
@@ -561,22 +563,35 @@ fun OrmaSkeleton(
     animated: Boolean = true,
 ) {
     val transition = rememberInfiniteTransition(label = "OrmaSkeleton")
-    val pulseAlpha by transition.animateFloat(
-        initialValue = 0.72f,
-        targetValue = 1f,
+    val shimmerX by transition.animateFloat(
+        initialValue = -320f,
+        targetValue = 760f,
         animationSpec = infiniteRepeatable(
             animation = tween(durationMillis = OrmaMotion.SkeletonMillis, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse,
+            repeatMode = RepeatMode.Restart,
         ),
-        label = "OrmaSkeletonAlpha",
+        label = "OrmaSkeletonShimmer",
     )
+    val fillModifier = if (animated) {
+        Modifier.background(
+            brush = Brush.linearGradient(
+                colors = listOf(
+                    OrmaColors.SkeletonBase,
+                    OrmaColors.SkeletonHighlight,
+                    OrmaColors.SkeletonBase,
+                ),
+                start = Offset(shimmerX, 0f),
+                end = Offset(shimmerX + 320f, 0f),
+            ),
+        )
+    } else {
+        Modifier.background(OrmaColors.SkeletonBase)
+    }
 
     Box(
         modifier = modifier
             .clip(shape)
-            .background(
-                color = OrmaColors.SkeletonBase.copy(alpha = if (animated) pulseAlpha else 1f),
-            ),
+            .then(fillModifier),
     )
 }
 

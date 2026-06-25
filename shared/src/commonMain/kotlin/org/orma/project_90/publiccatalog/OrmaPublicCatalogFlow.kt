@@ -546,40 +546,89 @@ private fun PublicCatalogWide(
         }
     }
 
-    Box(
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
             .safeContentPadding()
             .padding(28.dp),
         contentAlignment = Alignment.TopCenter,
     ) {
-        Column(
+        val sidePanelOpen = checkoutOpen && showFloatingCart
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .widthIn(max = 1180.dp)
-                .verticalScroll(wideScrollState),
-            verticalArrangement = Arrangement.spacedBy(18.dp),
+                .widthIn(max = if (sidePanelOpen) 1540.dp else 1180.dp)
+                .fillMaxHeight(),
+            horizontalArrangement = Arrangement.spacedBy(18.dp),
+            verticalAlignment = Alignment.Top,
         ) {
-            PublicCatalogCheckoutTopBar(
-                catalog = catalog,
-                loading = loading,
-                compact = false,
-            )
-            PublicCatalogProductsCard {
-                PublicCatalogProducts(
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .verticalScroll(wideScrollState),
+                verticalArrangement = Arrangement.spacedBy(18.dp),
+            ) {
+                PublicCatalogCheckoutTopBar(
                     catalog = catalog,
                     loading = loading,
-                    quantities = quantities,
-                    selectedCategoryId = selectedCategoryId,
-                    selectedCartItemType = selectedCartItemType,
-                    visibleProducts = visibleProducts,
-                    onQuantityChange = onQuantityChange,
-                    onCategoryChange = onCategoryChange,
+                    compact = false,
                 )
+                PublicCatalogProductsCard {
+                    PublicCatalogProducts(
+                        catalog = catalog,
+                        loading = loading,
+                        quantities = quantities,
+                        selectedCategoryId = selectedCategoryId,
+                        selectedCartItemType = selectedCartItemType,
+                        visibleProducts = visibleProducts,
+                        onQuantityChange = onQuantityChange,
+                        onCategoryChange = onCategoryChange,
+                    )
+                }
+                Spacer(modifier = Modifier.height(if (showFloatingCart && !sidePanelOpen) 86.dp else 0.dp))
             }
-            Spacer(modifier = Modifier.height(if (showFloatingCart) 86.dp else 0.dp))
+            if (sidePanelOpen) {
+                PublicCatalogCheckoutSidePanel(
+                    onDismiss = { checkoutOpen = false },
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .widthIn(min = 420.dp, max = 470.dp),
+                ) {
+                    PublicCatalogCheckout(
+                        catalog = catalog,
+                        error = error,
+                        receipt = receipt,
+                        customerName = customerName,
+                        phoneNumber = phoneNumber,
+                        notes = notes,
+                        fulfillmentType = fulfillmentType,
+                        scheduledAt = scheduledAt,
+                        paymentMode = paymentMode,
+                        selectedItems = selectedItems,
+                        selectedFlow = selectedFlow,
+                        total = total,
+                        submitting = submitting,
+                        statusRefreshing = statusRefreshing,
+                        submitEnabled = submitEnabled,
+                        onRetry = onRetry,
+                        onClearSelection = onClearSelection,
+                        onNewOrder = {
+                            checkoutOpen = false
+                            onNewOrder()
+                        },
+                        onCustomerNameChange = onCustomerNameChange,
+                        onPhoneChange = onPhoneChange,
+                        onNotesChange = onNotesChange,
+                        onFulfillmentChange = onFulfillmentChange,
+                        onScheduledAtChange = onScheduledAtChange,
+                        onPaymentModeChange = onPaymentModeChange,
+                        onSubmit = onSubmit,
+                    )
+                }
+            }
         }
-        if (showFloatingCart) {
+        if (showFloatingCart && !sidePanelOpen) {
             PublicCatalogFloatingCartButton(
                 catalog = catalog,
                 selectedItems = selectedItems,
@@ -592,43 +641,6 @@ private fun PublicCatalogWide(
                     checkoutOpen = true
                 },
             )
-        }
-        if (checkoutOpen) {
-            PublicCatalogCheckoutSheet(
-                compact = false,
-                onDismiss = { checkoutOpen = false },
-            ) {
-                PublicCatalogCheckout(
-                    catalog = catalog,
-                    error = error,
-                    receipt = receipt,
-                    customerName = customerName,
-                    phoneNumber = phoneNumber,
-                    notes = notes,
-                    fulfillmentType = fulfillmentType,
-                    scheduledAt = scheduledAt,
-                    paymentMode = paymentMode,
-                    selectedItems = selectedItems,
-                    selectedFlow = selectedFlow,
-                    total = total,
-                    submitting = submitting,
-                    statusRefreshing = statusRefreshing,
-                    submitEnabled = submitEnabled,
-                    onRetry = onRetry,
-                    onClearSelection = onClearSelection,
-                    onNewOrder = {
-                        checkoutOpen = false
-                        onNewOrder()
-                    },
-                    onCustomerNameChange = onCustomerNameChange,
-                    onPhoneChange = onPhoneChange,
-                    onNotesChange = onNotesChange,
-                    onFulfillmentChange = onFulfillmentChange,
-                    onScheduledAtChange = onScheduledAtChange,
-                    onPaymentModeChange = onPaymentModeChange,
-                    onSubmit = onSubmit,
-                )
-            }
         }
     }
 }
@@ -710,6 +722,64 @@ private fun PublicCatalogCheckoutSheet(
                     content()
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun PublicCatalogCheckoutSidePanel(
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    val sheetScrollState = rememberScrollState()
+    Surface(
+        modifier = modifier,
+        shape = OrmaShapes.PremiumCard,
+        color = OrmaColors.CardBackground,
+        border = BorderStroke(0.8.dp, OrmaColors.Hairline),
+        tonalElevation = 0.dp,
+        shadowElevation = 10.dp,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxHeight()
+                .padding(18.dp)
+                .verticalScroll(sheetScrollState),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Text(
+                        text = "Cart",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = OrmaColors.TextPrimary,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = "Keep adding items from the catalog while checkout stays open.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = OrmaColors.TextSecondary,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                OrmaLightButton(
+                    text = "Keep adding",
+                    onClick = onDismiss,
+                    modifier = Modifier.widthIn(min = 118.dp, max = 142.dp),
+                )
+            }
+            content()
         }
     }
 }

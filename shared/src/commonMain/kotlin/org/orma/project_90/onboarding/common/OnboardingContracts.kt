@@ -59,10 +59,18 @@ internal enum class AuthLoadingKind {
 
 internal enum class DashboardPageTarget {
     Orders,
+    Invoices,
     Customers,
     Suppliers,
     Products,
 }
+
+internal const val DashboardFilterScopeHome = "Dashboard"
+internal const val DashboardFilterScopeOrders = "OrdersBookings"
+internal const val DashboardFilterScopeInvoices = "Invoices"
+internal const val DashboardFilterScopeCustomers = "Customers"
+internal const val DashboardFilterScopeProducts = "Products"
+internal const val DashboardFilterScopeMarketing = "Marketing"
 
 internal data class OnboardingUiState(
     val step: OnboardingStep = OnboardingStep.Authentication,
@@ -137,19 +145,24 @@ internal data class DashboardDataState(
     val errorTitle: String? = null,
     val errorMessage: String? = null,
     val statusMessage: String? = null,
+    val pendingRefresh: Boolean = false,
     val summary: OrmaDashboardSummary = OrmaDashboardSummary(),
     val customers: List<OrmaCustomer> = emptyList(),
     val suppliers: List<OrmaSupplier> = emptyList(),
     val categories: List<OrmaProductCategory> = emptyList(),
     val offers: List<OrmaProductOffer> = emptyList(),
     val products: List<OrmaProduct> = emptyList(),
+    val marketingProducts: List<OrmaProduct> = emptyList(),
     val orders: List<OrmaOrder> = emptyList(),
+    val invoiceOrders: List<OrmaOrder> = emptyList(),
     val customerPagination: OrmaPagination = OrmaPagination(),
     val supplierPagination: OrmaPagination = OrmaPagination(),
     val categoryPagination: OrmaPagination = OrmaPagination(),
     val offerPagination: OrmaPagination = OrmaPagination(),
     val productPagination: OrmaPagination = OrmaPagination(),
+    val marketingProductPagination: OrmaPagination = OrmaPagination(),
     val orderPagination: OrmaPagination = OrmaPagination(),
+    val invoicePagination: OrmaPagination = OrmaPagination(),
     val printerPagination: OrmaPagination = OrmaPagination(),
     val paymentMethodPagination: OrmaPagination = OrmaPagination(),
     val customerOrderHistory: Map<String, List<OrmaOrder>> = emptyMap(),
@@ -172,8 +185,16 @@ internal data class DashboardDataState(
     val invoiceGstinLookupStatusMessage: String? = null,
     val invoiceGstinLookupErrorMessage: String? = null,
     val invoiceGstinLookup: OrmaGstinLookup? = null,
+    val filterScope: String = DashboardFilterScopeHome,
+    val scopedFilters: Map<String, OrmaDashboardFilters> = emptyMap(),
     val filters: OrmaDashboardFilters = OrmaDashboardFilters(),
 )
+
+internal fun DashboardDataState.filtersForScope(scope: String): OrmaDashboardFilters =
+    scopedFilters[scope] ?: if (scope == filterScope) filters else OrmaDashboardFilters()
+
+internal fun DashboardDataState.activeFilters(): OrmaDashboardFilters =
+    filtersForScope(filterScope)
 
 internal data class OnboardingActions(
     val onIdentifierTypeChange: (AuthIdentifierType) -> Unit,
@@ -196,6 +217,7 @@ internal data class OnboardingActions(
     val onClearDashboardMessage: () -> Unit,
     val onClearDashboardStatusMessage: () -> Unit,
     val onShowDashboardStatusMessage: (String) -> Unit,
+    val onDashboardFilterScopeChange: (String) -> Unit,
     val onDashboardSearchChange: (String) -> Unit,
     val onOrderStatusFilterChange: (String) -> Unit,
     val onOrderTypeFilterChange: (String) -> Unit,
