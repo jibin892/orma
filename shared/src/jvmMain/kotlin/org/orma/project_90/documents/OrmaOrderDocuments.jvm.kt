@@ -3,11 +3,20 @@ package org.orma.project_90.documents
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import java.awt.Desktop
+import java.net.InetSocketAddress
+import java.net.Socket
+import java.net.URI
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
 import java.util.Base64
+import java.util.concurrent.TimeUnit
+import javax.print.DocFlavor
+import javax.print.PrintService
+import javax.print.PrintServiceLookup
+import javax.print.SimpleDoc
+import javax.print.attribute.HashPrintRequestAttributeSet
 
 @Composable
 actual fun rememberOrmaOrderDocumentExporter(): OrmaOrderDocumentExporter =
@@ -35,8 +44,154 @@ actual fun rememberOrmaOrderDocumentExporter(): OrmaOrderDocumentExporter =
                     }
                     true
                 }.getOrDefault(false)
+
+            override fun printReceipt(
+                title: String,
+                html: String,
+                text: String,
+                target: OrmaPrintTarget?,
+            ): Boolean {
+                if (target != null) {
+                    return printReceiptDirect(target = target, text = text)
+                }
+                return printHtml(title = title, html = html)
+            }
         }
     }
+
+private fun printReceiptDirect(
+    target: OrmaPrintTarget,
+    text: String,
+): Boolean {
+    val type = target.connectionType.trim().lowercase()
+    val address = target.address.orEmpty().trim()
+    val bytes = receiptPrintBytes(text)
+    return when {
+        type == "network" || address.startsWith("tcp://", ignoreCase = true) -> {
+            printRawNetworkReceipt(address = address, bytes = bytes) ||
+                printWithSystemPrinter(target = target, bytes = bytes) ||
+                printWithLp(target = target, bytes = bytes)
+        }
+        address.startsWith("/dev/") -> {
+            printRawDeviceReceipt(path = address, bytes = bytes) ||
+                printWithSystemPrinter(target = target, bytes = bytes) ||
+                printWithLp(target = target, bytes = bytes)
+        }
+        else -> {
+            printWithSystemPrinter(target = target, bytes = bytes) ||
+                printWithLp(target = target, bytes = bytes)
+        }
+    }
+}
+
+private fun receiptPrintBytes(text: String): ByteArray =
+    byteArrayOf(0x1B, 0x40) +
+        text.toByteArray(StandardCharsets.UTF_8) +
+        byteArrayOf(0x0A, 0x0A, 0x0A, 0x1D, 0x56, 0x42, 0x00)
+
+private fun printRawNetworkReceipt(
+    address: String,
+    bytes: ByteArray,
+): Boolean =
+    runCatching {
+        val endpoint = address.toPrinterNetworkEndpoint() ?: return@runCatching false
+        Socket().use { socket ->
+            socket.connect(InetSocketAddress(endpoint.host, endpoint.port), 3_000)
+            socket.getOutputStream().use { output ->
+                output.write(bytes)
+                output.flush()
+            }
+        }
+        true
+    }.getOrDefault(false)
+
+private fun printRawDeviceReceipt(
+    path: String,
+    bytes: ByteArray,
+): Boolean =
+    runCatching {
+        Files.write(Paths.get(path), bytes)
+        true
+    }.getOrDefault(false)
+
+private fun printWithSystemPrinter(
+    target: OrmaPrintTarget,
+    bytes: ByteArray,
+): Boolean =
+    runCatching {
+        val service = findJvmPrintService(target) ?: return@runCatching false
+        val flavor = listOf(
+            DocFlavor.BYTE_ARRAY.AUTOSENSE,
+            DocFlavor.BYTE_ARRAY.TEXT_PLAIN_UTF_8,
+        ).firstOrNull(service::isDocFlavorSupported) ?: DocFlavor.BYTE_ARRAY.AUTOSENSE
+        val job = service.createPrintJob()
+        job.print(SimpleDoc(bytes, flavor, null), HashPrintRequestAttributeSet())
+        true
+    }.getOrDefault(false)
+
+private fun findJvmPrintService(target: OrmaPrintTarget): PrintService? {
+    val candidates = listOf(target.address.orEmpty(), target.name)
+        .map { it.trim() }
+        .filter { it.isNotBlank() }
+    val services = PrintServiceLookup.lookupPrintServices(null, null).orEmpty().toList()
+    return services.firstOrNull { service ->
+        candidates.any { candidate -> service.name.equals(candidate, ignoreCase = true) }
+    } ?: services.firstOrNull { service ->
+        candidates.any { candidate ->
+            service.name.contains(candidate, ignoreCase = true) || candidate.contains(service.name, ignoreCase = true)
+        }
+    } ?: if (candidates.isEmpty()) PrintServiceLookup.lookupDefaultPrintService() else null
+}
+
+private fun printWithLp(
+    target: OrmaPrintTarget,
+    bytes: ByteArray,
+): Boolean =
+    runCatching {
+        val file = Files.createTempFile("ORMA-printer-raw", ".bin")
+        Files.write(file, bytes)
+        file.toFile().deleteOnExit()
+        val printerName = target.address.orEmpty().trim().ifBlank { target.name.trim() }
+        val command = buildList {
+            add("lp")
+            if (printerName.isNotBlank()) {
+                add("-d")
+                add(printerName)
+            }
+            add("-o")
+            add("raw")
+            add(file.toString())
+        }
+        val process = ProcessBuilder(command).redirectErrorStream(true).start()
+        val finished = process.waitFor(5, TimeUnit.SECONDS)
+        if (!finished) {
+            process.destroy()
+            return@runCatching false
+        }
+        process.exitValue() == 0
+    }.getOrDefault(false)
+
+private data class PrinterNetworkEndpoint(
+    val host: String,
+    val port: Int,
+)
+
+private fun String.toPrinterNetworkEndpoint(): PrinterNetworkEndpoint? {
+    val raw = trim()
+    if (raw.isBlank()) return null
+    if (raw.startsWith("tcp://", ignoreCase = true)) {
+        val uri = runCatching { URI(raw) }.getOrNull() ?: return null
+        val host = uri.host?.takeIf { it.isNotBlank() } ?: return null
+        return PrinterNetworkEndpoint(host = host, port = uri.port.takeIf { it > 0 } ?: 9100)
+    }
+    val portSeparator = raw.lastIndexOf(':')
+    if (portSeparator > 0 && raw.indexOf(':') == portSeparator) {
+        val host = raw.substring(0, portSeparator).trim().takeIf { it.isNotBlank() } ?: return null
+        val port = raw.substring(portSeparator + 1).trim().toIntOrNull() ?: return null
+        return PrinterNetworkEndpoint(host = host, port = port)
+    }
+    return PrinterNetworkEndpoint(host = raw, port = 9100)
+}
 
 private fun writeDownloadHtml(fileName: String, html: String): Path {
     val downloads = Paths.get(System.getProperty("user.home"), "Downloads")

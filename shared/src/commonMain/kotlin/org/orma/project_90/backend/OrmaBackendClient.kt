@@ -524,6 +524,7 @@ data class OrmaProductDraft(
     val bookingRequired: Boolean = false,
     val expiryDate: String = "",
     val supplierId: String = "",
+    val status: String = "active",
     val image: OrmaPickedImage? = null,
 )
 
@@ -580,6 +581,11 @@ data class OrmaOrderItemDraft(
 data class OrmaStockAdjustmentDraft(
     val quantityDelta: String = "",
     val note: String = "",
+    val sellingPrice: String = "",
+    val costPrice: String = "",
+    val supplierId: String = "",
+    val status: String = "active",
+    val expiryDate: String = "",
 )
 
 data class OrmaDashboardFilters(
@@ -1282,6 +1288,11 @@ class OrmaBackendClient(
                     body = buildJsonObject(
                         "quantityDelta" to JsonValue.StringValue(draft.quantityDelta),
                         "note" to JsonValue.StringValue(draft.note.blankToNull()),
+                        "sellingPrice" to JsonValue.StringValue(draft.sellingPrice.blankToNull()),
+                        "costPrice" to JsonValue.StringValue(draft.costPrice.blankToNull()),
+                        "supplierId" to JsonValue.StringValue(draft.supplierId.blankToNull()),
+                        "status" to JsonValue.StringValue(draft.status.blankToNull()),
+                        "expiryDate" to JsonValue.StringValue(draft.expiryDate.blankToNull()),
                     ),
                 )
             },
@@ -2486,6 +2497,7 @@ private fun OrmaProductDraft.toProductRequestJson(): String =
         "bookingRequired" to JsonValue.BooleanValue(bookingRequired),
         "expiryDate" to JsonValue.StringValue(expiryDate.blankToNull()),
         "supplierId" to JsonValue.StringValue(supplierId.blankToNull()),
+        "status" to JsonValue.StringValue(status.ifBlank { "active" }),
     )
 
 private fun OrmaPrinterDraft.toPrinterRequestJson(): String =

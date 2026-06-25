@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -340,8 +341,14 @@ private fun PublicCatalogMobile(
     onSubmit: () -> Unit,
 ) {
     val scrollState = rememberScrollState()
-    val mobileScope = rememberCoroutineScope()
-    val showFloatingCart = selectedItems.isNotEmpty() && receipt == null
+    var checkoutOpen by remember(catalog?.workspace?.id) { mutableStateOf(false) }
+    val showFloatingCart = selectedItems.isNotEmpty() || receipt != null
+
+    LaunchedEffect(selectedItems.isEmpty(), receipt) {
+        if (selectedItems.isEmpty() && receipt == null) {
+            checkoutOpen = false
+        }
+    }
 
     Box(
         modifier = Modifier
@@ -362,9 +369,6 @@ private fun PublicCatalogMobile(
             PublicCatalogCheckoutTopBar(
                 catalog = catalog,
                 loading = loading,
-                selectedItems = selectedItems,
-                visibleProducts = visibleProducts,
-                total = total,
                 compact = true,
             )
             PublicCatalogProductsCard {
@@ -379,7 +383,27 @@ private fun PublicCatalogMobile(
                     onCategoryChange = onCategoryChange,
                 )
             }
-            PublicCatalogCheckoutCard {
+            Spacer(modifier = Modifier.height(if (showFloatingCart) 104.dp else 6.dp))
+        }
+        if (showFloatingCart) {
+            PublicCatalogFloatingCartButton(
+                catalog = catalog,
+                selectedItems = selectedItems,
+                total = total,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                onClick = {
+                    checkoutOpen = true
+                },
+            )
+        }
+        if (checkoutOpen) {
+            PublicCatalogCheckoutSheet(
+                compact = true,
+                onDismiss = { checkoutOpen = false },
+            ) {
                 PublicCatalogCheckout(
                     catalog = catalog,
                     error = error,
@@ -398,7 +422,10 @@ private fun PublicCatalogMobile(
                     submitEnabled = submitEnabled,
                     onRetry = onRetry,
                     onClearSelection = onClearSelection,
-                    onNewOrder = onNewOrder,
+                    onNewOrder = {
+                        checkoutOpen = false
+                        onNewOrder()
+                    },
                     onCustomerNameChange = onCustomerNameChange,
                     onPhoneChange = onPhoneChange,
                     onNotesChange = onNotesChange,
@@ -408,23 +435,6 @@ private fun PublicCatalogMobile(
                     onSubmit = onSubmit,
                 )
             }
-            Spacer(modifier = Modifier.height(if (showFloatingCart) 104.dp else 6.dp))
-        }
-        if (showFloatingCart) {
-            PublicCatalogFloatingCartButton(
-                catalog = catalog,
-                selectedItems = selectedItems,
-                total = total,
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                onClick = {
-                    mobileScope.launch {
-                        scrollState.animateScrollTo(scrollState.maxValue)
-                    }
-                },
-            )
         }
     }
 }
@@ -525,6 +535,16 @@ private fun PublicCatalogWide(
     onPaymentModeChange: (String) -> Unit,
     onSubmit: () -> Unit,
 ) {
+    val wideScrollState = rememberScrollState()
+    var checkoutOpen by remember(catalog?.workspace?.id) { mutableStateOf(false) }
+    val showFloatingCart = selectedItems.isNotEmpty() || receipt != null
+
+    LaunchedEffect(selectedItems.isEmpty(), receipt) {
+        if (selectedItems.isEmpty() && receipt == null) {
+            checkoutOpen = false
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -536,86 +556,159 @@ private fun PublicCatalogWide(
             modifier = Modifier
                 .fillMaxWidth()
                 .widthIn(max = 1180.dp)
-                .verticalScroll(rememberScrollState()),
+                .verticalScroll(wideScrollState),
             verticalArrangement = Arrangement.spacedBy(18.dp),
         ) {
             PublicCatalogCheckoutTopBar(
                 catalog = catalog,
                 loading = loading,
-                selectedItems = selectedItems,
-                visibleProducts = visibleProducts,
-                total = total,
                 compact = false,
             )
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(18.dp),
-                verticalAlignment = Alignment.Top,
+            PublicCatalogProductsCard {
+                PublicCatalogProducts(
+                    catalog = catalog,
+                    loading = loading,
+                    quantities = quantities,
+                    selectedCategoryId = selectedCategoryId,
+                    selectedCartItemType = selectedCartItemType,
+                    visibleProducts = visibleProducts,
+                    onQuantityChange = onQuantityChange,
+                    onCategoryChange = onCategoryChange,
+                )
+            }
+            Spacer(modifier = Modifier.height(if (showFloatingCart) 86.dp else 0.dp))
+        }
+        if (showFloatingCart) {
+            PublicCatalogFloatingCartButton(
+                catalog = catalog,
+                selectedItems = selectedItems,
+                total = total,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .widthIn(min = 300.dp, max = 390.dp)
+                    .padding(18.dp),
+                onClick = {
+                    checkoutOpen = true
+                },
+            )
+        }
+        if (checkoutOpen) {
+            PublicCatalogCheckoutSheet(
+                compact = false,
+                onDismiss = { checkoutOpen = false },
             ) {
-                PublicCatalogProductsCard(modifier = Modifier.weight(1.38f)) {
-                    PublicCatalogProducts(
-                        catalog = catalog,
-                        loading = loading,
-                        quantities = quantities,
-                        selectedCategoryId = selectedCategoryId,
-                        selectedCartItemType = selectedCartItemType,
-                        visibleProducts = visibleProducts,
-                        onQuantityChange = onQuantityChange,
-                        onCategoryChange = onCategoryChange,
-                    )
-                }
-                PublicCatalogCheckoutCard(modifier = Modifier.weight(0.82f)) {
-                    PublicCatalogCheckout(
-                        catalog = catalog,
-                        error = error,
-                        receipt = receipt,
-                        customerName = customerName,
-                        phoneNumber = phoneNumber,
-                        notes = notes,
-                        fulfillmentType = fulfillmentType,
-                        scheduledAt = scheduledAt,
-                        paymentMode = paymentMode,
-                        selectedItems = selectedItems,
-                        selectedFlow = selectedFlow,
-                        total = total,
-                        submitting = submitting,
-                        statusRefreshing = statusRefreshing,
-                        submitEnabled = submitEnabled,
-                        onRetry = onRetry,
-                        onClearSelection = onClearSelection,
-                        onNewOrder = onNewOrder,
-                        onCustomerNameChange = onCustomerNameChange,
-                        onPhoneChange = onPhoneChange,
-                        onNotesChange = onNotesChange,
-                        onFulfillmentChange = onFulfillmentChange,
-                        onScheduledAtChange = onScheduledAtChange,
-                        onPaymentModeChange = onPaymentModeChange,
-                        onSubmit = onSubmit,
-                    )
-                }
+                PublicCatalogCheckout(
+                    catalog = catalog,
+                    error = error,
+                    receipt = receipt,
+                    customerName = customerName,
+                    phoneNumber = phoneNumber,
+                    notes = notes,
+                    fulfillmentType = fulfillmentType,
+                    scheduledAt = scheduledAt,
+                    paymentMode = paymentMode,
+                    selectedItems = selectedItems,
+                    selectedFlow = selectedFlow,
+                    total = total,
+                    submitting = submitting,
+                    statusRefreshing = statusRefreshing,
+                    submitEnabled = submitEnabled,
+                    onRetry = onRetry,
+                    onClearSelection = onClearSelection,
+                    onNewOrder = {
+                        checkoutOpen = false
+                        onNewOrder()
+                    },
+                    onCustomerNameChange = onCustomerNameChange,
+                    onPhoneChange = onPhoneChange,
+                    onNotesChange = onNotesChange,
+                    onFulfillmentChange = onFulfillmentChange,
+                    onScheduledAtChange = onScheduledAtChange,
+                    onPaymentModeChange = onPaymentModeChange,
+                    onSubmit = onSubmit,
+                )
             }
         }
     }
 }
 
 @Composable
-private fun PublicCatalogCheckoutCard(
-    modifier: Modifier = Modifier,
+private fun PublicCatalogCheckoutSheet(
+    compact: Boolean,
+    onDismiss: () -> Unit,
     content: @Composable () -> Unit,
 ) {
-    Surface(
-        modifier = modifier.fillMaxWidth(),
-        shape = OrmaShapes.PremiumCard,
-        color = OrmaColors.CardBackground,
-        border = BorderStroke(0.8.dp, OrmaColors.Hairline),
-        tonalElevation = 0.dp,
-        shadowElevation = 0.dp,
-    ) {
-        Column(
-            modifier = Modifier.padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            content()
+    val sheetScrollState = rememberScrollState()
+    Box(modifier = Modifier.fillMaxSize()) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.28f))
+                .clickable(onClick = onDismiss),
+        )
+        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+            val sheetModifier = if (compact) {
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 10.dp)
+                    .heightIn(max = maxHeight - 20.dp)
+            } else {
+                Modifier
+                    .align(Alignment.CenterEnd)
+                    .fillMaxWidth(0.44f)
+                    .widthIn(min = 420.dp, max = 540.dp)
+                    .padding(24.dp)
+                    .heightIn(max = maxHeight - 48.dp)
+            }
+            Surface(
+                modifier = sheetModifier,
+                shape = OrmaShapes.PremiumCard,
+                color = OrmaColors.CardBackground,
+                border = BorderStroke(0.8.dp, OrmaColors.Hairline),
+                tonalElevation = 0.dp,
+                shadowElevation = 14.dp,
+            ) {
+                Column(
+                    modifier = Modifier
+                        .padding(18.dp)
+                        .verticalScroll(sheetScrollState),
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            Text(
+                                text = "Cart",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = OrmaColors.TextPrimary,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                text = "Review selected items and checkout details.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = OrmaColors.TextSecondary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        OrmaLightButton(
+                            text = "Close",
+                            onClick = onDismiss,
+                            modifier = Modifier.widthIn(min = 96.dp, max = 124.dp),
+                        )
+                    }
+                    content()
+                }
+            }
         }
     }
 }
@@ -646,9 +739,6 @@ private fun PublicCatalogProductsCard(
 private fun PublicCatalogCheckoutTopBar(
     catalog: OrmaPublicCatalog?,
     loading: Boolean,
-    selectedItems: List<PublicCatalogSelection>,
-    visibleProducts: List<OrmaPublicCatalogProduct>,
-    total: Double,
     compact: Boolean,
 ) {
     val businessName = catalog?.workspace?.businessName?.ifBlank { "ORMA checkout" } ?: "ORMA checkout"
@@ -656,18 +746,6 @@ private fun PublicCatalogCheckoutTopBar(
         listOf(it.industry, it.city).filter(String::isNotBlank).joinToString(" / ")
     }.orEmpty().ifBlank { "Online checkout" }
     val logoUrl = catalog?.workspace?.logoUrl.publicCatalogRemoteImageUrl()
-    val itemCount = catalog?.products?.size ?: 0
-    val selectedCount = selectedItems.sumOf { it.quantity }
-    val currency = catalog?.workspace?.currency ?: selectedItems.firstOrNull()?.product?.currency.orEmpty()
-    val availableTypes = visibleProducts
-        .map { it.itemType.publicCatalogNormalizedItemType() }
-        .distinct()
-    val typeSummary = when {
-        loading -> "Loading"
-        availableTypes.isEmpty() -> "No items"
-        availableTypes.size == 1 -> availableTypes.first().publicCatalogItemTypeLabel()
-        else -> "${availableTypes.size} checkout types"
-    }
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = OrmaShapes.PremiumCard,
@@ -682,33 +760,13 @@ private fun PublicCatalogCheckoutTopBar(
             if (stacked) {
                 Column(
                     modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     PublicCatalogCheckoutBusinessLine(
                         businessName = businessName,
                         location = location,
                         logoUrl = logoUrl,
                         loading = loading,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        PublicCatalogCheckoutTopMetric(
-                            label = "Catalog",
-                            value = if (loading) "--" else itemCount.toString(),
-                            modifier = Modifier.weight(1f),
-                        )
-                        PublicCatalogCheckoutTopMetric(
-                            label = "Selected",
-                            value = selectedCount.toString(),
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
-                    PublicCatalogCheckoutTopMetric(
-                        label = typeSummary,
-                        value = if (selectedCount == 0) "Choose items" else "${currency.ifBlank { "" }} ${money(total)}".trim(),
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
@@ -725,26 +783,6 @@ private fun PublicCatalogCheckoutTopBar(
                         loading = loading,
                         modifier = Modifier.weight(1f),
                     )
-                    Row(
-                        modifier = Modifier.weight(1.08f),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        PublicCatalogCheckoutTopMetric(
-                            label = "Catalog",
-                            value = if (loading) "--" else itemCount.toString(),
-                            modifier = Modifier.weight(1f),
-                        )
-                        PublicCatalogCheckoutTopMetric(
-                            label = "Selected",
-                            value = selectedCount.toString(),
-                            modifier = Modifier.weight(1f),
-                        )
-                        PublicCatalogCheckoutTopMetric(
-                            label = typeSummary,
-                            value = if (selectedCount == 0) "--" else "${currency.ifBlank { "" }} ${money(total)}".trim(),
-                            modifier = Modifier.weight(1.25f),
-                        )
-                    }
                 }
             }
         }
@@ -808,43 +846,6 @@ private fun PublicCatalogCheckoutBusinessLine(
                 text = location,
                 style = MaterialTheme.typography.bodyMedium,
                 color = OrmaColors.TextSecondary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-    }
-}
-
-@Composable
-private fun PublicCatalogCheckoutTopMetric(
-    label: String,
-    value: String,
-    modifier: Modifier = Modifier,
-) {
-    Surface(
-        modifier = modifier,
-        shape = OrmaShapes.StandardCell,
-        color = OrmaColors.CellBackground,
-        border = BorderStroke(0.8.dp, OrmaColors.Hairline),
-        tonalElevation = 0.dp,
-        shadowElevation = 0.dp,
-    ) {
-        Column(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(3.dp),
-        ) {
-            Text(
-                text = label.uppercase(),
-                style = MaterialTheme.typography.labelSmall,
-                color = OrmaColors.TextTertiary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                text = value,
-                style = MaterialTheme.typography.titleSmall,
-                color = OrmaColors.TextPrimary,
-                fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -1298,6 +1299,14 @@ private fun PublicCatalogProducts(
                     selectedCategoryId = selectedCategoryId,
                     onCategoryChange = onCategoryChange,
                 )
+                PublicCatalogOffersStrip(
+                    products = searchedProducts,
+                    quantities = quantities,
+                    activeCartType = selectedCartItemType,
+                    onApplyOffer = { productId ->
+                        onQuantityChange(productId, (quantities[productId] ?: 0).coerceAtLeast(1))
+                    },
+                )
                 if (searchedProducts.isEmpty()) {
                     PublicCatalogEmpty(
                         title = "No matches",
@@ -1393,6 +1402,192 @@ private fun PublicCatalogTypeFilter(
                         locked -> OrmaColors.TextTertiary
                         else -> OrmaColors.TextPrimary
                     },
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PublicCatalogOffersStrip(
+    products: List<OrmaPublicCatalogProduct>,
+    quantities: Map<String, Int>,
+    activeCartType: String?,
+    onApplyOffer: (String) -> Unit,
+) {
+    val offerProducts = products
+        .filter { it.offer != null && it.publicCatalogOfferSavings() > 0.0 }
+        .take(12)
+    if (offerProducts.isEmpty()) return
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(
+                    text = "Offers",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = OrmaColors.TextPrimary,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = "Swipe and apply an offer to this session cart.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = OrmaColors.TextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            OrmaBadge(text = "${offerProducts.size} live".uppercase(), tone = OrmaStatusTone.Success)
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            offerProducts.forEach { product ->
+                PublicCatalogOfferCard(
+                    product = product,
+                    quantity = quantities[product.id] ?: 0,
+                    activeCartType = activeCartType,
+                    onApply = { onApplyOffer(product.id) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PublicCatalogOfferCard(
+    product: OrmaPublicCatalogProduct,
+    quantity: Int,
+    activeCartType: String?,
+    onApply: () -> Unit,
+) {
+    val offer = product.offer ?: return
+    val productType = product.itemType.publicCatalogNormalizedItemType()
+    val applied = quantity > 0
+    val lockedByType = activeCartType != null && activeCartType != productType && !applied
+    val enabled = product.inStock && !lockedByType
+    val savings = product.publicCatalogOfferSavings()
+    Surface(
+        modifier = Modifier
+            .width(252.dp)
+            .clickable(enabled = enabled || applied, onClick = onApply),
+        shape = OrmaShapes.StandardCell,
+        color = if (applied) OrmaColors.Accent.copy(alpha = 0.07f) else OrmaColors.CardBackground,
+        border = BorderStroke(
+            width = if (applied) 1.1.dp else 0.8.dp,
+            color = if (applied) OrmaColors.Accent.copy(alpha = 0.42f) else OrmaColors.Hairline,
+        ),
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                OrmaBadge(
+                    text = if (applied) "APPLIED" else product.publicCatalogOfferShortLabel().uppercase(),
+                    tone = if (applied) OrmaStatusTone.Success else OrmaStatusTone.Warning,
+                )
+                Text(
+                    text = product.itemType.publicCatalogItemTypeLabel(),
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = OrmaColors.TextTertiary,
+                    textAlign = TextAlign.End,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Text(
+                text = offer.name.ifBlank { "Offer" },
+                style = MaterialTheme.typography.titleSmall,
+                color = OrmaColors.TextPrimary,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = product.name.ifBlank { "Item" },
+                style = MaterialTheme.typography.bodyMedium,
+                color = OrmaColors.TextSecondary,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.Bottom,
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Text(
+                        text = "${product.currency} ${product.customerPrice}",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = OrmaColors.TextPrimary,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = "${product.currency} ${product.sellingPrice}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = OrmaColors.TextTertiary,
+                        textDecoration = androidx.compose.ui.text.style.TextDecoration.LineThrough,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Text(
+                    text = "Save ${product.currency} ${money(savings)}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = OrmaColors.Success,
+                    textAlign = TextAlign.End,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = OrmaShapes.Capsule,
+                color = if (enabled || applied) OrmaColors.Accent else OrmaColors.CellBackground,
+                contentColor = if (enabled || applied) OrmaColors.OnAccent else OrmaColors.TextTertiary,
+                tonalElevation = 0.dp,
+                shadowElevation = 0.dp,
+            ) {
+                Text(
+                    text = when {
+                        applied -> "In cart"
+                        !product.inStock -> "Unavailable"
+                        lockedByType -> "Switch cart type"
+                        else -> "Apply offer"
+                    },
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                    style = MaterialTheme.typography.labelMedium,
+                    textAlign = TextAlign.Center,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -1553,109 +1748,112 @@ private fun PublicCatalogCheckout(
                 ready = submitEnabled,
                 submitting = submitting,
             )
-            PublicCatalogWorkflowRail(
-                selectedItems = selectedItems,
-                contactReady = customerName.trim().length >= 2 && isOrmaInternationalPhoneValid(phoneNumber),
-                timingReady = (!appointmentFlow && selectedFulfillment != "scheduled") || scheduledAt.trim().length >= 4,
-                submitting = submitting,
-                receipt = receipt,
-            )
             PublicCatalogSelectionSummary(
                 catalog = catalog,
                 selectedItems = selectedItems,
                 total = total,
                 onClearSelection = onClearSelection,
             )
-            PublicCatalogTrustStrip(
-                hasUpi = hasUpi,
-                hasWhatsApp = hasWhatsApp,
-                selectedFulfillment = selectedFulfillment,
-            )
-            OrmaSectionHeader(text = "Contact details")
-            OrmaTextField(
-                value = customerName,
-                onValueChange = onCustomerNameChange,
-                label = "Your name",
-                placeholder = "Full name",
-            )
-            OrmaCountryPhoneField(
-                value = phoneNumber,
-                onValueChange = onPhoneChange,
-                label = "Phone number",
-                supportingText = "India is selected by default. Change country if needed.",
-            )
-            OrmaSectionHeader(text = "Timing and payment")
-            if (!appointmentFlow) {
+            if (selectedItems.isEmpty()) {
+                error?.takeIf(String::isNotBlank)?.let {
+                    PublicCatalogMessageCard(
+                        title = "Could not continue",
+                        body = it,
+                        error = true,
+                    )
+                }
+                if (catalog == null && !error.isNullOrBlank()) {
+                    OrmaLightButton(
+                        text = "Try again",
+                        onClick = onRetry,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            } else {
+                PublicCatalogTrustStrip(
+                    hasUpi = hasUpi,
+                    hasWhatsApp = hasWhatsApp,
+                    selectedFulfillment = selectedFulfillment,
+                )
+                OrmaSectionHeader(text = "Contact details")
+                OrmaTextField(
+                    value = customerName,
+                    onValueChange = onCustomerNameChange,
+                    label = "Your name",
+                    placeholder = "Full name",
+                )
+                OrmaCountryPhoneField(
+                    value = phoneNumber,
+                    onValueChange = onPhoneChange,
+                    label = "Phone number",
+                    supportingText = "India is selected by default. Change country if needed.",
+                )
+                OrmaSectionHeader(text = "Timing and payment")
+                if (!appointmentFlow) {
+                    OrmaSegmentedRow(
+                        options = fulfillmentOptions,
+                        selected = selectedFulfillment,
+                        label = {
+                            when (it) {
+                                "scheduled" -> "Schedule"
+                                "standard" -> "Request now"
+                                else -> "Take away"
+                            }
+                        },
+                        onSelected = onFulfillmentChange,
+                    )
+                }
+                if (appointmentFlow || selectedFulfillment == "scheduled") {
+                    OrmaCalendarDateTimeField(
+                        value = scheduledAt,
+                        onValueChange = onScheduledAtChange,
+                        label = "Preferred date/time",
+                        placeholder = "Choose date",
+                        supportingText = "Choose a date. Add a common time slot if needed.",
+                        allowClear = !appointmentFlow,
+                    )
+                }
                 OrmaSegmentedRow(
-                    options = fulfillmentOptions,
-                    selected = selectedFulfillment,
-                    label = {
-                        when (it) {
-                            "scheduled" -> "Schedule"
-                            "standard" -> "Request now"
-                            else -> "Take away"
-                        }
-                    },
-                    onSelected = onFulfillmentChange,
+                    options = if (hasUpi) listOf("pay_on_spot", "upi") else listOf("pay_on_spot"),
+                    selected = if (hasUpi) paymentMode else "pay_on_spot",
+                    label = { if (it == "upi") "UPI" else "Pay on spot" },
+                    onSelected = onPaymentModeChange,
                 )
-            }
-            if (appointmentFlow || selectedFulfillment == "scheduled") {
-                OrmaCalendarDateTimeField(
-                    value = scheduledAt,
-                    onValueChange = onScheduledAtChange,
-                    label = "Preferred date/time",
-                    placeholder = "Choose date",
-                    supportingText = "Choose a date. Add a common time slot if needed.",
-                    allowClear = !appointmentFlow,
+                OrmaTextField(
+                    value = notes,
+                    onValueChange = onNotesChange,
+                    label = "Notes",
+                    placeholder = "Optional",
+                    singleLine = false,
+                    minLines = 2,
                 )
-            }
-            OrmaSegmentedRow(
-                options = if (hasUpi) listOf("pay_on_spot", "upi") else listOf("pay_on_spot"),
-                selected = if (hasUpi) paymentMode else "pay_on_spot",
-                label = { if (it == "upi") "UPI" else "Pay on spot" },
-                onSelected = onPaymentModeChange,
-            )
-            OrmaTextField(
-                value = notes,
-                onValueChange = onNotesChange,
-                label = "Notes",
-                placeholder = "Optional",
-                singleLine = false,
-                minLines = 2,
-            )
-            error?.takeIf(String::isNotBlank)?.let {
-                PublicCatalogMessageCard(
-                    title = "Could not continue",
-                    body = it,
-                    error = true,
-                )
-            }
-            OrmaFullButton(
-                text = submitText,
-                onClick = onSubmit,
-                modifier = Modifier.fillMaxWidth(),
-                enabled = submitEnabled && !submitting,
-            )
-            catalog?.publicCatalogWhatsAppUrl(selectedItems)?.let { url ->
-                OrmaLightButton(
-                    text = "Chat on WhatsApp",
-                    onClick = { openPublicCatalogPaymentLink(url) },
+                error?.takeIf(String::isNotBlank)?.let {
+                    PublicCatalogMessageCard(
+                        title = "Could not continue",
+                        body = it,
+                        error = true,
+                    )
+                }
+                OrmaFullButton(
+                    text = submitText,
+                    onClick = onSubmit,
                     modifier = Modifier.fillMaxWidth(),
+                    enabled = submitEnabled && !submitting,
+                )
+                catalog?.publicCatalogWhatsAppUrl(selectedItems)?.let { url ->
+                    OrmaLightButton(
+                        text = "Chat on WhatsApp",
+                        onClick = { openPublicCatalogPaymentLink(url) },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                Text(
+                    text = "Your request goes straight into ORMA for this business. Payment is handled by the selected option.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = OrmaColors.TextSecondary,
+                    textAlign = TextAlign.Center,
                 )
             }
-            if (catalog == null && !error.isNullOrBlank()) {
-                OrmaLightButton(
-                    text = "Try again",
-                    onClick = onRetry,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-            Text(
-                text = "Your request goes straight into ORMA for this business. Payment is handled by the selected option.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = OrmaColors.TextSecondary,
-                textAlign = TextAlign.Center,
-            )
         }
     }
 }
@@ -1894,117 +2092,6 @@ private fun PublicCatalogTrustItem(
         )
     }
 }
-
-@Composable
-private fun PublicCatalogWorkflowRail(
-    selectedItems: List<PublicCatalogSelection>,
-    contactReady: Boolean,
-    timingReady: Boolean,
-    submitting: Boolean,
-    receipt: OrmaPublicCatalogOrderReceipt?,
-) {
-    val cartReady = selectedItems.isNotEmpty()
-    val sent = receipt != null
-    val contactComplete = cartReady && contactReady
-    val timingComplete = contactComplete && timingReady
-    val activeStep = when {
-        sent || submitting -> "4"
-        !cartReady -> "1"
-        !contactReady -> "2"
-        !timingReady -> "3"
-        else -> "4"
-    }
-    val steps = listOf(
-        PublicCatalogStep("1", "Choose", cartReady, activeStep == "1"),
-        PublicCatalogStep("2", "Contact", contactComplete, activeStep == "2"),
-        PublicCatalogStep("3", "Timing", timingComplete, activeStep == "3"),
-        PublicCatalogStep("4", if (submitting) "Sending" else "Sent", sent, activeStep == "4"),
-    )
-    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-        if (maxWidth < 430.dp) {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                steps.chunked(2).forEach { rowSteps ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        rowSteps.forEach { step ->
-                            PublicCatalogWorkflowStepCard(
-                                step = step,
-                                submitting = submitting,
-                                modifier = Modifier.weight(1f),
-                            )
-                        }
-                        if (rowSteps.size == 1) {
-                            Spacer(modifier = Modifier.weight(1f))
-                        }
-                    }
-                }
-            }
-        } else {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                steps.forEach { step ->
-                    PublicCatalogWorkflowStepCard(
-                        step = step,
-                        submitting = submitting,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun PublicCatalogWorkflowStepCard(
-    step: PublicCatalogStep,
-    submitting: Boolean,
-    modifier: Modifier = Modifier,
-) {
-    val active = step.complete || step.active || (step.number == "4" && submitting)
-    Surface(
-        modifier = modifier,
-        shape = OrmaShapes.StandardCell,
-        color = if (active) OrmaColors.Accent else OrmaColors.CellBackground,
-        border = BorderStroke(
-            width = 0.8.dp,
-            color = if (active) OrmaColors.Accent.copy(alpha = 0.36f) else OrmaColors.Hairline,
-        ),
-        tonalElevation = 0.dp,
-        shadowElevation = 0.dp,
-    ) {
-        Column(
-            modifier = Modifier.padding(horizontal = 9.dp, vertical = 10.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            Text(
-                text = step.number,
-                style = MaterialTheme.typography.labelMedium,
-                color = if (active) OrmaColors.OnAccent else OrmaColors.TextSecondary,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-            )
-            Text(
-                text = step.label,
-                style = MaterialTheme.typography.labelSmall,
-                color = if (active) OrmaColors.OnAccent.copy(alpha = 0.82f) else OrmaColors.TextPrimary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-    }
-}
-
-private data class PublicCatalogStep(
-    val number: String,
-    val label: String,
-    val complete: Boolean,
-    val active: Boolean,
-)
 
 @Composable
 private fun PublicCatalogProductTile(
@@ -2923,6 +3010,21 @@ private fun OrmaPublicCatalogProduct.publicCatalogAvailabilityLabel(): String =
             "per ${unit.ifBlank { "unit" }}"
         }
     }
+
+private fun OrmaPublicCatalogProduct.publicCatalogOfferSavings(): Double =
+    offer?.discountAmount?.toDoubleOrNull().orZero()
+
+private fun OrmaPublicCatalogProduct.publicCatalogOfferShortLabel(): String {
+    val offer = offer ?: return "Offer"
+    val discountValue = offer.discountValue.toDoubleOrNull()
+    val valueLabel = discountValue?.let {
+        if (it % 1.0 == 0.0) it.toInt().toString() else money(it)
+    } ?: offer.discountValue
+    return when (offer.discountType.trim().lowercase()) {
+        "fixed" -> "${currency.ifBlank { "" }} $valueLabel off".trim()
+        else -> "$valueLabel% off"
+    }
+}
 
 private fun String.publicCatalogQuantityLabel(): String {
     val value = toDoubleOrNull() ?: return "0"

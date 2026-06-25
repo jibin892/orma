@@ -482,6 +482,7 @@ data class ProductRequest(
     val bookingRequired: Boolean = false,
     val expiryDate: String? = null,
     val supplierId: String? = null,
+    val status: String = "active",
 )
 
 @Serializable
@@ -614,6 +615,11 @@ data class PublicCatalogOrderResponse(
 data class StockAdjustmentRequest(
     val quantityDelta: String,
     val note: String? = null,
+    val sellingPrice: String? = null,
+    val costPrice: String? = null,
+    val supplierId: String? = null,
+    val status: String? = null,
+    val expiryDate: String? = null,
 )
 
 @Serializable

@@ -161,7 +161,6 @@ class DashboardRepository(
             val balanceDue = order.paymentBalanceDue()
             val paymentMethod = if (
                 balanceDue > BigDecimal.ZERO &&
-                order.paymentMode == "upi" &&
                 order.status in setOf("draft", "confirmed", "part_paid")
             ) {
                 connection.defaultPublicCatalogPaymentMethod(access.workspaceId)
@@ -277,7 +276,8 @@ class DashboardRepository(
                     actorPhoneNumber = request.phoneNumber,
                     actorRole = "public_catalog",
                 )
-                val paymentMethod = if (paymentMode == "upi") {
+                val balanceDue = order.paymentBalanceDue()
+                val paymentMethod = if (balanceDue > BigDecimal.ZERO) {
                     connection.defaultPublicCatalogPaymentMethod(access.workspaceId)
                 } else {
                     null
@@ -288,7 +288,7 @@ class DashboardRepository(
                         message = "Request received. The business will review it shortly.",
                         order = order,
                         paymentLink = paymentMethod?.toUpiPaymentLink(
-                            amount = order.total,
+                            amount = balanceDue.moneyString(),
                             currency = order.currency,
                             note = "ORMA ${order.orderNumber}",
                         ),
@@ -1160,15 +1160,20 @@ class DashboardRepository(
                 }
                 val product = connection.adjustProductStock(access, productId, request)
                 if (product != null) {
+                    val quantityChanged = request.quantityDelta.decimalOrZero() != BigDecimal.ZERO
                     connection.insertWorkspaceActivity(
                         access = access,
-                        activityType = "stock_adjusted",
+                        activityType = if (quantityChanged) "stock_adjusted" else "product_updated",
                         entityType = "product",
                         entityId = product.id,
                         entityLabel = product.name,
-                        title = "Stock adjusted",
-                        body = "${product.name} · ${request.quantityDelta} ${product.unit} · balance ${product.stockQuantity}",
-                        tone = "warning",
+                        title = if (quantityChanged) "Stock adjusted" else "Product details updated",
+                        body = if (quantityChanged) {
+                            "${product.name} · ${request.quantityDelta} ${product.unit} · balance ${product.stockQuantity}"
+                        } else {
+                            "${product.name} · ${product.status.cleanCatalogStatus()} · ${product.currency} ${product.sellingPrice}"
+                        },
+                        tone = if (quantityChanged) "warning" else "info",
                     )
                 }
                 connection.commit()
@@ -2945,7 +2950,7 @@ class DashboardRepository(
                 from products p
                 left join suppliers s on s.id = p.supplier_id
                 left join product_categories pc on pc.id = p.category_id
-                where p.workspace_id = ?::uuid and p.status = 'active'
+                where p.workspace_id = ?::uuid and p.status <> 'archived'
                 """.trimIndent(),
             )
             if (search != null) {
@@ -3007,9 +3012,9 @@ class DashboardRepository(
             insert into products (
                 workspace_id, supplier_id, category_id, name, item_type, sku, barcode, description, unit,
                 selling_price, cost_price, currency, tax_rate, prices_include_tax,
-                stock_quantity, reorder_level, track_stock, duration_minutes, booking_required, expiry_date, updated_at
+                stock_quantity, reorder_level, track_stock, duration_minutes, booking_required, expiry_date, status, updated_at
             )
-            values (?::uuid, ?::uuid, ?::uuid, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::date, now())
+            values (?::uuid, ?::uuid, ?::uuid, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::date, ?, now())
             returning *, null::text as supplier_name, null::text as category_name, null::text as image_storage_path
         """.trimIndent()
         return prepareStatement(sql).use { statement ->
@@ -3166,14 +3171,14 @@ class DashboardRepository(
             set supplier_id = ?::uuid, category_id = ?::uuid, name = ?, item_type = ?, sku = ?, barcode = ?, description = ?,
                 unit = ?, selling_price = ?, cost_price = ?, currency = ?, tax_rate = ?,
                 prices_include_tax = ?, stock_quantity = ?, reorder_level = ?, track_stock = ?,
-                duration_minutes = ?, booking_required = ?, expiry_date = ?::date, updated_at = now()
+                duration_minutes = ?, booking_required = ?, expiry_date = ?::date, status = ?, updated_at = now()
             where id = ?::uuid and workspace_id = ?::uuid
             returning *, null::text as supplier_name, null::text as category_name, null::text as image_storage_path
         """.trimIndent()
         return prepareStatement(sql).use { statement ->
             statement.bindProductRequest(access, request, categoryId, startIndex = 1)
-            statement.setString(20, productId)
-            statement.setString(21, access.workspaceId)
+            statement.setString(21, productId)
+            statement.setString(22, access.workspaceId)
             statement.executeQuery().use { result ->
                 if (result.next()) result.toProductResponse() else null
             }
@@ -3186,25 +3191,42 @@ class DashboardRepository(
         request: StockAdjustmentRequest,
     ): ProductResponse? {
         val quantityDelta = request.quantityDelta.decimalOrZero()
+        var currentSupplierId: String? = null
+        var currentSellingPrice = BigDecimal.ZERO
+        var currentCostPrice = BigDecimal.ZERO
+        var currentStatus = "active"
+        var currentExpiryDate: String? = null
         val current = prepareStatement(
             """
-            select stock_quantity
+            select stock_quantity, supplier_id::text, selling_price, cost_price, status, expiry_date::text
             from products
-            where id = ?::uuid and workspace_id = ?::uuid and status = 'active' and item_type = 'product'
+            where id = ?::uuid and workspace_id = ?::uuid and status <> 'archived' and item_type = 'product'
             for update
             """.trimIndent(),
         ).use { statement ->
             statement.setString(1, productId)
             statement.setString(2, access.workspaceId)
             statement.executeQuery().use { result ->
-                if (result.next()) result.getBigDecimal("stock_quantity") else return null
+                if (!result.next()) return null
+                currentSupplierId = result.getString("supplier_id")
+                currentSellingPrice = result.getBigDecimal("selling_price")
+                currentCostPrice = result.getBigDecimal("cost_price")
+                currentStatus = result.getString("status") ?: "active"
+                currentExpiryDate = result.getString("expiry_date")
+                result.getBigDecimal("stock_quantity")
             }
         }
         val next = current.add(quantityDelta).scaled()
+        val nextSupplierId = request.supplierId.cleanUuidOrNull() ?: currentSupplierId
+        val nextSellingPrice = request.sellingPrice?.cleanOptional()?.moneyOrZero() ?: currentSellingPrice
+        val nextCostPrice = request.costPrice?.cleanOptional()?.moneyOrZero() ?: currentCostPrice
+        val nextStatus = request.status?.cleanCatalogStatus() ?: currentStatus.cleanCatalogStatus()
+        val nextExpiryDate = request.expiryDate?.cleanIsoDateOrNull() ?: currentExpiryDate
         val updated = prepareStatement(
             """
             update products
-            set stock_quantity = ?, track_stock = true, updated_at = now()
+            set stock_quantity = ?, track_stock = true, supplier_id = ?::uuid,
+                selling_price = ?, cost_price = ?, status = ?, expiry_date = ?::date, updated_at = now()
             where id = ?::uuid and workspace_id = ?::uuid
             returning *, null::text as supplier_name, null::text as category_name,
                 (
@@ -3219,21 +3241,28 @@ class DashboardRepository(
             """.trimIndent(),
         ).use { statement ->
             statement.setBigDecimal(1, next)
-            statement.setString(2, productId)
-            statement.setString(3, access.workspaceId)
+            statement.setNullableUuid(2, nextSupplierId)
+            statement.setBigDecimal(3, nextSellingPrice)
+            statement.setBigDecimal(4, nextCostPrice)
+            statement.setString(5, nextStatus)
+            statement.setNullableString(6, nextExpiryDate)
+            statement.setString(7, productId)
+            statement.setString(8, access.workspaceId)
             statement.executeQuery().use { result ->
                 result.next()
                 result.toProductResponse()
             }
         }
-        insertStockMovement(
-            access = access,
-            productId = productId,
-            movementType = "adjustment",
-            quantityDelta = quantityDelta,
-            balanceAfter = next,
-            note = request.note?.cleanOptional(),
-        )
+        if (quantityDelta != BigDecimal.ZERO) {
+            insertStockMovement(
+                access = access,
+                productId = productId,
+                movementType = "adjustment",
+                quantityDelta = quantityDelta,
+                balanceAfter = next,
+                note = request.note?.cleanOptional(),
+            )
+        }
         return updated
     }
 
@@ -4106,6 +4135,7 @@ class DashboardRepository(
         }
         setBoolean(startIndex + 17, itemType == "appointment" || request.bookingRequired)
         setNullableString(startIndex + 18, if (itemType == "product") request.expiryDate.cleanIsoDateOrNull() else null)
+        setString(startIndex + 19, request.status.cleanCatalogStatus())
     }
 
     private fun PreparedStatement.bindPrinterRequest(request: PrinterProfileRequest, startIndex: Int) {
@@ -4797,6 +4827,15 @@ class DashboardRepository(
             "service", "services" -> "service"
             "appointment", "appointments", "booking", "booking_required" -> "appointment"
             else -> "product"
+        }
+    }
+
+    private fun String.cleanCatalogStatus(): String {
+        val normalized = trim().lowercase().replace("-", "_").filter { it.isLetterOrDigit() || it == '_' }
+        return when (normalized) {
+            "inactive", "unavailable", "paused", "hidden" -> "inactive"
+            "archived", "deleted" -> "archived"
+            else -> "active"
         }
     }
 

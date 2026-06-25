@@ -79,33 +79,38 @@ fun OrmaDashboardActionHeader(
     } else {
         Column(
             modifier = modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(7.dp),
         ) {
             OrmaBadge(text = eyebrow.uppercase(), tone = OrmaStatusTone.Info)
             Text(
                 text = title,
-                style = MaterialTheme.typography.titleMedium,
+                style = MaterialTheme.typography.titleSmall,
                 color = OrmaColors.TextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             Text(
                 text = body,
-                style = MaterialTheme.typography.bodyMedium,
+                style = MaterialTheme.typography.bodySmall,
                 color = OrmaColors.TextSecondary,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
             )
-            OrmaActionRow(
-                primaryText = if (loading) "Syncing..." else primaryAction.text,
-                onPrimary = primaryAction.onClick,
-                primaryEnabled = primaryAction.enabled && !loading,
-                secondaryText = secondaryAction?.text,
-                onSecondary = secondaryAction?.onClick,
-            )
-            if (tertiaryAction != null) {
-                OrmaSecondaryButton(
-                    text = tertiaryAction.text,
-                    onClick = tertiaryAction.onClick,
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = tertiaryAction.enabled,
-                )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                listOfNotNull(
+                    primaryAction.copy(
+                        text = if (loading) "Syncing..." else primaryAction.text,
+                        enabled = primaryAction.enabled && !loading,
+                    ),
+                    secondaryAction,
+                    tertiaryAction,
+                ).forEach { action ->
+                    OrmaDashboardHeaderButton(action = action)
+                }
             }
         }
     }

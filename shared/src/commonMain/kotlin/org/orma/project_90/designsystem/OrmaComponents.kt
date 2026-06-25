@@ -242,6 +242,8 @@ fun OrmaTextButton(
             text = text,
             style = MaterialTheme.typography.labelLarge,
             color = if (enabled) OrmaColors.TextPrimary else OrmaColors.TextDisabled,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
     }
 }

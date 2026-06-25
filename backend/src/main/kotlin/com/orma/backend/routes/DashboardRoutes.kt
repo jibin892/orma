@@ -326,6 +326,10 @@ fun Route.dashboardRoutes(
             call.respondValidation("stock_quantity_required", "Enter the stock adjustment quantity.")
             return@post
         }
+        if (!request.expiryDate.isNullOrBlank() && !request.expiryDate.isValidIsoDateOnly()) {
+            call.respondValidation("product_expiry_invalid", "Choose a valid expiry date.")
+            return@post
+        }
         call.respondWorkspaceResult(repository.adjustStock(firebaseUser, productId, request))
     }
 

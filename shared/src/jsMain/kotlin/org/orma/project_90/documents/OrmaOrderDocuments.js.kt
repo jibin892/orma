@@ -66,6 +66,19 @@ private fun downloadPdfFromBrowser(fileName: String, pdfBase64: String): Boolean
             }
             const safeName = (fileName && String(fileName).trim()) || 'orma-invoice.pdf';
             const blob = new Blob([bytes], { type: 'application/pdf' });
+            const userAgent = (typeof navigator !== 'undefined' && navigator.userAgent) || '';
+            const isMobile = /Android|iPhone|iPad|iPod/i.test(userAgent);
+            if (isMobile && typeof navigator !== 'undefined' && typeof File !== 'undefined') {
+              const file = new File([blob], safeName, { type: 'application/pdf' });
+              if (
+                typeof navigator.canShare === 'function' &&
+                typeof navigator.share === 'function' &&
+                navigator.canShare({ files: [file] })
+              ) {
+                navigator.share({ files: [file], title: safeName }).catch(function () {});
+                return true;
+              }
+            }
             const url = URL.createObjectURL(blob);
             const anchor = document.createElement('a');
             anchor.href = url;
@@ -73,10 +86,15 @@ private fun downloadPdfFromBrowser(fileName: String, pdfBase64: String): Boolean
             anchor.style.display = 'none';
             document.body.appendChild(anchor);
             anchor.click();
+            if (/iPhone|iPad|iPod/i.test(userAgent) && typeof window !== 'undefined' && typeof window.open === 'function') {
+              window.setTimeout(function () {
+                window.open(url, '_blank');
+              }, 80);
+            }
             window.setTimeout(function () {
               URL.revokeObjectURL(url);
               if (anchor.parentNode) anchor.parentNode.removeChild(anchor);
-            }, 0);
+            }, isMobile ? 60000 : 0);
             return true;
           } catch (error) {
             return false;
