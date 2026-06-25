@@ -78,7 +78,7 @@ data class DashboardQueryFilters(
     val dateFrom: String? = null,
     val dateTo: String? = null,
     val page: Int = 1,
-    val limit: Int = 80,
+    val limit: Int = 50,
     val lowStockOnly: Boolean = false,
     val supplierId: String? = null,
     val barcode: String? = null,
@@ -1170,6 +1170,12 @@ class DashboardRepository(
                     return@withContext null
                 }
                 access.requirePermission(PermissionManageStock, "update stock and availability")
+                if (request.status?.let { !it.isValidCatalogStatusInput() } == true) {
+                    throw DashboardOrderValidationException(
+                        code = "product_status_invalid",
+                        publicMessage = "Choose active, hidden, unavailable, inactive, or out of stock.",
+                    )
+                }
                 val product = connection.adjustProductStock(access, productId, request)
                 if (product != null) {
                     val quantityChanged = request.quantityDelta.decimalOrZero() != BigDecimal.ZERO
@@ -4858,7 +4864,7 @@ class DashboardRepository(
     }
 
     private fun String.cleanCatalogStatus(): String {
-        val normalized = trim().lowercase().replace("-", "_").filter { it.isLetterOrDigit() || it == '_' }
+        val normalized = normalizedCatalogStatusInput()
         return when (normalized) {
             "inactive", "disabled", "paused", "off" -> "inactive"
             "hidden", "hide", "catalog_hidden", "hidden_from_catalog", "off_catalog", "turn_off_catalog", "turnoffcatalog" -> "hidden"
@@ -4868,6 +4874,12 @@ class DashboardRepository(
             else -> "active"
         }
     }
+
+    private fun String.isValidCatalogStatusInput(): Boolean =
+        normalizedCatalogStatusInput().let { it.isBlank() || it in AllowedCatalogStatusInputs }
+
+    private fun String.normalizedCatalogStatusInput(): String =
+        trim().lowercase().replace("-", "_").filter { it.isLetterOrDigit() || it == '_' }
 
     private fun String.cleanOrderType(): String {
         val normalized = trim().lowercase().replace("-", "_").filter { it.isLetterOrDigit() || it == '_' }
@@ -5270,12 +5282,21 @@ class DashboardRepository(
         if (expiryDate.cleanOptional() != null && expiryDate.cleanIsoDateOrNull() == null) {
             add("Expiry date must use YYYY-MM-DD.")
         }
+        if (!status.isValidCatalogStatusInput()) {
+            add("Status must be active, hidden, unavailable, inactive, or out_of_stock.")
+        }
         if (itemType.cleanItemType() == "appointment" && (durationMinutes ?: 0) <= 0) {
             add("Appointment items need a duration in minutes.")
         }
     }
 
     private fun ProductRequest.validateCatalogItemForSave() {
+        if (!status.isValidCatalogStatusInput()) {
+            throw DashboardOrderValidationException(
+                code = "product_status_invalid",
+                publicMessage = "Choose active, hidden, unavailable, inactive, or out of stock.",
+            )
+        }
         if (itemType.cleanItemType() == "appointment" && (durationMinutes ?: 0) <= 0) {
             throw DashboardOrderValidationException(
                 code = "appointment_duration_required",
@@ -5426,6 +5447,33 @@ class DashboardRepository(
         val FullPaymentStatuses = setOf("paid", "completed")
         val AllowedItemTypes = setOf("product", "service", "appointment")
         val AllowedOrderTypes = setOf("sale", "service", "appointment")
+        val AllowedCatalogStatusInputs = setOf(
+            "active",
+            "inactive",
+            "disabled",
+            "paused",
+            "off",
+            "hidden",
+            "hide",
+            "catalog_hidden",
+            "hidden_from_catalog",
+            "off_catalog",
+            "turn_off_catalog",
+            "turnoffcatalog",
+            "unavailable",
+            "not_available",
+            "notavailable",
+            "temporarily_unavailable",
+            "service_unavailable",
+            "appointment_unavailable",
+            "out_of_stock",
+            "outofstock",
+            "out_stock",
+            "no_stock",
+            "stock_out",
+            "sold_out",
+            "soldout",
+        )
         const val PermissionReadOnly = "read_only"
         const val PermissionCreateSale = "create_sale"
         const val PermissionEditSale = "edit_sale"

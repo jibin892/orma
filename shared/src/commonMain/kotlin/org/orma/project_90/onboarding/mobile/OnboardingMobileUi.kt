@@ -11,6 +11,7 @@ import org.orma.project_90.onboarding.OnboardingActions
 import org.orma.project_90.onboarding.OnboardingStageContent
 import org.orma.project_90.onboarding.OnboardingStep
 import org.orma.project_90.onboarding.OnboardingUiState
+import org.orma.project_90.navigation.OrmaBackHandler
 
 @Composable
 internal fun OrmaOnboardingMobileUi(
@@ -18,6 +19,10 @@ internal fun OrmaOnboardingMobileUi(
     actions: OnboardingActions,
     modifier: Modifier = Modifier,
 ) {
+    OrmaBackHandler(
+        enabled = state.step != OnboardingStep.Dashboard,
+        onBack = actions.onBack,
+    )
     if (state.step == OnboardingStep.Dashboard) {
         OnboardingStageContent(
             state = state,

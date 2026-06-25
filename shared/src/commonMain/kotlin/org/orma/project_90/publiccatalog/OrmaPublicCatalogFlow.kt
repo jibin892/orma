@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -656,10 +657,10 @@ private fun PublicCatalogCheckoutSheet(
             } else {
                 Modifier
                     .align(Alignment.CenterEnd)
-                    .fillMaxWidth(0.44f)
-                    .widthIn(min = 420.dp, max = 540.dp)
-                    .padding(24.dp)
-                    .heightIn(max = maxHeight - 48.dp)
+                    .fillMaxHeight()
+                    .fillMaxWidth(0.38f)
+                    .widthIn(min = 430.dp, max = 560.dp)
+                    .padding(start = 18.dp, top = 18.dp, end = 18.dp, bottom = 18.dp)
             }
             Surface(
                 modifier = sheetModifier,
@@ -1726,6 +1727,7 @@ private fun PublicCatalogCheckout(
     val itemCount = selectedItems.sumOf { it.quantity }
     val currency = catalog?.workspace?.currency ?: selectedItems.firstOrNull()?.product?.currency.orEmpty()
     val estimatedTotal = if (itemCount == 0) "--" else "${currency.ifBlank { "" }} ${money(total)}".trim()
+    val offerSavings = selectedItems.publicCatalogOfferSavingsTotal()
     val hasUpi = catalog?.paymentMethods?.any { it.type == "upi" && !it.upiId.isNullOrBlank() } == true
     val hasWhatsApp = catalog?.workspace?.whatsappDisplayNumber.toPublicCatalogWhatsAppPhone() != null
     Column(
@@ -1745,6 +1747,8 @@ private fun PublicCatalogCheckout(
                 body = checkoutPrompt,
                 itemCount = itemCount,
                 total = estimatedTotal,
+                offerSavings = offerSavings,
+                currency = currency,
                 ready = submitEnabled,
                 submitting = submitting,
             )
@@ -1752,6 +1756,7 @@ private fun PublicCatalogCheckout(
                 catalog = catalog,
                 selectedItems = selectedItems,
                 total = total,
+                offerSavings = offerSavings,
                 onClearSelection = onClearSelection,
             )
             if (selectedItems.isEmpty()) {
@@ -1864,6 +1869,8 @@ private fun PublicCatalogCheckoutHeader(
     body: String,
     itemCount: Int,
     total: String,
+    offerSavings: Double,
+    currency: String,
     ready: Boolean,
     submitting: Boolean,
 ) {
@@ -1883,26 +1890,35 @@ private fun PublicCatalogCheckoutHeader(
     ) {
         BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
             val stacked = maxWidth < 430.dp
+            val metrics = buildList {
+                add("Items" to itemCount.toString())
+                add("Total" to total)
+                if (offerSavings > 0.0) {
+                    add("Saved" to "${currency.ifBlank { "" }} ${money(offerSavings)}".trim())
+                }
+            }
             if (stacked) {
                 Column(
                     modifier = Modifier.padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
                     PublicCatalogCheckoutTitle(title = title, body = body, status = status)
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        PublicCatalogCheckoutMetric(
-                            label = "Items",
-                            value = itemCount.toString(),
-                            modifier = Modifier.weight(1f),
-                        )
-                        PublicCatalogCheckoutMetric(
-                            label = "Total",
-                            value = total,
-                            modifier = Modifier.weight(1.2f),
-                        )
+                    metrics.chunked(2).forEach { rowMetrics ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            rowMetrics.forEach { (label, value) ->
+                                PublicCatalogCheckoutMetric(
+                                    label = label,
+                                    value = value,
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                            if (rowMetrics.size == 1) {
+                                Spacer(modifier = Modifier.weight(1f))
+                            }
+                        }
                     }
                 }
             } else {
@@ -1921,8 +1937,9 @@ private fun PublicCatalogCheckoutHeader(
                         modifier = Modifier.widthIn(min = 150.dp, max = 190.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        PublicCatalogCheckoutMetric(label = "Items", value = itemCount.toString())
-                        PublicCatalogCheckoutMetric(label = "Total", value = total)
+                        metrics.forEach { (label, value) ->
+                            PublicCatalogCheckoutMetric(label = label, value = value)
+                        }
                     }
                 }
             }
@@ -2517,6 +2534,7 @@ private fun PublicCatalogSelectionSummary(
     catalog: OrmaPublicCatalog?,
     selectedItems: List<PublicCatalogSelection>,
     total: Double,
+    offerSavings: Double,
     onClearSelection: () -> Unit,
 ) {
     val itemCount = selectedItems.sumOf { it.quantity }
@@ -2590,6 +2608,13 @@ private fun PublicCatalogSelectionSummary(
                         selection = selection,
                     )
                 }
+                if (offerSavings > 0.0) {
+                    PublicCatalogAppliedOffersCard(
+                        selectedItems = selectedItems,
+                        currency = currency,
+                        offerSavings = offerSavings,
+                    )
+                }
                 OrmaLightButton(
                     text = "Clear selection",
                     onClick = onClearSelection,
@@ -2621,7 +2646,7 @@ private fun PublicCatalogSelectionSummary(
                                 overflow = TextOverflow.Ellipsis,
                             )
                             Text(
-                                text = "Business confirms total.",
+                                text = if (offerSavings > 0.0) "Offer savings included." else "Business confirms total.",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = OrmaColors.ScreenBackground.copy(alpha = 0.52f),
                                 maxLines = 1,
@@ -2638,6 +2663,102 @@ private fun PublicCatalogSelectionSummary(
                             overflow = TextOverflow.Ellipsis,
                         )
                     }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PublicCatalogAppliedOffersCard(
+    selectedItems: List<PublicCatalogSelection>,
+    currency: String,
+    offerSavings: Double,
+) {
+    val appliedOfferLines = selectedItems.mapNotNull { selection ->
+        val offer = selection.product.offer ?: return@mapNotNull null
+        val savings = selection.product.publicCatalogOfferSavings() * selection.quantity
+        if (savings <= 0.0) return@mapNotNull null
+        Triple(offer.name.ifBlank { "Offer" }, selection.product.name.ifBlank { "Item" }, savings)
+    }
+    if (appliedOfferLines.isEmpty()) return
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = OrmaShapes.SmallCard,
+        color = OrmaColors.Success.copy(alpha = 0.07f),
+        border = BorderStroke(0.8.dp, OrmaColors.Success.copy(alpha = 0.22f)),
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Text(
+                        text = "Offers applied",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = OrmaColors.TextPrimary,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = "Discounts are included in checkout total.",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = OrmaColors.TextSecondary,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                OrmaBadge(
+                    text = "${currency.ifBlank { "" }} ${money(offerSavings)} saved".trim().uppercase(),
+                    tone = OrmaStatusTone.Success,
+                )
+            }
+            appliedOfferLines.forEach { (offerName, productName, savings) ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(1.dp),
+                    ) {
+                        Text(
+                            text = offerName,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = OrmaColors.TextPrimary,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            text = productName,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = OrmaColors.TextSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Text(
+                        text = "${currency.ifBlank { "" }} ${money(savings)}".trim(),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = OrmaColors.Success,
+                        fontWeight = FontWeight.SemiBold,
+                        textAlign = TextAlign.End,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
             }
         }
@@ -2968,6 +3089,9 @@ private fun List<PublicCatalogSelection>.catalogOrderFlow(): String =
         isNotEmpty() && all { it.product.itemType.publicCatalogNormalizedItemType() == "service" } -> "service"
         else -> "sale"
     }
+
+private fun List<PublicCatalogSelection>.publicCatalogOfferSavingsTotal(): Double =
+    sumOf { selection -> selection.product.publicCatalogOfferSavings() * selection.quantity }
 
 private fun String.publicCatalogNormalizedItemType(): String =
     when (trim().lowercase()) {

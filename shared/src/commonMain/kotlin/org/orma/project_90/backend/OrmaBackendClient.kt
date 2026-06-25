@@ -609,12 +609,12 @@ data class OrmaDashboardFilters(
     val supplierId: String = "",
     val barcode: String = "",
     val scheduledOnly: Boolean = false,
-    val limit: Int = 80,
+    val limit: Int = 50,
 )
 
 data class OrmaPagination(
     val page: Int = 1,
-    val pageSize: Int = 80,
+    val pageSize: Int = 50,
     val totalItems: Int = 0,
     val totalPages: Int = 0,
     val hasPrevious: Boolean = false,
@@ -1980,7 +1980,7 @@ private fun <T> String.toPagedList(
 private fun String.toPagination(defaultCount: Int): OrmaPagination =
     OrmaPagination(
         page = (jsonInt("page") ?: 1).coerceAtLeast(1),
-        pageSize = (jsonInt("pageSize") ?: 80).coerceIn(1, 200),
+        pageSize = (jsonInt("pageSize") ?: 50).coerceIn(1, 200),
         totalItems = (jsonInt("totalItems") ?: defaultCount).coerceAtLeast(0),
         totalPages = (jsonInt("totalPages") ?: 0).coerceAtLeast(0),
         hasPrevious = jsonBoolean("hasPrevious") ?: false,

@@ -286,7 +286,7 @@ data class DashboardNotificationPreviewResponse(
 @Serializable
 data class PaginationResponse(
     val page: Int = 1,
-    val pageSize: Int = 80,
+    val pageSize: Int = 50,
     val totalItems: Int = 0,
     val totalPages: Int = 0,
     val hasPrevious: Boolean = false,

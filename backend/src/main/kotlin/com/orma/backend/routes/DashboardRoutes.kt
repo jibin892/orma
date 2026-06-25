@@ -552,7 +552,7 @@ private fun ApplicationCall.dashboardFilters(): DashboardQueryFilters {
         dateFrom = query["dateFrom"],
         dateTo = query["dateTo"],
         page = query["page"]?.toIntOrNull() ?: 1,
-        limit = query["limit"]?.toIntOrNull() ?: 80,
+        limit = query["limit"]?.toIntOrNull() ?: 50,
         lowStockOnly = query["lowStock"].toBooleanQuery(),
         supplierId = query["supplierId"],
         barcode = query["barcode"],
