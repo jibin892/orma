@@ -3,6 +3,7 @@ package com.orma.backend.db
 import com.orma.backend.auth.VerifiedFirebaseUser
 import com.orma.backend.models.BusinessSetupRequest
 import com.orma.backend.models.TeamInviteRequest
+import com.orma.backend.models.TeamMemberAccessRequest
 import java.sql.Connection
 import java.sql.PreparedStatement
 import java.sql.ResultSet
@@ -46,6 +47,7 @@ data class TeamMemberRecord(
     val email: String?,
     val phoneNumber: String?,
     val role: String,
+    val permissions: List<String>,
     val status: String,
     val joinedAt: String,
 )
@@ -57,6 +59,7 @@ data class TeamInviteRecord(
     val inviteeEmail: String?,
     val inviteePhoneNumber: String?,
     val role: String,
+    val permissions: List<String>,
     val status: String,
     val createdAt: String,
     val expiresAt: String?,
@@ -129,9 +132,9 @@ class OnboardingRepository(
                     emailFallback = null,
                     phoneNumberFallback = null,
                     displayNameFallback = request.ownerName,
-                )
-                val workspace = connection.upsertOwnerWorkspace(user.id, request)
-                connection.ensureOwnerMembership(workspace.id, user.id)
+            )
+            val workspace = connection.upsertOwnerWorkspace(user.id, request)
+            connection.ensureOwnerMembership(workspace.id, user.id)
                 val updatedUser = connection.markUserOwnerComplete(user.id, request.ownerName)
                 connection.commit()
                 updatedUser.toSession(workspace)
@@ -293,6 +296,57 @@ class OnboardingRepository(
         }
     }
 
+    suspend fun updateTeamMemberAccess(
+        firebaseUser: VerifiedFirebaseUser,
+        memberId: String,
+        request: TeamMemberAccessRequest,
+    ): TeamOverviewRecord? = withContext(Dispatchers.IO) {
+        dataSource.connection.use { connection ->
+            connection.autoCommit = false
+            try {
+                val user = connection.upsertUser(
+                    firebaseUser = firebaseUser,
+                    providerFallback = null,
+                    emailFallback = null,
+                    phoneNumberFallback = null,
+                    displayNameFallback = null,
+                )
+                val workspace = connection.requireOwnerWorkspace(user.id)
+                val member = connection.findWorkspaceMember(workspace.id, memberId)
+                    ?: throw TeamAccessException("team_member_not_found", "This team member is no longer active.")
+                val nextRole = request.role.normalizedTeamRole()
+                if (member.role == RoleBusinessOwner && nextRole != RoleBusinessOwner && connection.countActiveOwners(workspace.id) <= 1) {
+                    throw TeamAccessException("team_last_owner_blocked", "Keep at least one active owner on this workspace.")
+                }
+                val permissions = request.permissions.normalizedTeamPermissions(nextRole)
+                val updated = connection.updateWorkspaceMemberAccess(
+                    workspaceId = workspace.id,
+                    memberId = member.id,
+                    role = nextRole,
+                    permissions = permissions,
+                )
+                connection.insertTeamActivity(
+                    workspaceId = workspace.id,
+                    actorUserId = user.id,
+                    activityType = "team_member_access_updated",
+                    entityType = "team_member",
+                    entityId = updated.id,
+                    entityLabel = updated.displayName ?: updated.email ?: updated.phoneNumber ?: "Team member",
+                    title = "Team access updated",
+                    body = "${updated.displayName ?: updated.email ?: updated.phoneNumber ?: "Team member"} now has ${teamRoleLabel(updated.role)} access.",
+                    tone = "success",
+                )
+                connection.commit()
+                connection.teamOverview(workspace, canInviteMembers = true)
+            } catch (error: Throwable) {
+                connection.rollback()
+                throw error
+            } finally {
+                connection.autoCommit = true
+            }
+        }
+    }
+
     suspend fun updateNotificationPreference(
         firebaseUser: VerifiedFirebaseUser,
         enabled: Boolean,
@@ -426,7 +480,9 @@ class OnboardingRepository(
             statement.setString(6, RoleBusinessOwner)
             statement.executeQuery().use { result ->
                 result.next()
-                result.toUserRecord()
+                val user = result.toUserRecord()
+                acceptMatchingTeamInvite(user)
+                user
             }
         }
     }
@@ -593,16 +649,18 @@ class OnboardingRepository(
 
     private fun Connection.ensureOwnerMembership(workspaceId: String, userId: String) {
         val sql = """
-            insert into workspace_members (workspace_id, user_id, role, status, updated_at)
-            values (?::uuid, ?::uuid, 'business_owner', 'active', now())
+            insert into workspace_members (workspace_id, user_id, role, permissions, status, updated_at)
+            values (?::uuid, ?::uuid, 'business_owner', ?, 'active', now())
             on conflict (workspace_id, user_id) do update set
                 role = 'business_owner',
+                permissions = excluded.permissions,
                 status = 'active',
                 updated_at = now()
         """.trimIndent()
         prepareStatement(sql).use { statement ->
             statement.setString(1, workspaceId)
             statement.setString(2, userId)
+            statement.setArray(3, createArrayOf("text", RoleBusinessOwner.defaultTeamPermissions().toTypedArray()))
             statement.executeUpdate()
         }
     }
@@ -619,6 +677,7 @@ class OnboardingRepository(
                     when bw.owner_user_id = wm.user_id then 'business_owner'
                     else wm.role
                 end as role,
+                wm.permissions,
                 wm.status,
                 wm.created_at::text as joined_at
             from workspace_members wm
@@ -650,6 +709,7 @@ class OnboardingRepository(
                 ti.invitee_email,
                 ti.invitee_phone_number,
                 ti.role,
+                ti.permissions,
                 ti.status,
                 ti.created_at::text as created_at,
                 ti.expires_at::text as expires_at,
@@ -706,6 +766,8 @@ class OnboardingRepository(
         val cleanName = request.inviteeName.cleanOptional()?.take(120)
         val cleanEmail = request.inviteeEmail.cleanOptional()?.lowercase()?.take(160)
         val cleanPhone = request.inviteePhoneNumber.cleanOptional()?.take(40)
+        val role = request.role.normalizedTeamRole()
+        val permissions = request.permissions.normalizedTeamPermissions(role)
         if (cleanEmail == null && cleanPhone == null) {
             throw TeamAccessException(
                 code = "team_invite_contact_required",
@@ -718,6 +780,7 @@ class OnboardingRepository(
                 workspace_id,
                 created_by_user_id,
                 role,
+                permissions,
                 status,
                 expires_at,
                 invitee_name,
@@ -725,7 +788,7 @@ class OnboardingRepository(
                 invitee_phone_number,
                 updated_at
             )
-            values (?, ?::uuid, ?::uuid, ?, 'active', now() + interval '14 days', ?, ?, ?, now())
+            values (?, ?::uuid, ?::uuid, ?, ?, 'active', now() + interval '14 days', ?, ?, ?, now())
             returning
                 id::text as invite_id,
                 code,
@@ -733,6 +796,7 @@ class OnboardingRepository(
                 invitee_email,
                 invitee_phone_number,
                 role,
+                permissions,
                 status,
                 created_at::text as created_at,
                 expires_at::text as expires_at,
@@ -743,10 +807,11 @@ class OnboardingRepository(
             statement.setString(1, generateTeamInviteCode())
             statement.setString(2, workspaceId)
             statement.setString(3, userId)
-            statement.setString(4, request.role.normalizedTeamRole())
-            statement.setNullableString(5, cleanName)
-            statement.setNullableString(6, cleanEmail)
-            statement.setNullableString(7, cleanPhone)
+            statement.setString(4, role)
+            statement.setArray(5, createArrayOf("text", permissions.toTypedArray()))
+            statement.setNullableString(6, cleanName)
+            statement.setNullableString(7, cleanEmail)
+            statement.setNullableString(8, cleanPhone)
             statement.executeQuery().use { result ->
                 result.next()
                 result.toTeamInviteRecord()
@@ -771,6 +836,7 @@ class OnboardingRepository(
                 invitee_email,
                 invitee_phone_number,
                 role,
+                permissions,
                 status,
                 created_at::text as created_at,
                 expires_at::text as expires_at,
@@ -798,6 +864,7 @@ class OnboardingRepository(
                 au.email,
                 au.phone_number,
                 wm.role,
+                wm.permissions,
                 wm.status,
                 wm.created_at::text as joined_at
             from workspace_members wm
@@ -847,6 +914,91 @@ class OnboardingRepository(
         prepareStatement(sql).use { statement ->
             statement.setString(1, workspaceId)
             statement.setString(2, memberId.trim())
+            statement.executeUpdate()
+        }
+    }
+
+    private fun Connection.updateWorkspaceMemberAccess(
+        workspaceId: String,
+        memberId: String,
+        role: String,
+        permissions: List<String>,
+    ): TeamMemberRecord {
+        val sql = """
+            update workspace_members
+            set role = ?, permissions = ?, updated_at = now()
+            where workspace_id = ?::uuid
+              and id::text = ?
+              and status = 'active'
+            returning
+                id::text as member_id,
+                user_id::text as user_id,
+                null::text as display_name,
+                null::text as email,
+                null::text as phone_number,
+                role,
+                permissions,
+                status,
+                created_at::text as joined_at
+        """.trimIndent()
+        val updated = prepareStatement(sql).use { statement ->
+            statement.setString(1, role)
+            statement.setArray(2, createArrayOf("text", permissions.toTypedArray()))
+            statement.setString(3, workspaceId)
+            statement.setString(4, memberId.trim())
+            statement.executeQuery().use { result ->
+                if (!result.next()) {
+                    throw TeamAccessException("team_member_not_found", "This team member is no longer active.")
+                }
+                result.toTeamMemberRecord()
+            }
+        }
+        return findWorkspaceMember(workspaceId, updated.id) ?: updated
+    }
+
+    private fun Connection.acceptMatchingTeamInvite(user: AppUserRecord) {
+        val email = user.email.cleanOptional()?.lowercase()
+        val phoneDigits = user.phoneNumber.cleanOptional()?.filter { it.isDigit() }
+        if (email == null && phoneDigits.isNullOrBlank()) return
+        val sql = """
+            with matched_invite as (
+                select
+                    id,
+                    workspace_id,
+                    role,
+                    permissions
+                from team_invites
+                where status in ('active', 'pending')
+                  and (expires_at is null or expires_at > now())
+                  and (
+                    (?::text is not null and lower(invitee_email) = ?)
+                    or (?::text is not null and regexp_replace(coalesce(invitee_phone_number, ''), '[^0-9]', '', 'g') = ?)
+                  )
+                order by created_at desc
+                limit 1
+            ),
+            upserted_member as (
+                insert into workspace_members (workspace_id, user_id, role, permissions, status, updated_at)
+                select workspace_id, ?::uuid, role, permissions, 'active', now()
+                from matched_invite
+                on conflict (workspace_id, user_id) do update set
+                    role = excluded.role,
+                    permissions = excluded.permissions,
+                    status = 'active',
+                    updated_at = now()
+                returning workspace_id
+            )
+            update team_invites
+            set status = 'accepted', updated_at = now()
+            where id in (select id from matched_invite)
+              and exists (select 1 from upserted_member)
+        """.trimIndent()
+        prepareStatement(sql).use { statement ->
+            statement.setNullableString(1, email)
+            statement.setNullableString(2, email)
+            statement.setNullableString(3, phoneDigits)
+            statement.setNullableString(4, phoneDigits)
+            statement.setString(5, user.id)
             statement.executeUpdate()
         }
     }
@@ -1248,31 +1400,37 @@ class OnboardingRepository(
         )
 
     private fun ResultSet.toTeamMemberRecord(): TeamMemberRecord =
-        TeamMemberRecord(
-            id = getString("member_id"),
-            userId = getString("user_id"),
-            displayName = getString("display_name"),
-            email = getString("email"),
-            phoneNumber = getString("phone_number"),
-            role = getString("role").normalizedTeamRole(),
-            status = getString("status"),
-            joinedAt = getString("joined_at"),
-        )
+        getString("role").normalizedTeamRole().let { normalizedRole ->
+            TeamMemberRecord(
+                id = getString("member_id"),
+                userId = getString("user_id"),
+                displayName = getString("display_name"),
+                email = getString("email"),
+                phoneNumber = getString("phone_number"),
+                role = normalizedRole,
+                permissions = getStringArray("permissions").normalizedTeamPermissions(normalizedRole),
+                status = getString("status"),
+                joinedAt = getString("joined_at"),
+            )
+        }
 
     private fun ResultSet.toTeamInviteRecord(): TeamInviteRecord =
-        TeamInviteRecord(
-            id = getString("invite_id"),
-            code = getString("code"),
-            inviteeName = getString("invitee_name"),
-            inviteeEmail = getString("invitee_email"),
-            inviteePhoneNumber = getString("invitee_phone_number"),
-            role = getString("role").normalizedTeamRole(),
-            status = getString("status"),
-            createdAt = getString("created_at"),
-            expiresAt = getString("expires_at"),
-            createdByDisplayName = getString("created_by_display_name"),
-            createdByEmail = getString("created_by_email"),
-        )
+        getString("role").normalizedTeamRole().let { normalizedRole ->
+            TeamInviteRecord(
+                id = getString("invite_id"),
+                code = getString("code"),
+                inviteeName = getString("invitee_name"),
+                inviteeEmail = getString("invitee_email"),
+                inviteePhoneNumber = getString("invitee_phone_number"),
+                role = normalizedRole,
+                permissions = getStringArray("permissions").normalizedTeamPermissions(normalizedRole),
+                status = getString("status"),
+                createdAt = getString("created_at"),
+                expiresAt = getString("expires_at"),
+                createdByDisplayName = getString("created_by_display_name"),
+                createdByEmail = getString("created_by_email"),
+            )
+        }
 
     private fun ResultSet.toProductImageRecord(): ProductImageRecord =
         ProductImageRecord(
@@ -1333,6 +1491,15 @@ class OnboardingRepository(
     private fun String?.cleanOptional(): String? =
         this?.trim()?.takeIf { it.isNotBlank() }
 
+    private fun ResultSet.getStringArray(column: String): List<String> =
+        runCatching {
+            val value = getArray(column)?.array ?: return@runCatching emptyList()
+            when (value) {
+                is Array<*> -> value.mapNotNull { it?.toString() }
+                else -> emptyList()
+            }
+        }.getOrDefault(emptyList())
+
     private fun String.cleanActivityType(): String =
         trim()
             .lowercase()
@@ -1358,6 +1525,7 @@ class OnboardingRepository(
         "accountant" -> "Accountant"
         "inventory_manager" -> "Inventory"
         "sales_staff" -> "Sales"
+        "read_only" -> "Read only"
         else -> "Staff"
     }
 
@@ -1370,6 +1538,57 @@ class OnboardingRepository(
             .filter { it.isLetterOrDigit() || it == '_' }
         return if (normalized in AllowedTeamRoles) normalized else RoleTeamMember
     }
+
+    private fun List<String>.normalizedTeamPermissions(role: String): List<String> {
+        val cleanPermissions = map { it.normalizedPermissionKey() }
+            .filter { it in AllowedTeamPermissions }
+            .distinct()
+        return cleanPermissions.ifEmpty { role.defaultTeamPermissions() }
+    }
+
+    private fun String.defaultTeamPermissions(): List<String> = when (normalizedTeamRole()) {
+        RoleBusinessOwner -> AllowedTeamPermissions.toList()
+        "manager" -> listOf(
+            PermissionCreateSale,
+            PermissionEditSale,
+            PermissionChangeBookingStatus,
+            PermissionCreateProduct,
+            PermissionCreateService,
+            PermissionCreateAppointment,
+            PermissionCreateOffer,
+            PermissionManageStock,
+            PermissionManageCustomers,
+            PermissionDownloadInvoice,
+        )
+        "cashier" -> listOf(
+            PermissionCreateSale,
+            PermissionChangeBookingStatus,
+            PermissionDownloadInvoice,
+        )
+        "accountant" -> listOf(PermissionDownloadInvoice)
+        "inventory_manager" -> listOf(
+            PermissionCreateProduct,
+            PermissionCreateService,
+            PermissionCreateAppointment,
+            PermissionCreateOffer,
+            PermissionManageStock,
+        )
+        "sales_staff" -> listOf(
+            PermissionCreateSale,
+            PermissionEditSale,
+            PermissionChangeBookingStatus,
+            PermissionManageCustomers,
+            PermissionDownloadInvoice,
+        )
+        "read_only" -> listOf(PermissionReadOnly)
+        else -> listOf(PermissionReadOnly)
+    }
+
+    private fun String.normalizedPermissionKey(): String =
+        trim()
+            .lowercase()
+            .replace("-", "_")
+            .filter { it.isLetterOrDigit() || it == '_' }
 
     private fun String.cleanBusinessMode(industry: String): String {
         val normalized = trim().lowercase().replace("-", "_").filter { it.isLetterOrDigit() || it == '_' }
@@ -1385,13 +1604,39 @@ class OnboardingRepository(
     private companion object {
         const val RoleBusinessOwner = "business_owner"
         const val RoleTeamMember = "team_member"
+        const val PermissionReadOnly = "read_only"
+        const val PermissionCreateSale = "create_sale"
+        const val PermissionEditSale = "edit_sale"
+        const val PermissionChangeBookingStatus = "change_booking_status"
+        const val PermissionCreateProduct = "create_product"
+        const val PermissionCreateService = "create_service"
+        const val PermissionCreateAppointment = "create_appointment"
+        const val PermissionCreateOffer = "create_offer"
+        const val PermissionManageStock = "manage_stock"
+        const val PermissionManageCustomers = "manage_customers"
+        const val PermissionDownloadInvoice = "download_invoice"
         val AllowedTeamRoles = setOf(
+            RoleBusinessOwner,
             RoleTeamMember,
             "manager",
             "cashier",
             "accountant",
             "inventory_manager",
             "sales_staff",
+            "read_only",
+        )
+        val AllowedTeamPermissions = setOf(
+            PermissionCreateSale,
+            PermissionEditSale,
+            PermissionChangeBookingStatus,
+            PermissionCreateProduct,
+            PermissionCreateService,
+            PermissionCreateAppointment,
+            PermissionCreateOffer,
+            PermissionManageStock,
+            PermissionManageCustomers,
+            PermissionDownloadInvoice,
+            PermissionReadOnly,
         )
         val AllowedBusinessModes = setOf("product_selling", "service_selling", "appointment", "mixed")
     }

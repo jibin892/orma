@@ -30,6 +30,7 @@ import org.orma.project_90.backend.OrmaProductImportResult
 import org.orma.project_90.backend.OrmaStockAdjustmentDraft
 import org.orma.project_90.backend.OrmaSupplierDraft
 import org.orma.project_90.backend.OrmaTeamInviteDraft
+import org.orma.project_90.backend.OrmaTeamMemberAccessDraft
 import org.orma.project_90.backend.OrmaTeamOverview
 import org.orma.project_90.backend.OrmaWorkspacePaymentMethodDraft
 import org.orma.project_90.backend.createOrmaBackendClient
@@ -1348,6 +1349,19 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
         }
     }
 
+    fun updateDashboardTeamMemberAccess(memberId: String, draft: OrmaTeamMemberAccessDraft) {
+        val snapshot = state
+        if (snapshot.dashboard.actionLoading || memberId.isBlank()) return
+        markDashboardActionLoading()
+        scope.launch {
+            val idToken = freshDashboardTokenOrError(snapshot) ?: return@launch
+            when (val result = backendClient.updateTeamMemberAccess(idToken, memberId, draft)) {
+                is OrmaBackendResult.Success -> applyTeamOverview(result.value, "Team access updated.")
+                is OrmaBackendResult.Failure -> applyDashboardFailure(result.title, result.message, result.code)
+            }
+        }
+    }
+
     fun removeDashboardTeamMember(memberId: String) {
         val snapshot = state
         if (snapshot.dashboard.actionLoading || memberId.isBlank()) return
@@ -2100,6 +2114,7 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
             updateDashboardOrderStatus(orderId, status, paidTotal)
         },
         onCreateTeamInvite = ::createDashboardTeamInvite,
+        onUpdateTeamMemberAccess = ::updateDashboardTeamMemberAccess,
         onRevokeTeamInvite = ::revokeDashboardTeamInvite,
         onRemoveTeamMember = ::removeDashboardTeamMember,
         onInvoiceGstinLookupRequest = ::lookupInvoiceGstin,

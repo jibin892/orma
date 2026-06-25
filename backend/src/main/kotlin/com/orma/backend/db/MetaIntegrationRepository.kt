@@ -1276,6 +1276,7 @@ class MetaIntegrationRepository(
                 au.id::text as user_id,
                 bw.id::text as workspace_id,
                 wm.role,
+                wm.permissions,
                 bw.currency,
                 bw.business_mode
             from app_users au
@@ -1295,6 +1296,7 @@ class MetaIntegrationRepository(
                         userId = result.getString("user_id"),
                         workspaceId = result.getString("workspace_id"),
                         role = result.getString("role"),
+                        permissions = result.getStringArray("permissions"),
                         currency = result.getString("currency") ?: "INR",
                         businessMode = result.getString("business_mode") ?: "product_selling",
                     )
@@ -2157,6 +2159,11 @@ private fun java.sql.PreparedStatement.setStringOrNull(index: Int, value: String
         setString(index, value.trim())
     }
 }
+
+private fun ResultSet.getStringArray(column: String): List<String> =
+    (getArray(column)?.array as? Array<*>)
+        ?.mapNotNull { it?.toString()?.takeIf(String::isNotBlank) }
+        .orEmpty()
 
 private fun String.cleanMetaStatus(): String =
     trim()

@@ -30,6 +30,7 @@ import org.orma.project_90.backend.OrmaSupplierDraft
 import org.orma.project_90.backend.OrmaTeamInvite
 import org.orma.project_90.backend.OrmaTeamInviteDraft
 import org.orma.project_90.backend.OrmaTeamMember
+import org.orma.project_90.backend.OrmaTeamMemberAccessDraft
 import org.orma.project_90.backend.OrmaWorkspacePaymentMethod
 import org.orma.project_90.backend.OrmaWorkspacePaymentMethodDraft
 import org.orma.project_90.media.OrmaPickedImage
@@ -224,6 +225,7 @@ internal data class OnboardingActions(
     val onUpdateOrderStatus: (String, String) -> Unit,
     val onUpdateOrderStatusWithPayment: (String, String, String?) -> Unit,
     val onCreateTeamInvite: (OrmaTeamInviteDraft) -> Unit,
+    val onUpdateTeamMemberAccess: (String, OrmaTeamMemberAccessDraft) -> Unit,
     val onRevokeTeamInvite: (String) -> Unit,
     val onRemoveTeamMember: (String) -> Unit,
     val onInvoiceGstinLookupRequest: (String) -> Unit,

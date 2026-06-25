@@ -122,6 +122,7 @@ data class TeamMemberResponse(
     val email: String? = null,
     val phoneNumber: String? = null,
     val role: String,
+    val permissions: List<String> = emptyList(),
     val status: String,
     val joinedAt: String,
 )
@@ -134,6 +135,7 @@ data class TeamInviteResponse(
     val inviteeEmail: String? = null,
     val inviteePhoneNumber: String? = null,
     val role: String,
+    val permissions: List<String> = emptyList(),
     val status: String,
     val createdAt: String,
     val expiresAt: String? = null,
@@ -147,6 +149,13 @@ data class TeamInviteRequest(
     val inviteeEmail: String? = null,
     val inviteePhoneNumber: String? = null,
     val role: String = "team_member",
+    val permissions: List<String> = emptyList(),
+)
+
+@Serializable
+data class TeamMemberAccessRequest(
+    val role: String = "team_member",
+    val permissions: List<String> = emptyList(),
 )
 
 @Serializable

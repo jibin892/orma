@@ -61,6 +61,7 @@ data class DashboardWorkspaceAccess(
     val userId: String,
     val workspaceId: String,
     val role: String,
+    val permissions: List<String>,
     val currency: String,
     val businessMode: String,
     val displayName: String? = null,
@@ -682,6 +683,7 @@ class DashboardRepository(
                     connection.rollback()
                     return@withContext null
                 }
+                access.requirePermission(PermissionCreateOffer, "create offers")
                 val offer = connection.insertProductOffer(access.workspaceId, request)
                 connection.insertWorkspaceActivity(
                     access = access,
@@ -927,6 +929,9 @@ class DashboardRepository(
                         ),
                     )
                 }
+                request.rows.map { it.itemType.catalogCreatePermission() }.distinct().forEach { permission ->
+                    access.requirePermission(permission, "import this catalog item type")
+                }
                 val response = connection.importProductRows(access, request)
                 if (response.created > 0 || response.skipped > 0) {
                     connection.insertWorkspaceActivity(
@@ -959,6 +964,9 @@ class DashboardRepository(
                 val access = connection.resolveWorkspaceAccess(firebaseUser) ?: run {
                     connection.rollback()
                     return@withContext null
+                }
+                request.rows.map { it.itemType.catalogCreatePermission() }.distinct().forEach { permission ->
+                    access.requirePermission(permission, "import this catalog item type")
                 }
                 val response = connection.importProductRows(access, request)
                 if (response.created > 0 || response.skipped > 0) {
@@ -1077,6 +1085,7 @@ class DashboardRepository(
                     connection.rollback()
                     return@withContext null
                 }
+                access.requirePermission(request.itemType.catalogCreatePermission(), "create this catalog item")
                 request.validateCatalogItemForSave()
                 val product = connection.insertProduct(access, request)
                 if (request.trackStock && request.stockQuantity.decimalOrZero() != BigDecimal.ZERO) {
@@ -1122,6 +1131,7 @@ class DashboardRepository(
                     connection.rollback()
                     return@withContext null
                 }
+                access.requirePermission(request.itemType.catalogCreatePermission(), "update this catalog item")
                 request.validateCatalogItemForSave()
                 val product = connection.updateProduct(access, productId, request)
                 if (product != null) {
@@ -1158,6 +1168,7 @@ class DashboardRepository(
                     connection.rollback()
                     return@withContext null
                 }
+                access.requirePermission(PermissionManageStock, "update stock and availability")
                 val product = connection.adjustProductStock(access, productId, request)
                 if (product != null) {
                     val quantityChanged = request.quantityDelta.decimalOrZero() != BigDecimal.ZERO
@@ -1335,6 +1346,7 @@ class DashboardRepository(
                     connection.rollback()
                     return@withContext null
                 }
+                access.requirePermission(PermissionCreateSale, "create sales or bookings")
                 val order = connection.insertOrder(access, request)
                 if (request.customerId.cleanUuidOrNull() == null && !request.customerName.cleanOptional().isNullOrBlank()) {
                     order.customerId?.let { customerId ->
@@ -1383,6 +1395,7 @@ class DashboardRepository(
                     connection.rollback()
                     return@withContext null
                 }
+                access.requirePermission(PermissionEditSale, "edit sales or bookings")
                 val updated = connection.updateOrder(access, orderId, request)
                 if (updated != null) {
                     if (request.customerId.cleanUuidOrNull() == null && !request.customerName.cleanOptional().isNullOrBlank()) {
@@ -1434,6 +1447,7 @@ class DashboardRepository(
                     connection.rollback()
                     return@withContext null
                 }
+                access.requirePermission(PermissionChangeBookingStatus, "change booking status")
                 val updated = connection.updateOrderStatus(access, orderId, status, paidTotal)
                 if (updated != null) {
                     connection.insertWorkspaceActivity(
@@ -1516,17 +1530,18 @@ class DashboardRepository(
                 if (!result.next()) {
                     null
                 } else {
-                DashboardWorkspaceAccess(
-                    userId = result.getString("user_id"),
-                    workspaceId = result.getString("workspace_id"),
-                    role = "public_catalog",
-                    currency = result.getString("currency") ?: "INR",
-                    businessMode = result.getString("business_mode") ?: "product_selling",
-                    displayName = "Public catalog",
-                )
+                    DashboardWorkspaceAccess(
+                        userId = result.getString("user_id"),
+                        workspaceId = result.getString("workspace_id"),
+                        role = "public_catalog",
+                        permissions = listOf("read_only"),
+                        currency = result.getString("currency") ?: "INR",
+                        businessMode = result.getString("business_mode") ?: "product_selling",
+                        displayName = "Public catalog",
+                    )
+                }
             }
         }
-    }
     }
 
     private fun Connection.listPublicCatalogProducts(workspaceId: String): List<PublicCatalogProductResponse> {
@@ -1806,6 +1821,7 @@ class DashboardRepository(
                 au.id::text as user_id,
                 bw.id::text as workspace_id,
                 wm.role,
+                wm.permissions,
                 bw.currency,
                 bw.business_mode,
                 au.display_name,
@@ -1828,6 +1844,7 @@ class DashboardRepository(
                         userId = result.getString("user_id"),
                         workspaceId = result.getString("workspace_id"),
                         role = result.getString("role"),
+                        permissions = result.getStringArray("permissions"),
                         currency = result.getString("currency") ?: "INR",
                         businessMode = result.getString("business_mode") ?: "product_selling",
                         displayName = result.getString("display_name"),
@@ -1847,6 +1864,15 @@ class DashboardRepository(
                 result.getInt(1)
             }
         }
+
+    private fun ResultSet.getStringArray(column: String): List<String> =
+        runCatching {
+            val value = getArray(column)?.array ?: return@runCatching emptyList()
+            when (value) {
+                is Array<*> -> value.mapNotNull { it?.toString() }
+                else -> emptyList()
+            }
+        }.getOrDefault(emptyList())
 
     private fun Connection.scalarDecimal(sql: String, vararg params: String): BigDecimal =
         prepareStatement(sql).use { statement ->
@@ -5344,6 +5370,24 @@ class DashboardRepository(
                     .replace("+", "%20")
             }
 
+    private fun DashboardWorkspaceAccess.requirePermission(permission: String, actionLabel: String) {
+        if (role == "business_owner") return
+        val cleanPermissions = permissions.map { it.trim().lowercase().replace("-", "_") }.toSet()
+        if (PermissionReadOnly in cleanPermissions || permission !in cleanPermissions) {
+            throw DashboardOrderValidationException(
+                code = "team_permission_denied",
+                publicMessage = "This staff role cannot $actionLabel.",
+            )
+        }
+    }
+
+    private fun String.catalogCreatePermission(): String =
+        when (trim().lowercase()) {
+            "service" -> PermissionCreateService
+            "appointment" -> PermissionCreateAppointment
+            else -> PermissionCreateProduct
+        }
+
     private data class PreparedOrderItem(
         val productId: String?,
         val description: String,
@@ -5374,6 +5418,15 @@ class DashboardRepository(
         val FullPaymentStatuses = setOf("paid", "completed")
         val AllowedItemTypes = setOf("product", "service", "appointment")
         val AllowedOrderTypes = setOf("sale", "service", "appointment")
+        const val PermissionReadOnly = "read_only"
+        const val PermissionCreateSale = "create_sale"
+        const val PermissionEditSale = "edit_sale"
+        const val PermissionChangeBookingStatus = "change_booking_status"
+        const val PermissionCreateProduct = "create_product"
+        const val PermissionCreateService = "create_service"
+        const val PermissionCreateAppointment = "create_appointment"
+        const val PermissionCreateOffer = "create_offer"
+        const val PermissionManageStock = "manage_stock"
         val AllowedPrinterConnectionTypes = setOf(
             "mtp_usb",
             "usb",

@@ -137,6 +137,7 @@ import org.orma.project_90.backend.OrmaSupplierDraft
 import org.orma.project_90.backend.OrmaTeamInvite
 import org.orma.project_90.backend.OrmaTeamInviteDraft
 import org.orma.project_90.backend.OrmaTeamMember
+import org.orma.project_90.backend.OrmaTeamMemberAccessDraft
 import org.orma.project_90.backend.OrmaWorkspacePaymentMethod
 import org.orma.project_90.backend.OrmaWorkspacePaymentMethodDraft
 import org.orma.project_90.components.atoms.OrmaDashboardEmptyState
@@ -614,7 +615,114 @@ private fun teamRoleLabel(role: String): String = when (role.trim().lowercase())
     "inventory_manager" -> "Inventory"
     "sales" -> "Sales"
     "sales_staff" -> "Sales"
+    "read_only" -> "Read only"
     else -> "Staff"
+}
+
+private data class DashboardTeamPermissionOption(
+    val key: String,
+    val label: String,
+    val body: String,
+)
+
+private const val DashboardTeamPermissionReadOnly = "read_only"
+private const val DashboardTeamPermissionCreateSale = "create_sale"
+private const val DashboardTeamPermissionEditSale = "edit_sale"
+private const val DashboardTeamPermissionChangeBookingStatus = "change_booking_status"
+private const val DashboardTeamPermissionCreateProduct = "create_product"
+private const val DashboardTeamPermissionCreateService = "create_service"
+private const val DashboardTeamPermissionCreateAppointment = "create_appointment"
+private const val DashboardTeamPermissionCreateOffer = "create_offer"
+private const val DashboardTeamPermissionManageStock = "manage_stock"
+private const val DashboardTeamPermissionManageCustomers = "manage_customers"
+private const val DashboardTeamPermissionDownloadInvoice = "download_invoice"
+
+private val DashboardTeamPermissionOptions = listOf(
+    DashboardTeamPermissionOption(DashboardTeamPermissionReadOnly, "Read only", "Can view workspace data only."),
+    DashboardTeamPermissionOption(DashboardTeamPermissionCreateSale, "Create sale", "Can create sales, services, and bookings."),
+    DashboardTeamPermissionOption(DashboardTeamPermissionEditSale, "Edit sale", "Can edit existing sale and booking details."),
+    DashboardTeamPermissionOption(DashboardTeamPermissionChangeBookingStatus, "Change booking status", "Can move orders through payment and fulfilment."),
+    DashboardTeamPermissionOption(DashboardTeamPermissionCreateProduct, "Create product", "Can add product catalog items."),
+    DashboardTeamPermissionOption(DashboardTeamPermissionCreateService, "Create service", "Can add service catalog items."),
+    DashboardTeamPermissionOption(DashboardTeamPermissionCreateAppointment, "Create appointment", "Can add appointment catalog items."),
+    DashboardTeamPermissionOption(DashboardTeamPermissionCreateOffer, "Create offer", "Can add and update discounts."),
+    DashboardTeamPermissionOption(DashboardTeamPermissionManageStock, "Manage stock", "Can update stock, supplier, purchase and expiry details."),
+    DashboardTeamPermissionOption(DashboardTeamPermissionManageCustomers, "Manage customers", "Can add or edit customer records."),
+    DashboardTeamPermissionOption(DashboardTeamPermissionDownloadInvoice, "Download invoice", "Can download invoices and receipts."),
+)
+
+private val DashboardTeamPermissionKeys = DashboardTeamPermissionOptions.map { it.key }.toSet()
+
+private fun dashboardTeamDefaultPermissions(role: String): List<String> = when (role.trim().lowercase()) {
+    "business_owner" -> DashboardTeamPermissionOptions.map { it.key }
+    "manager" -> listOf(
+        DashboardTeamPermissionCreateSale,
+        DashboardTeamPermissionEditSale,
+        DashboardTeamPermissionChangeBookingStatus,
+        DashboardTeamPermissionCreateProduct,
+        DashboardTeamPermissionCreateService,
+        DashboardTeamPermissionCreateAppointment,
+        DashboardTeamPermissionCreateOffer,
+        DashboardTeamPermissionManageStock,
+        DashboardTeamPermissionManageCustomers,
+        DashboardTeamPermissionDownloadInvoice,
+    )
+    "cashier" -> listOf(
+        DashboardTeamPermissionCreateSale,
+        DashboardTeamPermissionChangeBookingStatus,
+        DashboardTeamPermissionDownloadInvoice,
+    )
+    "accountant" -> listOf(DashboardTeamPermissionDownloadInvoice)
+    "inventory", "inventory_manager" -> listOf(
+        DashboardTeamPermissionCreateProduct,
+        DashboardTeamPermissionCreateService,
+        DashboardTeamPermissionCreateAppointment,
+        DashboardTeamPermissionCreateOffer,
+        DashboardTeamPermissionManageStock,
+    )
+    "sales", "sales_staff" -> listOf(
+        DashboardTeamPermissionCreateSale,
+        DashboardTeamPermissionEditSale,
+        DashboardTeamPermissionChangeBookingStatus,
+        DashboardTeamPermissionManageCustomers,
+        DashboardTeamPermissionDownloadInvoice,
+    )
+    "read_only" -> listOf(DashboardTeamPermissionReadOnly)
+    else -> listOf(DashboardTeamPermissionReadOnly)
+}
+
+private fun dashboardNormalizeTeamPermissions(
+    permissions: List<String>,
+    role: String,
+): List<String> =
+    permissions
+        .map { it.trim().lowercase().replace("-", "_") }
+        .filter { it in DashboardTeamPermissionKeys }
+        .distinct()
+        .ifEmpty { dashboardTeamDefaultPermissions(role) }
+
+private fun dashboardToggleTeamPermission(
+    permissions: List<String>,
+    key: String,
+): List<String> {
+    val clean = permissions.filter { it in DashboardTeamPermissionKeys }.toMutableList()
+    if (key == DashboardTeamPermissionReadOnly) return listOf(DashboardTeamPermissionReadOnly)
+    clean.remove(DashboardTeamPermissionReadOnly)
+    if (key in clean) {
+        clean.remove(key)
+    } else {
+        clean.add(key)
+    }
+    return clean.ifEmpty { listOf(DashboardTeamPermissionReadOnly) }.distinct()
+}
+
+private fun dashboardTeamPermissionSummary(
+    permissions: List<String>,
+    role: String,
+): String {
+    val clean = dashboardNormalizeTeamPermissions(permissions, role)
+    if (DashboardTeamPermissionReadOnly in clean) return "Read only"
+    return "${clean.size} permissions"
 }
 
 @Composable
@@ -1738,6 +1846,8 @@ private fun DashboardMobileStage(
     var showMobileCreateOrderSheet by rememberSaveable { mutableStateOf(false) }
     var lastRootSectionName by rememberSaveable { mutableStateOf(DashboardSection.Dashboard.name) }
     var mobileSelectedOrderId by rememberSaveable { mutableStateOf<String?>(null) }
+    var mobileSelectedCustomerId by rememberSaveable { mutableStateOf<String?>(null) }
+    var mobileSelectedProductId by rememberSaveable { mutableStateOf<String?>(null) }
     var mobileCreateOrderTypeOverride by rememberSaveable { mutableStateOf<String?>(null) }
     var mobileRootScrollResetKey by rememberSaveable { mutableStateOf(0) }
     val mobileRootSections = remember { DashboardMobileBottomNavItems.map { it.section }.toSet() }
@@ -1751,29 +1861,49 @@ private fun DashboardMobileStage(
             showMobileCreateOrderSheet = false
             mobileCreateOrderTypeOverride = null
         }
+        if (selectedSection != DashboardSection.Customers) {
+            mobileSelectedCustomerId = null
+        }
+        if (selectedSection != DashboardSection.Products) {
+            mobileSelectedProductId = null
+        }
     }
     val selectedMobileOrder = if (selectedSection == DashboardSection.OrdersBookings) {
         state.dashboard.orders.firstOrNull { it.id == mobileSelectedOrderId }
     } else {
         null
     }
-    LaunchedEffect(selectedSection, mobileSelectedOrderId, mobileRootScrollResetKey) {
+    val selectedMobileCustomer = if (selectedSection == DashboardSection.Customers) {
+        state.dashboard.customers.firstOrNull { it.id == mobileSelectedCustomerId }
+    } else {
+        null
+    }
+    val selectedMobileProduct = if (selectedSection == DashboardSection.Products) {
+        state.dashboard.products.firstOrNull { it.id == mobileSelectedProductId }
+    } else {
+        null
+    }
+    val mobileDetailOpen = selectedMobileOrder != null || selectedMobileCustomer != null || selectedMobileProduct != null
+    LaunchedEffect(selectedSection, mobileSelectedOrderId, mobileSelectedCustomerId, mobileSelectedProductId, mobileRootScrollResetKey) {
         scrollState.scrollTo(0)
     }
     val fallbackRootSection = DashboardSection.entries.firstOrNull { it.name == lastRootSectionName }
         ?: DashboardSection.Dashboard
-    val canNavigateBack = selectedMobileOrder != null || selectedSection !in mobileRootSections
+    val canNavigateBack = mobileDetailOpen || selectedSection !in mobileRootSections
     val navigateBack: () -> Unit = {
-        if (selectedMobileOrder != null) {
-            mobileSelectedOrderId = null
-        } else {
-            onSectionSelected(fallbackRootSection)
+        when {
+            selectedMobileOrder != null -> mobileSelectedOrderId = null
+            selectedMobileCustomer != null -> mobileSelectedCustomerId = null
+            selectedMobileProduct != null -> mobileSelectedProductId = null
+            else -> onSectionSelected(fallbackRootSection)
         }
     }
     val topBarTitle = selectedMobileOrder
         ?.orderNumber
         ?.takeIf { it.isNotBlank() }
         ?: selectedMobileOrder?.id?.take(8)?.uppercase()
+        ?: selectedMobileCustomer?.name?.takeIf { it.isNotBlank() }
+        ?: selectedMobileProduct?.name?.takeIf { it.isNotBlank() }
         ?: selectedSection.title(state)
     val showMobileSalesFab = selectedMobileOrder == null && selectedSection == DashboardSection.OrdersBookings
     val mobileSalesFabOrderType = state.activeDashboardOrderType()
@@ -1808,7 +1938,7 @@ private fun DashboardMobileStage(
                         .padding(horizontal = 16.dp)
                         .padding(
                             top = 6.dp,
-                            bottom = if (selectedMobileOrder == null && selectedSection in mobileRootSections) 112.dp else 28.dp,
+                            bottom = if (!mobileDetailOpen && selectedSection in mobileRootSections) 112.dp else 28.dp,
                         ),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
@@ -1841,18 +1971,24 @@ private fun DashboardMobileStage(
                         wide = false,
                         mobileSelectedOrderId = mobileSelectedOrderId,
                         onMobileSelectedOrderChange = { mobileSelectedOrderId = it },
+                        mobileSelectedCustomerId = mobileSelectedCustomerId,
+                        onMobileSelectedCustomerChange = { mobileSelectedCustomerId = it },
+                        mobileSelectedProductId = mobileSelectedProductId,
+                        onMobileSelectedProductChange = { mobileSelectedProductId = it },
                         onRequestScrollTop = { mobileRootScrollResetKey += 1 },
                     )
                 }
             }
         }
 
-        if (selectedMobileOrder == null && selectedSection in mobileRootSections) {
+        if (!mobileDetailOpen && selectedSection in mobileRootSections) {
             DashboardBottomBar(
                 selectedSection = selectedSection,
                 state = state,
                 onSectionSelected = { section ->
                     mobileSelectedOrderId = null
+                    mobileSelectedCustomerId = null
+                    mobileSelectedProductId = null
                     mobileRootScrollResetKey += 1
                     onSectionSelected(section)
                 },
@@ -1884,7 +2020,7 @@ private fun DashboardMobileStage(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .padding(horizontal = 20.dp)
-                .padding(bottom = if (selectedMobileOrder == null && selectedSection in mobileRootSections) 106.dp else 22.dp),
+                .padding(bottom = if (!mobileDetailOpen && selectedSection in mobileRootSections) 106.dp else 22.dp),
         )
 
         if (showMobileCreateOrderSheet) {
@@ -4509,6 +4645,10 @@ private fun DashboardSectionContent(
     wide: Boolean,
     mobileSelectedOrderId: String? = null,
     onMobileSelectedOrderChange: ((String?) -> Unit)? = null,
+    mobileSelectedCustomerId: String? = null,
+    onMobileSelectedCustomerChange: ((String?) -> Unit)? = null,
+    mobileSelectedProductId: String? = null,
+    onMobileSelectedProductChange: ((String?) -> Unit)? = null,
     onRequestScrollTop: () -> Unit = {},
 ) {
     when (selectedSection) {
@@ -4537,6 +4677,8 @@ private fun DashboardSectionContent(
             state = state,
             actions = actions,
             wide = wide,
+            mobileSelectedCustomerId = mobileSelectedCustomerId,
+            onMobileSelectedCustomerChange = onMobileSelectedCustomerChange,
             onRequestScrollTop = onRequestScrollTop,
         )
         DashboardSection.Products -> DashboardProductsContent(
@@ -7655,7 +7797,9 @@ private fun DashboardMobileSalesWorkspace(
                 visibleOrders.forEach { order ->
                     DashboardMobileSaleCard(
                         order = order,
-                        statusEnabled = !state.dashboard.actionLoading && !state.dashboard.loading,
+                        statusEnabled = !state.dashboard.actionLoading &&
+                            !state.dashboard.loading &&
+                            state.hasDashboardPermission(DashboardTeamPermissionChangeBookingStatus),
                         onOpen = { onOpenOrder(order) },
                         onStatusClick = { statusOrderId = order.id },
                     )
@@ -8156,7 +8300,8 @@ private fun DashboardSalesCounterWorkspace(
                 currency = state.dashboard.summary.currency.ifBlank {
                     stageOrders.firstOrNull()?.currency ?: "INR"
                 },
-                createEnabled = !state.dashboard.loading,
+                createEnabled = !state.dashboard.loading &&
+                    state.hasDashboardPermission(DashboardTeamPermissionCreateSale),
                 onClearSelection = onClearSelection,
                 onCreate = onCreateOrder,
             )
@@ -8811,7 +8956,9 @@ private fun DashboardSalesRecordsSurface(
                     selectedOrder = selectedOrder,
                     sortKey = sortKey,
                     sortAscending = sortAscending,
-                    statusEnabled = !state.dashboard.actionLoading && !state.dashboard.loading,
+                    statusEnabled = !state.dashboard.actionLoading &&
+                        !state.dashboard.loading &&
+                        state.hasDashboardPermission(DashboardTeamPermissionChangeBookingStatus),
                     onSortChange = onSortChange,
                     onOpenOrder = onOpenOrder,
                     onEditOrder = onEditOrder,
@@ -10566,6 +10713,7 @@ private fun DashboardCatalogSearchToolbar(
     placeholder: String,
     primaryText: String? = null,
     onAddItem: (() -> Unit)? = null,
+    primaryEnabled: Boolean = true,
     onSupplierClick: (() -> Unit)? = null,
     onCategoryClick: () -> Unit,
     showToolActions: Boolean = true,
@@ -10611,7 +10759,7 @@ private fun DashboardCatalogSearchToolbar(
         badgeText = if (state.dashboard.loading) "SYNC" else "LIVE",
         primaryText = primaryText,
         onPrimary = onAddItem,
-        primaryEnabled = !state.dashboard.loading,
+        primaryEnabled = primaryEnabled && !state.dashboard.loading,
         secondaryText = if (state.dashboard.loading) "Syncing" else "Sync",
         onSecondary = actions.onDashboardRefresh,
         secondaryEnabled = !state.dashboard.loading,
@@ -10746,7 +10894,8 @@ private fun DashboardInvoiceSearchToolbar(
         badgeText = if (state.dashboard.loading) "SYNC" else "LIVE",
         primaryText = "Create invoice",
         onPrimary = onCreateInvoice,
-        primaryEnabled = !state.dashboard.loading,
+        primaryEnabled = !state.dashboard.loading &&
+            state.hasDashboardPermission(DashboardTeamPermissionCreateSale),
         secondaryText = if (state.dashboard.loading) "Syncing" else "Refresh",
         onSecondary = actions.onDashboardRefresh,
         secondaryEnabled = !state.dashboard.loading,
@@ -12610,6 +12759,7 @@ private fun DashboardInvoiceCreateGuideCard(
             text = "Create invoice",
             onClick = onCreate,
             modifier = Modifier.fillMaxWidth(),
+            enabled = state.hasDashboardPermission(DashboardTeamPermissionCreateSale),
         )
     }
 }
@@ -12625,6 +12775,7 @@ private fun DashboardInvoicePreviewScreen(
 ) {
     val exporter = rememberOrmaOrderDocumentExporter()
     var documentStatus by rememberSaveable(order.id) { mutableStateOf<String?>(null) }
+    val canDownloadDocuments = state.hasDashboardPermission(DashboardTeamPermissionDownloadInvoice)
     fun downloadInvoicePdf() {
         val document = orderInvoicePdfDocument(state = state, order = order)
         val message = if (exporter.downloadPdf(fileName = document.fileName, pdfBase64 = document.pdfBase64)) {
@@ -12651,6 +12802,7 @@ private fun DashboardInvoicePreviewScreen(
             secondaryEnabled = !state.dashboard.loading,
             tertiaryText = "Download PDF",
             onTertiary = ::downloadInvoicePdf,
+            tertiaryEnabled = state.hasDashboardPermission(DashboardTeamPermissionDownloadInvoice),
         ) {
             DashboardInvoicePreviewSummaryCard(
                 state = state,
@@ -13516,22 +13668,33 @@ private fun DashboardCustomersContent(
     state: OnboardingUiState,
     actions: OnboardingActions,
     wide: Boolean,
+    mobileSelectedCustomerId: String? = null,
+    onMobileSelectedCustomerChange: ((String?) -> Unit)? = null,
     onRequestScrollTop: () -> Unit,
 ) {
     var showCustomerSheet by rememberSaveable { mutableStateOf(false) }
-    var selectedCustomerId by rememberSaveable { mutableStateOf<String?>(null) }
+    var wideSelectedCustomerId by rememberSaveable { mutableStateOf<String?>(null) }
     val visibleCustomers = filteredDashboardCustomers(state)
+    val selectedCustomerId = if (wide) wideSelectedCustomerId else mobileSelectedCustomerId
     val selectedCustomer = state.dashboard.customers.firstOrNull { it.id == selectedCustomerId }
     val selectedCustomerOrders = selectedCustomer?.let { state.customerOrders(it) }.orEmpty()
     val selectedCustomerHistoryLoading = selectedCustomerId != null &&
         selectedCustomerId in state.dashboard.customerOrderHistoryLoading
     val selectedCustomerHistoryError = selectedCustomerId?.let { state.dashboard.customerOrderHistoryErrors[it] }
     fun openCustomer(customer: OrmaCustomer) {
-        selectedCustomerId = customer.id
+        if (wide) {
+            wideSelectedCustomerId = customer.id
+        } else {
+            onMobileSelectedCustomerChange?.invoke(customer.id)
+        }
         onRequestScrollTop()
     }
     fun closeCustomer() {
-        selectedCustomerId = null
+        if (wide) {
+            wideSelectedCustomerId = null
+        } else {
+            onMobileSelectedCustomerChange?.invoke(null)
+        }
         onRequestScrollTop()
     }
     LaunchedEffect(selectedCustomerId) {
@@ -13543,7 +13706,7 @@ private fun DashboardCustomersContent(
             actions.onLoadCustomerOrders(customerId)
         }
     }
-    if (selectedCustomer != null) {
+    if (selectedCustomer != null && wide) {
         CustomerDetailsScreen(
             state = state,
             customer = selectedCustomer,
@@ -13552,6 +13715,16 @@ private fun DashboardCustomersContent(
             historyError = selectedCustomerHistoryError,
             wide = wide,
             onBack = ::closeCustomer,
+        )
+    } else if (selectedCustomer != null) {
+        CustomerDetailsContent(
+            state = state,
+            customer = selectedCustomer,
+            orders = selectedCustomerOrders,
+            loadingHistory = selectedCustomerHistoryLoading,
+            historyError = selectedCustomerHistoryError,
+            showCloseAction = false,
+            onClose = ::closeCustomer,
         )
     } else if (wide) {
         DashboardCustomersWorkspace(
@@ -13978,6 +14151,9 @@ private fun DashboardProductsContent(
     state: OnboardingUiState,
     actions: OnboardingActions,
     wide: Boolean,
+    mobileSelectedProductId: String? = null,
+    onMobileSelectedProductChange: ((String?) -> Unit)? = null,
+    onRequestScrollTop: () -> Unit = {},
 ) {
     var showProductEditor by rememberSaveable { mutableStateOf(false) }
     var showSupplierSheet by rememberSaveable { mutableStateOf(false) }
@@ -13994,9 +14170,25 @@ private fun DashboardProductsContent(
     val imageProduct = state.dashboard.products.firstOrNull { it.id == imageProductId }
     val visibleProducts = filteredDashboardProducts(state)
     val visibleSuppliers = filteredDashboardSuppliers(state)
+    val selectedProduct = if (wide) null else state.dashboard.products.firstOrNull { it.id == mobileSelectedProductId }
     val itemType = state.activeDashboardItemType()
     val selectedItemType = state.selectedDashboardItemTypeFilter()
     val productEditorActive = showProductEditor || editProduct != null
+    val canCreateCatalogItem = state.canCreateDashboardCatalogItem()
+    val canCreateOffer = state.hasDashboardPermission(DashboardTeamPermissionCreateOffer)
+    val canManageStock = state.hasDashboardPermission(DashboardTeamPermissionManageStock)
+    fun openProduct(product: OrmaProduct) {
+        onMobileSelectedProductChange?.invoke(product.id)
+        onRequestScrollTop()
+    }
+    fun closeProduct() {
+        onMobileSelectedProductChange?.invoke(null)
+        onRequestScrollTop()
+    }
+    fun editSelectedProduct(product: OrmaProduct) {
+        closeProduct()
+        if (canCreateCatalogItem) editProductId = product.id
+    }
 
     if (productEditorActive) {
         ProductEditorScreen(
@@ -14015,22 +14207,31 @@ private fun DashboardProductsContent(
                 editProductId = null
             },
         )
+    } else if (selectedProduct != null) {
+        ProductDetailsScreen(
+            product = selectedProduct,
+            canEdit = canCreateCatalogItem,
+            canManageStock = canManageStock,
+            onEdit = { editSelectedProduct(selectedProduct) },
+            onImage = { imageProductId = selectedProduct.id },
+            onStock = { stockProductId = selectedProduct.id },
+        )
     } else if (wide) {
         DashboardProductsWorkspace(
             state = state,
             actions = actions,
             products = visibleProducts,
-            onAddProduct = { showProductEditor = true },
+            onAddProduct = { if (canCreateCatalogItem) showProductEditor = true },
             selectedTab = selectedProductTab,
             onTabSelected = { selectedProductTab = it },
-            onCategoryClick = { showCategorySheet = true },
+            onCategoryClick = { if (canCreateCatalogItem) showCategorySheet = true },
             onSupplierClick = { showSupplierSheet = true },
-            onOfferClick = { showOfferSheet = true },
+            onOfferClick = { if (canCreateOffer) showOfferSheet = true },
             suppliers = visibleSuppliers,
             onAddSupplier = { showSupplierSheet = true },
             onEditSupplier = { editSupplierId = it.id },
-            onEditClick = { editProductId = it.id },
-            onStockClick = { stockProductId = it.id },
+            onEditClick = { if (canCreateCatalogItem) editProductId = it.id },
+            onStockClick = { if (canManageStock) stockProductId = it.id },
             onImageClick = { imageProductId = it.id },
         )
     } else {
@@ -14050,17 +14251,18 @@ private fun DashboardProductsContent(
                         if (selectedProductTab == DashboardProductWorkspaceTabSuppliers) {
                             showSupplierSheet = true
                         } else {
-                            showProductEditor = true
+                            if (canCreateCatalogItem) showProductEditor = true
                         }
                     },
                     modifier = Modifier.weight(1f),
                     primary = true,
-                    enabled = !state.dashboard.loading,
+                    enabled = !state.dashboard.loading &&
+                        (selectedProductTab == DashboardProductWorkspaceTabSuppliers || canCreateCatalogItem),
                 )
                 if (selectedProductTab != DashboardProductWorkspaceTabSuppliers) {
                     DashboardWideActionButton(
                         text = "Category",
-                        onClick = { showCategorySheet = true },
+                        onClick = { if (canCreateCatalogItem) showCategorySheet = true },
                         modifier = Modifier.weight(1f),
                         enabled = !state.dashboard.loading,
                     )
@@ -14096,13 +14298,14 @@ private fun DashboardProductsContent(
                         else -> "Product, SKU, barcode, supplier"
                     },
                     onSupplierClick = { showSupplierSheet = true },
-                    onCategoryClick = { showCategorySheet = true },
+                    onCategoryClick = { if (canCreateCatalogItem) showCategorySheet = true },
                 )
                 DashboardProductRecords(
                     state = state,
                     actions = actions,
-                    onEditClick = { editProductId = it.id },
-                    onStockClick = { stockProductId = it.id },
+                    onProductClick = ::openProduct,
+                    onEditClick = { if (canCreateCatalogItem) editProductId = it.id },
+                    onStockClick = { if (canManageStock) stockProductId = it.id },
                     onImageClick = { imageProductId = it.id },
                     wide = false,
                 )
@@ -14127,7 +14330,7 @@ private fun DashboardProductsContent(
             },
         )
     }
-    if (showCategorySheet) {
+    if (showCategorySheet && canCreateCatalogItem) {
         CategoryFormSheet(
             initialItemType = if (selectedItemType == "all") "all" else itemType,
             allowedItemTypes = state.allowedDashboardItemTypes(),
@@ -14138,7 +14341,7 @@ private fun DashboardProductsContent(
             },
         )
     }
-    if (showOfferSheet) {
+    if (showOfferSheet && canCreateOffer) {
         OfferFormSheet(
             state = state,
             onDismiss = { showOfferSheet = false },
@@ -14148,7 +14351,7 @@ private fun DashboardProductsContent(
             },
         )
     }
-    stockProduct?.let { product ->
+    stockProduct?.takeIf { canManageStock }?.let { product ->
         StockAdjustmentSheet(
             product = product,
             state = state,
@@ -14236,6 +14439,7 @@ private fun DashboardProductsWorkspace(
                     state.activeDashboardItemType().catalogActionText()
                 },
                 onAddItem = onAddProduct,
+                primaryEnabled = state.canCreateDashboardCatalogItem(),
                 onSupplierClick = onSupplierClick,
                 onCategoryClick = onCategoryClick,
             )
@@ -14884,6 +15088,7 @@ private fun DashboardCatalogOperationsPanel(
                 text = "Offers",
                 onClick = onOfferClick,
                 modifier = Modifier.weight(1f),
+                enabled = state.hasDashboardPermission(DashboardTeamPermissionCreateOffer),
             )
         }
     }
@@ -18181,6 +18386,7 @@ private fun BookingDetailsDocumentsCard(
 ) {
     val exporter = rememberOrmaOrderDocumentExporter()
     var documentStatus by rememberSaveable(order.id) { mutableStateOf<String?>(null) }
+    val canDownloadDocuments = state.hasDashboardPermission(DashboardTeamPermissionDownloadInvoice)
     fun reportDocumentStatus(message: String) {
         documentStatus = message
         onDownloadStatus(message)
@@ -18258,11 +18464,13 @@ private fun BookingDetailsDocumentsCard(
                         text = "Download PDF",
                         onClick = ::downloadInvoice,
                         modifier = Modifier.fillMaxWidth(),
+                        enabled = canDownloadDocuments,
                     )
                     DashboardWideActionButton(
                         text = "Receipt PDF",
                         onClick = ::downloadReceipt,
                         modifier = Modifier.fillMaxWidth(),
+                        enabled = canDownloadDocuments,
                     )
                     DashboardWideActionButton(
                         text = "Print receipt",
@@ -18279,11 +18487,13 @@ private fun BookingDetailsDocumentsCard(
                         text = "Download PDF",
                         onClick = ::downloadInvoice,
                         modifier = Modifier.weight(1f),
+                        enabled = canDownloadDocuments,
                     )
                     DashboardWideActionButton(
                         text = "Receipt PDF",
                         onClick = ::downloadReceipt,
                         modifier = Modifier.weight(1f),
+                        enabled = canDownloadDocuments,
                     )
                     DashboardWideActionButton(
                         text = "Print receipt",
@@ -18878,6 +19088,7 @@ private fun DashboardCustomerEngagementGuideCard(
 private fun DashboardProductRecords(
     state: OnboardingUiState,
     actions: OnboardingActions,
+    onProductClick: ((OrmaProduct) -> Unit)? = null,
     onEditClick: (OrmaProduct) -> Unit,
     onStockClick: (OrmaProduct) -> Unit,
     onImageClick: (OrmaProduct) -> Unit,
@@ -18937,6 +19148,7 @@ private fun DashboardProductRecords(
             products.forEach { product ->
                 DashboardProductRow(
                     product = product,
+                    onOpenClick = onProductClick?.let { open -> { open(product) } },
                     onEditClick = { onEditClick(product) },
                     onStockClick = { onStockClick(product) },
                     onImageClick = { onImageClick(product) },
@@ -19906,6 +20118,7 @@ private fun CustomerBookingHistoryRow(
         .ifBlank { "${order.itemCount} item${if (order.itemCount == 1) "" else "s"}" }
     val deliveryLocation = order.deliveryLocationText()
         .takeIf { it != "Not required" && it != "Delivery address not added" }
+    val canDownloadDocuments = state.hasDashboardPermission(DashboardTeamPermissionDownloadInvoice)
     fun downloadCustomerInvoice() {
         val document = orderInvoicePdfDocument(state = state, order = order)
         documentStatus = if (exporter.downloadPdf(fileName = document.fileName, pdfBase64 = document.pdfBase64)) {
@@ -20006,11 +20219,13 @@ private fun CustomerBookingHistoryRow(
                         text = "Download invoice",
                         onClick = ::downloadCustomerInvoice,
                         modifier = Modifier.fillMaxWidth(),
+                        enabled = canDownloadDocuments,
                     )
                     DashboardWideActionButton(
                         text = "Download receipt",
                         onClick = ::downloadCustomerReceipt,
                         modifier = Modifier.fillMaxWidth(),
+                        enabled = canDownloadDocuments,
                     )
                 }
             } else {
@@ -20022,11 +20237,13 @@ private fun CustomerBookingHistoryRow(
                         text = "Invoice PDF",
                         onClick = ::downloadCustomerInvoice,
                         modifier = Modifier.weight(1f),
+                        enabled = canDownloadDocuments,
                     )
                     DashboardWideActionButton(
                         text = "Receipt PDF",
                         onClick = ::downloadCustomerReceipt,
                         modifier = Modifier.weight(1f),
+                        enabled = canDownloadDocuments,
                     )
                 }
             }
@@ -20041,11 +20258,12 @@ private fun CustomerBookingHistoryRow(
 @Composable
 private fun DashboardProductRow(
     product: OrmaProduct,
+    onOpenClick: (() -> Unit)?,
     onEditClick: (() -> Unit)?,
     onStockClick: (() -> Unit)?,
     onImageClick: (() -> Unit)?,
 ) {
-    val rowModifier = onEditClick?.let { Modifier.clickable(onClick = it) } ?: Modifier
+    val rowModifier = onOpenClick?.let { Modifier.clickable(onClick = it) } ?: Modifier
     val identityText = listOfNotNull(product.sku, product.supplierName)
         .joinToString(" / ")
         .ifBlank { product.categoryName ?: product.unit }
@@ -26627,6 +26845,28 @@ private fun OrmaTeamMember.dashboardEffectiveTeamRole(
 ): String =
     if (canInviteMembers && id == currentMemberId) "business_owner" else role
 
+private fun OnboardingUiState.hasDashboardPermission(permission: String): Boolean {
+    if (accessPath != AccessPath.TeamMember) return true
+    val member = currentDashboardTeamMember() ?: return false
+    if (member.role.trim().lowercase() == "business_owner") return true
+    val permissions = dashboardNormalizeTeamPermissions(member.permissions, member.role)
+    return DashboardTeamPermissionReadOnly !in permissions && permission in permissions
+}
+
+private fun OnboardingUiState.canCreateDashboardCatalogItem(): Boolean {
+    val selected = selectedDashboardItemTypeFilter()
+    val itemTypes = if (selected == "all") allowedDashboardItemTypes() else listOf(activeDashboardItemType())
+    return itemTypes.any { itemType ->
+        hasDashboardPermission(
+            when (itemType) {
+                "service" -> DashboardTeamPermissionCreateService
+                "appointment" -> DashboardTeamPermissionCreateAppointment
+                else -> DashboardTeamPermissionCreateProduct
+            },
+        )
+    }
+}
+
 @Composable
 private fun DashboardTeamContent(
     state: OnboardingUiState,
@@ -26886,11 +27126,18 @@ private fun DashboardTeamMembersSurface(
         DashboardTeamMemberDetailsSheet(
             member = detailMember,
             effectiveRole = detailMember.dashboardEffectiveTeamRole(canInviteMembers, currentMemberId),
+            canEditAccess = canInviteMembers &&
+                detailMember.id != currentMemberId &&
+                detailMember.dashboardEffectiveTeamRole(canInviteMembers, currentMemberId) != "business_owner",
             canRemove = canInviteMembers &&
                 detailMember.id != currentMemberId &&
                 detailMember.dashboardEffectiveTeamRole(canInviteMembers, currentMemberId) != "business_owner",
             actionLoading = state.dashboard.actionLoading,
             onDismiss = { detailMemberId = null },
+            onSave = { draft ->
+                actions.onUpdateTeamMemberAccess(detailMember.id, draft)
+                detailMemberId = null
+            },
             onRemove = {
                 actions.onRemoveTeamMember(detailMember.id)
                 detailMemberId = null
@@ -27000,7 +27247,7 @@ private fun DashboardTeamInviteRow(
             }
             DashboardWideCell(
                 primary = invite.expiresAt?.dashboardDateLabel() ?: "No expiry",
-                secondary = "Expires",
+                secondary = dashboardTeamPermissionSummary(invite.permissions, invite.role),
                 modifier = Modifier.weight(0.9f),
             )
             Row(
@@ -27024,11 +27271,92 @@ private fun DashboardTeamInviteRow(
 }
 
 @Composable
+private fun DashboardTeamPermissionPicker(
+    permissions: List<String>,
+    role: String,
+    onPermissionsChange: (List<String>) -> Unit,
+    enabled: Boolean = true,
+) {
+    val selectedPermissions = dashboardNormalizeTeamPermissions(permissions, role)
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = "Permissions",
+            style = MaterialTheme.typography.labelLarge,
+            color = OrmaColors.TextSecondary,
+        )
+        DashboardTeamPermissionOptions.chunked(2).forEach { rowOptions ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                rowOptions.forEach { option ->
+                    val selected = option.key in selectedPermissions
+                    Surface(
+                        onClick = {
+                            if (enabled) {
+                                onPermissionsChange(dashboardToggleTeamPermission(selectedPermissions, option.key))
+                            }
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 72.dp)
+                            .alpha(if (enabled) 1f else 0.6f),
+                        enabled = enabled,
+                        shape = OrmaShapes.SmallCard,
+                        color = if (selected) OrmaColors.CellBackground else OrmaColors.ScreenBackground,
+                        contentColor = OrmaColors.TextPrimary,
+                        border = BorderStroke(
+                            0.7.dp,
+                            if (selected) OrmaColors.Accent.copy(alpha = 0.28f) else OrmaColors.Hairline.copy(alpha = 0.16f),
+                        ),
+                        tonalElevation = 0.dp,
+                        shadowElevation = 0.dp,
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Text(
+                                text = option.label,
+                                style = MaterialTheme.typography.labelLarge,
+                                color = if (selected) OrmaColors.Accent else OrmaColors.TextPrimary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                text = option.body,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = OrmaColors.TextSecondary,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                }
+                if (rowOptions.size == 1) {
+                    Spacer(modifier = Modifier.weight(1f))
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun DashboardTeamInviteSheet(
     onDismiss: () -> Unit,
     onSubmit: (OrmaTeamInviteDraft) -> Unit,
 ) {
-    var draft by remember { mutableStateOf(OrmaTeamInviteDraft()) }
+    var draft by remember {
+        mutableStateOf(
+            OrmaTeamInviteDraft(
+                permissions = dashboardTeamDefaultPermissions("team_member"),
+            ),
+        )
+    }
     var attemptedSubmit by rememberSaveable { mutableStateOf(false) }
     val emailError = optionalOrmaEmailError(draft.inviteeEmail)
     val phoneError = optionalOrmaPhoneError(draft.inviteePhoneNumber)
@@ -27068,7 +27396,17 @@ private fun DashboardTeamInviteSheet(
             options = DashboardTeamInviteRoles,
             selected = draft.role,
             label = { teamRoleLabel(it) },
-            onSelected = { draft = draft.copy(role = it) },
+            onSelected = {
+                draft = draft.copy(
+                    role = it,
+                    permissions = dashboardTeamDefaultPermissions(it),
+                )
+            },
+        )
+        DashboardTeamPermissionPicker(
+            permissions = draft.permissions,
+            role = draft.role,
+            onPermissionsChange = { draft = draft.copy(permissions = it) },
         )
         if (attemptedSubmit && !hasContact) {
             FormValidationText("Add an email or phone number.")
@@ -27084,6 +27422,7 @@ private fun DashboardTeamInviteSheet(
                             inviteeEmail = draft.inviteeEmail.trim(),
                             inviteePhoneNumber = draft.inviteePhoneNumber.trim(),
                             role = draft.role.ifBlank { "team_member" },
+                            permissions = dashboardNormalizeTeamPermissions(draft.permissions, draft.role),
                         ),
                     )
                 }
@@ -27099,14 +27438,28 @@ private fun DashboardTeamInviteSheet(
 private fun DashboardTeamMemberDetailsSheet(
     member: OrmaTeamMember,
     effectiveRole: String = member.role,
+    canEditAccess: Boolean,
     canRemove: Boolean,
     actionLoading: Boolean,
     onDismiss: () -> Unit,
+    onSave: (OrmaTeamMemberAccessDraft) -> Unit,
     onRemove: () -> Unit,
 ) {
+    var draft by remember(member.id, effectiveRole, member.permissions) {
+        mutableStateOf(
+            OrmaTeamMemberAccessDraft(
+                role = effectiveRole,
+                permissions = dashboardNormalizeTeamPermissions(member.permissions, effectiveRole),
+            ),
+        )
+    }
     DashboardFormSheet(
-        title = "Team member details",
-        body = "Review this account before changing workspace access.",
+        title = if (canEditAccess) "Edit team access" else "Team member details",
+        body = if (canEditAccess) {
+            "Set role presets, then fine tune exactly what this staff member can do."
+        } else {
+            "Review this account and its current workspace access."
+        },
         onDismiss = onDismiss,
     ) {
         OrmaKeyValueList(
@@ -27115,20 +27468,67 @@ private fun DashboardTeamMemberDetailsSheet(
                 "Email" to (member.email ?: "Not saved"),
                 "Phone" to (member.phoneNumber ?: "Not saved"),
                 "Role" to teamRoleLabel(effectiveRole),
+                "Permissions" to dashboardTeamPermissionSummary(member.permissions, effectiveRole),
                 "Status" to member.status.dashboardTeamStatusLabel(),
                 "Joined" to member.joinedAt.dashboardDateLabel(),
             ),
         )
+        if (canEditAccess) {
+            Text(
+                text = "Role preset",
+                style = MaterialTheme.typography.labelLarge,
+                color = OrmaColors.TextSecondary,
+            )
+            OrmaSegmentedRow(
+                options = DashboardTeamInviteRoles,
+                selected = draft.role,
+                label = { teamRoleLabel(it) },
+                onSelected = {
+                    draft = draft.copy(
+                        role = it,
+                        permissions = dashboardTeamDefaultPermissions(it),
+                    )
+                },
+            )
+            DashboardTeamPermissionPicker(
+                permissions = draft.permissions,
+                role = draft.role,
+                onPermissionsChange = { draft = draft.copy(permissions = it) },
+                enabled = !actionLoading,
+            )
+        } else {
+            DashboardTeamPermissionPicker(
+                permissions = member.permissions,
+                role = effectiveRole,
+                onPermissionsChange = {},
+                enabled = false,
+            )
+        }
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             OrmaSecondaryButton(
-                text = "Close details",
+                text = "Close",
                 onClick = LocalSmoothSheetDismiss.current ?: onDismiss,
                 modifier = Modifier.weight(1f),
             )
+            if (canEditAccess) {
+                OrmaPrimaryButton(
+                    text = "Save access",
+                    onClick = {
+                        onSave(
+                            draft.copy(
+                                role = draft.role.ifBlank { "team_member" },
+                                permissions = dashboardNormalizeTeamPermissions(draft.permissions, draft.role),
+                            ),
+                        )
+                    },
+                    modifier = Modifier.weight(1f),
+                    enabled = !actionLoading,
+                )
+            }
             OrmaPrimaryButton(
                 text = "Remove",
                 onClick = onRemove,
@@ -27156,6 +27556,7 @@ private fun DashboardTeamInviteDetailsSheet(
                 "Invitee" to invite.dashboardInviteName(),
                 "Contact" to invite.dashboardInviteContact(),
                 "Role" to teamRoleLabel(invite.role),
+                "Permissions" to dashboardTeamPermissionSummary(invite.permissions, invite.role),
                 "Status" to invite.status.dashboardInviteStatusLabel(),
                 "Code" to invite.code.ifBlank { "Not available" },
                 "Created" to invite.createdAt.dashboardDateLabel(),
@@ -27334,10 +27735,21 @@ private fun DashboardWideTeamMemberRow(
                     .ifBlank { "No contact saved" },
                 modifier = Modifier.weight(1.15f),
             )
-            Box(modifier = Modifier.weight(0.85f), contentAlignment = Alignment.CenterStart) {
+            Column(
+                modifier = Modifier.weight(0.85f),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+                horizontalAlignment = Alignment.Start,
+            ) {
                 OrmaBadge(
                     text = teamRoleLabel(effectiveRole).uppercase(),
                     tone = if (effectiveRole == "business_owner") OrmaStatusTone.Success else OrmaStatusTone.Info,
+                )
+                Text(
+                    text = dashboardTeamPermissionSummary(member.permissions, effectiveRole),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = OrmaColors.TextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
             DashboardWideCell(
@@ -27483,6 +27895,7 @@ private fun DashboardTeamMemberRow(
             }
             OrmaKeyValueList(
                 rows = listOf(
+                    "Permissions" to dashboardTeamPermissionSummary(member.permissions, member.role),
                     "Status" to member.status.dashboardTeamStatusLabel(),
                     "Joined" to member.joinedAt.dashboardDateLabel(),
                 ),
@@ -27505,6 +27918,7 @@ private val DashboardTeamInviteRoles = listOf(
     "sales_staff",
     "inventory_manager",
     "accountant",
+    "read_only",
 )
 
 private fun OrmaTeamInvite.dashboardInviteName(): String =

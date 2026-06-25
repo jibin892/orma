@@ -231,7 +231,13 @@ fun Route.dashboardRoutes(
             call.respondValidation("offer_product_required", "Choose the product or service for this offer.")
             return@post
         }
-        call.respondWorkspaceResult(repository.createProductOffer(firebaseUser, request))
+        val offer = try {
+            repository.createProductOffer(firebaseUser, request)
+        } catch (error: DashboardOrderValidationException) {
+            call.respondValidation(error.code, error.message ?: "Check the offer details.")
+            return@post
+        }
+        call.respondWorkspaceResult(offer)
     }
 
     get("/products/export") {
@@ -256,7 +262,13 @@ fun Route.dashboardRoutes(
             call.respondValidation("product_import_empty", "Paste or upload a product CSV before importing.")
             return@post
         }
-        call.respondWorkspaceResult(repository.importProductsCsv(firebaseUser, request.csv))
+        val result = try {
+            repository.importProductsCsv(firebaseUser, request.csv)
+        } catch (error: DashboardOrderValidationException) {
+            call.respondValidation(error.code, error.message ?: "Check the import permissions.")
+            return@post
+        }
+        call.respondWorkspaceResult(result)
     }
 
     post("/products/import") {
@@ -271,7 +283,13 @@ fun Route.dashboardRoutes(
             call.respondValidation("product_import_limit", "Import up to 500 product rows at a time.")
             return@post
         }
-        call.respondWorkspaceResult(repository.importProducts(firebaseUser, request))
+        val result = try {
+            repository.importProducts(firebaseUser, request)
+        } catch (error: DashboardOrderValidationException) {
+            call.respondValidation(error.code, error.message ?: "Check the import permissions.")
+            return@post
+        }
+        call.respondWorkspaceResult(result)
     }
 
     post("/products") {
@@ -330,7 +348,13 @@ fun Route.dashboardRoutes(
             call.respondValidation("product_expiry_invalid", "Choose a valid expiry date.")
             return@post
         }
-        call.respondWorkspaceResult(repository.adjustStock(firebaseUser, productId, request))
+        val product = try {
+            repository.adjustStock(firebaseUser, productId, request)
+        } catch (error: DashboardOrderValidationException) {
+            call.respondValidation(error.code, error.message ?: "Check the stock update.")
+            return@post
+        }
+        call.respondWorkspaceResult(product)
     }
 
     get("/orders") {

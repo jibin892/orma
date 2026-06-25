@@ -12,6 +12,7 @@ import com.orma.backend.models.NotificationPreferenceRequest
 import com.orma.backend.models.OnboardingMutationResponse
 import com.orma.backend.models.TeamInviteRequest
 import com.orma.backend.models.TeamInviteResponse
+import com.orma.backend.models.TeamMemberAccessRequest
 import com.orma.backend.models.TeamMemberResponse
 import com.orma.backend.models.TeamOverviewResponse
 import io.ktor.http.HttpStatusCode
@@ -120,6 +121,24 @@ fun Route.onboardingRoutes(
         call.respond(overview.toResponse(config))
     }
 
+    post("/onboarding/team/members/{id}/access") {
+        val repository = onboardingRepository ?: return@post call.databaseNotConfigured()
+        val firebaseUser = call.verifiedFirebaseUser(config) ?: return@post
+        val memberId = call.parameters["id"].orEmpty()
+        val request = call.receive<TeamMemberAccessRequest>()
+        val overview = try {
+            repository.updateTeamMemberAccess(firebaseUser, memberId, request)
+        } catch (error: TeamAccessException) {
+            call.respondTeamAccessError(error)
+            return@post
+        }
+        if (overview == null) {
+            call.respondTeamWorkspaceNotFound()
+            return@post
+        }
+        call.respond(overview.toResponse(config))
+    }
+
     post("/onboarding/notifications") {
         val request = call.receive<NotificationPreferenceRequest>()
         if (request.enabled && request.deviceToken.isNullOrBlank()) {
@@ -181,6 +200,7 @@ private fun TeamMemberRecord.toResponse(): TeamMemberResponse =
         email = email,
         phoneNumber = phoneNumber,
         role = role,
+        permissions = permissions,
         status = status,
         joinedAt = joinedAt,
     )
@@ -193,6 +213,7 @@ private fun TeamInviteRecord.toResponse(): TeamInviteResponse =
         inviteeEmail = inviteeEmail,
         inviteePhoneNumber = inviteePhoneNumber,
         role = role,
+        permissions = permissions,
         status = status,
         createdAt = createdAt,
         expiresAt = expiresAt,

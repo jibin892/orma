@@ -54,6 +54,7 @@ data class OrmaTeamMember(
     val email: String?,
     val phoneNumber: String?,
     val role: String,
+    val permissions: List<String> = emptyList(),
     val status: String,
     val joinedAt: String,
 )
@@ -65,6 +66,7 @@ data class OrmaTeamInvite(
     val inviteeEmail: String?,
     val inviteePhoneNumber: String?,
     val role: String,
+    val permissions: List<String> = emptyList(),
     val status: String,
     val createdAt: String,
     val expiresAt: String?,
@@ -77,6 +79,12 @@ data class OrmaTeamInviteDraft(
     val inviteeEmail: String = "",
     val inviteePhoneNumber: String = "",
     val role: String = "team_member",
+    val permissions: List<String> = emptyList(),
+)
+
+data class OrmaTeamMemberAccessDraft(
+    val role: String = "team_member",
+    val permissions: List<String> = emptyList(),
 )
 
 data class OrmaMediaUpload(
@@ -850,6 +858,7 @@ class OrmaBackendClient(
                         "inviteeEmail" to JsonValue.StringValue(draft.inviteeEmail.blankToNull()),
                         "inviteePhoneNumber" to JsonValue.StringValue(draft.inviteePhoneNumber.blankToNull()),
                         "role" to JsonValue.StringValue(draft.role.ifBlank { "team_member" }),
+                        "permissions" to JsonValue.RawValue(draft.permissions.jsonStringArrayLiteral()),
                     ),
                 )
             },
@@ -883,6 +892,26 @@ class OrmaBackendClient(
                     url = config.url("/onboarding/team/members/${memberId.urlQueryEscaped()}/remove"),
                     bearerToken = idToken,
                     body = buildJsonObject(),
+                )
+            },
+            parse = { it.toTeamOverview() },
+        )
+
+    suspend fun updateTeamMemberAccess(
+        idToken: String,
+        memberId: String,
+        draft: OrmaTeamMemberAccessDraft,
+    ): OrmaBackendResult<OrmaTeamOverview> =
+        executeBackendRequest(
+            actionTitle = "Update team access",
+            request = {
+                ormaPostJsonAuthorized(
+                    url = config.url("/onboarding/team/members/${memberId.urlQueryEscaped()}/access"),
+                    bearerToken = idToken,
+                    body = buildJsonObject(
+                        "role" to JsonValue.StringValue(draft.role.ifBlank { "team_member" }),
+                        "permissions" to JsonValue.RawValue(draft.permissions.jsonStringArrayLiteral()),
+                    ),
                 )
             },
             parse = { it.toTeamOverview() },
@@ -2036,6 +2065,7 @@ private fun String.toTeamMember(): OrmaTeamMember =
         email = jsonString("email"),
         phoneNumber = jsonString("phoneNumber"),
         role = jsonString("role").orEmpty(),
+        permissions = jsonStringArray("permissions"),
         status = jsonString("status").orEmpty(),
         joinedAt = jsonString("joinedAt").orEmpty(),
     )
@@ -2048,6 +2078,7 @@ private fun String.toTeamInvite(): OrmaTeamInvite =
         inviteeEmail = jsonString("inviteeEmail"),
         inviteePhoneNumber = jsonString("inviteePhoneNumber"),
         role = jsonString("role").orEmpty(),
+        permissions = jsonStringArray("permissions"),
         status = jsonString("status").orEmpty(),
         createdAt = jsonString("createdAt").orEmpty(),
         expiresAt = jsonString("expiresAt"),
@@ -2682,6 +2713,9 @@ private fun String.jsonEscaped(): String =
             }
         }
     }
+
+private fun List<String>.jsonStringArrayLiteral(): String =
+    joinToString(prefix = "[", postfix = "]") { "\"${it.jsonEscaped()}\"" }
 
 private fun String.jsonUnescaped(): String =
     replace("\\\"", "\"")
