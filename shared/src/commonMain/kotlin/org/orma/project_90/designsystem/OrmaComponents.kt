@@ -463,7 +463,7 @@ fun OrmaPrice(
         text = "$currency $amount",
         modifier = modifier,
         style = MaterialTheme.typography.titleSmall,
-        color = if (dark) OrmaColors.DarkTextPrimary else OrmaColors.TextPrimary,
+        color = if (dark) OrmaColors.DarkTextPrimary else OrmaColors.Accent,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
     )

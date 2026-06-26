@@ -313,10 +313,13 @@ fun OrmaDashboardMetricLine(
         Text(
             text = value,
             style = MaterialTheme.typography.titleMedium,
-            color = OrmaColors.TextPrimary,
+            color = if (value.ormaLooksLikeAmountText()) OrmaColors.Accent else OrmaColors.TextPrimary,
         )
     }
 }
+
+private fun String.ormaLooksLikeAmountText(): Boolean =
+    Regex("\\b(?:INR|AED|USD|EUR|GBP|SAR|QAR|KWD|OMR|BHD)\\b").containsMatchIn(this)
 
 /**
  * Dashboard panel with a title, description, and free content slot.

@@ -1285,7 +1285,11 @@ fun OrmaKeyValueList(
                         text = row.second.ifBlank { "Not set" },
                         modifier = Modifier.weight(1.1f),
                         style = MaterialTheme.typography.labelMedium,
-                        color = if (dark) OrmaColors.DarkTextPrimary else OrmaColors.TextPrimary,
+                        color = when {
+                            dark -> OrmaColors.DarkTextPrimary
+                            row.second.ormaLooksLikeAmountText() -> OrmaColors.Accent
+                            else -> OrmaColors.TextPrimary
+                        },
                         textAlign = TextAlign.End,
                     )
                 }
@@ -1296,6 +1300,9 @@ fun OrmaKeyValueList(
         }
     }
 }
+
+private fun String.ormaLooksLikeAmountText(): Boolean =
+    Regex("\\b(?:INR|AED|USD|EUR|GBP|SAR|QAR|KWD|OMR|BHD)\\b").containsMatchIn(this)
 
 @Composable
 fun OrmaUploadRow(
