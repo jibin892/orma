@@ -2173,6 +2173,7 @@ private fun DashboardWideStage(
     var sidebarCollapsed by rememberSaveable { mutableStateOf(false) }
     val contentScrollState = rememberScrollState()
     var contentScrollResetKey by rememberSaveable { mutableStateOf(0) }
+    var quickCreateOrderType by rememberSaveable { mutableStateOf<String?>(null) }
     val sidebarWidth by animateDpAsState(
         targetValue = if (sidebarCollapsed) 86.dp else 270.dp,
         animationSpec = tween(durationMillis = 240, easing = FastOutSlowInEasing),
@@ -2200,6 +2201,11 @@ private fun DashboardWideStage(
                 canInviteMembers = canInviteMembers,
                 canUseMarketing = canUseMarketing,
                 onSectionSelected = onSectionSelected,
+                onQuickCreateOrder = { orderType ->
+                    quickCreateOrderType = orderType.takeIf { it in DashboardCounterCreateOrderTypes }
+                    onSectionSelected(DashboardSection.OrdersBookings)
+                    contentScrollResetKey += 1
+                },
                 onLogout = onLogout,
                 collapsed = sidebarCollapsed,
                 onToggleCollapsed = { sidebarCollapsed = !sidebarCollapsed },
@@ -2249,6 +2255,8 @@ private fun DashboardWideStage(
                             onOpenTeam = null,
                             onOpenOrders = { onSectionSelected(DashboardSection.OrdersBookings) },
                             onOpenProducts = { onSectionSelected(DashboardSection.Products) },
+                            quickCreateOrderType = quickCreateOrderType,
+                            onQuickCreateOrderConsumed = { quickCreateOrderType = null },
                             wide = true,
                             onRequestScrollTop = { contentScrollResetKey += 1 },
                         )
@@ -3544,6 +3552,7 @@ private fun DashboardSidebar(
     canInviteMembers: Boolean,
     canUseMarketing: Boolean,
     onSectionSelected: (DashboardSection) -> Unit,
+    onQuickCreateOrder: (String) -> Unit,
     onLogout: () -> Unit,
     collapsed: Boolean,
     onToggleCollapsed: () -> Unit,
@@ -3566,6 +3575,11 @@ private fun DashboardSidebar(
             DashboardSidebarBrand(
                 collapsed = collapsed,
                 onToggleCollapsed = onToggleCollapsed,
+            )
+            DashboardSidebarQuickAction(
+                state = state,
+                collapsed = collapsed,
+                onCreate = onQuickCreateOrder,
             )
 
             Column(
@@ -3601,6 +3615,85 @@ private fun DashboardSidebar(
                 onClick = { onSectionSelected(DashboardSection.Account) },
                 collapsed = collapsed,
             )
+        }
+    }
+}
+
+@Composable
+private fun DashboardSidebarQuickAction(
+    state: OnboardingUiState,
+    collapsed: Boolean,
+    onCreate: (String) -> Unit,
+) {
+    val orderType = state.activeDashboardOrderType()
+        .takeIf { it in DashboardCounterCreateOrderTypes }
+        ?: state.dashboardBusinessMode().defaultDashboardOrderType()
+    val label = orderType.orderActionText()
+    val enabled = !state.dashboard.loading &&
+        !state.dashboard.actionLoading &&
+        state.hasDashboardPermission(DashboardTeamPermissionCreateSale)
+    val quickActionAlpha = if (enabled) 1f else 0.52f
+    Surface(
+        onClick = { onCreate(orderType) },
+        enabled = enabled,
+        modifier = if (collapsed) {
+            Modifier
+                .size(48.dp)
+                .alpha(quickActionAlpha)
+        } else {
+            Modifier
+                .fillMaxWidth()
+                .heightIn(min = 54.dp)
+                .alpha(quickActionAlpha)
+        },
+        shape = if (collapsed) OrmaShapes.Capsule else OrmaShapes.PremiumCard,
+        color = OrmaColors.Accent,
+        contentColor = OrmaColors.ScreenBackground,
+        border = null,
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
+    ) {
+        Row(
+            modifier = if (collapsed) {
+                Modifier.fillMaxSize()
+            } else {
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 12.dp)
+            },
+            horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OrmaFlatIcon(
+                kind = OrmaFlatIconKind.Plus,
+                color = OrmaColors.ScreenBackground,
+                modifier = Modifier.size(18.dp),
+            )
+            if (!collapsed) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(1.dp),
+                ) {
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = OrmaColors.ScreenBackground,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = when (orderType) {
+                            "service" -> "Quick service request"
+                            "appointment" -> "Quick appointment"
+                            else -> "Quick counter sale"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = OrmaColors.ScreenBackground.copy(alpha = 0.72f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
         }
     }
 }
@@ -4667,6 +4760,8 @@ private fun DashboardSectionContent(
     onOpenProducts: (() -> Unit)?,
     onOpenInvoices: (() -> Unit)? = null,
     onOpenMarketing: (() -> Unit)? = null,
+    quickCreateOrderType: String? = null,
+    onQuickCreateOrderConsumed: (() -> Unit)? = null,
     wide: Boolean,
     mobileSelectedOrderId: String? = null,
     onMobileSelectedOrderChange: ((String?) -> Unit)? = null,
@@ -4689,6 +4784,8 @@ private fun DashboardSectionContent(
             state = state,
             actions = actions,
             wide = wide,
+            quickCreateOrderType = quickCreateOrderType,
+            onQuickCreateOrderConsumed = onQuickCreateOrderConsumed,
             mobileSelectedOrderId = mobileSelectedOrderId,
             onMobileSelectedOrderChange = onMobileSelectedOrderChange,
         )
@@ -7710,6 +7807,8 @@ private fun DashboardOrdersContent(
     state: OnboardingUiState,
     actions: OnboardingActions,
     wide: Boolean,
+    quickCreateOrderType: String? = null,
+    onQuickCreateOrderConsumed: (() -> Unit)? = null,
     mobileSelectedOrderId: String? = null,
     onMobileSelectedOrderChange: ((String?) -> Unit)? = null,
 ) {
@@ -7733,6 +7832,18 @@ private fun DashboardOrdersContent(
     val partPaymentOrder = state.dashboard.orders.firstOrNull { it.id == partPaymentOrderId }
     val orderType = state.activeDashboardOrderType()
     val selectedOrderType = state.selectedDashboardOrderTypeFilter()
+    LaunchedEffect(quickCreateOrderType, wide) {
+        val requestedType = quickCreateOrderType?.takeIf { it in DashboardCounterCreateOrderTypes }
+        if (wide && requestedType != null) {
+            selectedOrderId = null
+            fullDetailsOrderId = null
+            editOrderId = null
+            partPaymentOrderId = null
+            createOrderTypeOverride = requestedType
+            showOrderBuilderPage = true
+            onQuickCreateOrderConsumed?.invoke()
+        }
+    }
     val requestOrderStatusChange: (OrmaOrder, String) -> Unit = { order, status ->
         if (status == "part_paid") {
             partPaymentOrderId = order.id
