@@ -1203,6 +1203,33 @@ class OrmaBackendClient(
             parse = { it.toProductOffer() },
         )
 
+    suspend fun updateProductOffer(
+        idToken: String,
+        offerId: String,
+        draft: OrmaProductOfferDraft,
+    ): OrmaBackendResult<OrmaProductOffer> =
+        executeBackendRequest(
+            actionTitle = "Update offer",
+            request = {
+                ormaPutJsonAuthorized(
+                    url = config.url("/offers/$offerId"),
+                    bearerToken = idToken,
+                    body = buildJsonObject(
+                        "appliesTo" to JsonValue.StringValue(draft.appliesTo),
+                        "productId" to JsonValue.StringValue(draft.productId.blankToNull()),
+                        "categoryId" to JsonValue.StringValue(draft.categoryId.blankToNull()),
+                        "name" to JsonValue.StringValue(draft.name),
+                        "description" to JsonValue.StringValue(draft.description.blankToNull()),
+                        "discountType" to JsonValue.StringValue(draft.discountType),
+                        "discountValue" to JsonValue.StringValue(draft.discountValue.blankToZero()),
+                        "startsAt" to JsonValue.StringValue(draft.startsAt.blankToNull()),
+                        "endsAt" to JsonValue.StringValue(draft.endsAt.blankToNull()),
+                    ),
+                )
+            },
+            parse = { it.toProductOffer() },
+        )
+
     suspend fun listProducts(
         idToken: String,
         filters: OrmaDashboardFilters = OrmaDashboardFilters(),

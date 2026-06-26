@@ -708,6 +708,43 @@ class DashboardRepository(
         }
     }
 
+    suspend fun updateProductOffer(
+        firebaseUser: VerifiedFirebaseUser,
+        offerId: String,
+        request: ProductOfferRequest,
+    ): ProductOfferResponse? = withContext(Dispatchers.IO) {
+        dataSource.connection.use { connection ->
+            connection.autoCommit = false
+            try {
+                val access = connection.resolveWorkspaceAccess(firebaseUser) ?: run {
+                    connection.rollback()
+                    return@withContext null
+                }
+                access.requirePermission(PermissionCreateOffer, "update offers")
+                val offer = connection.updateProductOffer(access.workspaceId, offerId, request)
+                if (offer != null) {
+                    connection.insertWorkspaceActivity(
+                        access = access,
+                        activityType = "offer_updated",
+                        entityType = "product_offer",
+                        entityId = offer.id,
+                        entityLabel = offer.name,
+                        title = "Offer updated",
+                        body = offer.name,
+                        tone = "info",
+                    )
+                }
+                connection.commit()
+                offer
+            } catch (error: Throwable) {
+                connection.rollback()
+                throw error
+            } finally {
+                connection.autoCommit = true
+            }
+        }
+    }
+
     suspend fun paymentMethods(
         firebaseUser: VerifiedFirebaseUser,
         filters: DashboardQueryFilters = DashboardQueryFilters(),
@@ -2780,6 +2817,53 @@ class DashboardRepository(
             statement.executeQuery().use { result ->
                 result.next()
                 result.toProductOfferResponse()
+            }
+        }
+    }
+
+    private fun Connection.updateProductOffer(
+        workspaceId: String,
+        offerId: String,
+        request: ProductOfferRequest,
+    ): ProductOfferResponse? {
+        val appliesTo = request.appliesTo.cleanOfferScope()
+        val sql = """
+            update product_offers
+            set product_id = ?::uuid, category_id = ?::uuid, applies_to = ?, name = ?, description = ?,
+                discount_type = ?, discount_value = ?, starts_at = ?::timestamptz, ends_at = ?::timestamptz,
+                updated_at = now()
+            where id = ?::uuid and workspace_id = ?::uuid and status = 'active'
+            returning
+                id::text,
+                applies_to,
+                product_id::text,
+                (select name from products where id = product_offers.product_id) as product_name,
+                category_id::text,
+                (select name from product_categories where id = product_offers.category_id) as category_name,
+                name,
+                description,
+                discount_type,
+                discount_value,
+                starts_at::text,
+                ends_at::text,
+                status,
+                created_at::text,
+                updated_at::text
+        """.trimIndent()
+        return prepareStatement(sql).use { statement ->
+            statement.setNullableUuid(1, if (appliesTo == "product") request.productId else null)
+            statement.setNullableUuid(2, if (appliesTo == "category") request.categoryId else null)
+            statement.setString(3, appliesTo)
+            statement.setString(4, request.name.cleanName())
+            statement.setNullableString(5, request.description?.cleanOptional())
+            statement.setString(6, request.discountType.cleanDiscountType())
+            statement.setBigDecimal(7, request.discountValue.decimalOrZero().coerceAtLeast(BigDecimal.ZERO))
+            statement.setNullableString(8, request.startsAt?.cleanOptional())
+            statement.setNullableString(9, request.endsAt?.cleanOptional())
+            statement.setString(10, offerId)
+            statement.setString(11, workspaceId)
+            statement.executeQuery().use { result ->
+                if (result.next()) result.toProductOfferResponse() else null
             }
         }
     }

@@ -830,7 +830,7 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
                 is OrmaBackendResult.Failure -> null
             }
             val offers = when (val result = listWithPageRecovery(snapshot.dashboard.offerPagination.page) { page ->
-                backendClient.listProductOffers(idToken, neutralFilters.copy(page = page))
+                backendClient.listProductOffers(idToken, productFilters.copy(page = page))
             }) {
                 is OrmaBackendResult.Success -> result.value
                 is OrmaBackendResult.Failure -> null
@@ -1035,6 +1035,9 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
                 DashboardPageTarget.Suppliers -> snapshot.dashboard.copy(
                     supplierPagination = snapshot.dashboard.supplierPagination.copy(page = nextPage),
                 )
+                DashboardPageTarget.Offers -> snapshot.dashboard.copy(
+                    offerPagination = snapshot.dashboard.offerPagination.copy(page = nextPage),
+                )
                 DashboardPageTarget.Products -> snapshot.dashboard.copy(
                     productPagination = snapshot.dashboard.productPagination.copy(page = nextPage),
                 )
@@ -1114,6 +1117,19 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
             val idToken = freshDashboardTokenOrError(snapshot) ?: return@launch
             when (val result = backendClient.createProductOffer(idToken, draft)) {
                 is OrmaBackendResult.Success -> refreshDashboard("Offer created.")
+                is OrmaBackendResult.Failure -> applyDashboardFailure(result.title, result.message, result.code)
+            }
+        }
+    }
+
+    fun updateDashboardProductOffer(offerId: String, draft: OrmaProductOfferDraft) {
+        val snapshot = state
+        if (snapshot.dashboard.actionLoading || offerId.isBlank() || draft.name.trim().length < 2) return
+        markDashboardActionLoading()
+        scope.launch {
+            val idToken = freshDashboardTokenOrError(snapshot) ?: return@launch
+            when (val result = backendClient.updateProductOffer(idToken, offerId, draft)) {
+                is OrmaBackendResult.Success -> refreshDashboard("Offer updated.")
                 is OrmaBackendResult.Failure -> applyDashboardFailure(result.title, result.message, result.code)
             }
         }
@@ -2203,6 +2219,7 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
         onUpdateSupplier = ::updateDashboardSupplier,
         onCreateProductCategory = ::createDashboardProductCategory,
         onCreateProductOffer = ::createDashboardProductOffer,
+        onUpdateProductOffer = ::updateDashboardProductOffer,
         onCreateProduct = ::createDashboardProduct,
         onUpdateProduct = ::updateDashboardProduct,
         onUploadProductImage = ::uploadDashboardProductImage,
@@ -2425,6 +2442,7 @@ private fun DashboardDataState.withResetPagination(
         DashboardFilterScopeProducts -> base.copy(
             productPagination = productPagination.copy(page = 1),
             supplierPagination = supplierPagination.copy(page = 1),
+            offerPagination = offerPagination.copy(page = 1),
         )
         DashboardFilterScopeMarketing -> base.copy(
             marketingProductPagination = marketingProductPagination.copy(page = 1),

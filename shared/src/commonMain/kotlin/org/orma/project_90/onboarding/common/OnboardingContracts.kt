@@ -62,6 +62,7 @@ internal enum class DashboardPageTarget {
     Invoices,
     Customers,
     Suppliers,
+    Offers,
     Products,
 }
 
@@ -232,6 +233,7 @@ internal data class OnboardingActions(
     val onUpdateSupplier: (String, OrmaSupplierDraft) -> Unit,
     val onCreateProductCategory: (OrmaProductCategoryDraft) -> Unit,
     val onCreateProductOffer: (OrmaProductOfferDraft) -> Unit,
+    val onUpdateProductOffer: (String, OrmaProductOfferDraft) -> Unit,
     val onCreateProduct: (OrmaProductDraft) -> Unit,
     val onUpdateProduct: (String, OrmaProductDraft) -> Unit,
     val onUploadProductImage: (String, OrmaPickedImage) -> Unit,

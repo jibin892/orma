@@ -1,6 +1,6 @@
 @font-face {
     font-family: "Google Sans";
-    src: url("composeResources/orma.shared.generated.resources/font/google_sans_regular.ttf") format("truetype");
+    src: url("fonts/google_sans_regular.woff2") format("woff2");
     font-style: normal;
     font-weight: 400;
     font-display: block;
@@ -8,7 +8,7 @@
 
 @font-face {
     font-family: "Google Sans";
-    src: url("composeResources/orma.shared.generated.resources/font/google_sans_medium.ttf") format("truetype");
+    src: url("fonts/google_sans_medium.woff2") format("woff2");
     font-style: normal;
     font-weight: 500;
     font-display: block;
@@ -16,7 +16,7 @@
 
 @font-face {
     font-family: "Google Sans";
-    src: url("composeResources/orma.shared.generated.resources/font/google_sans_semibold.ttf") format("truetype");
+    src: url("fonts/google_sans_semibold.woff2") format("woff2");
     font-style: normal;
     font-weight: 600;
     font-display: block;
@@ -24,7 +24,7 @@
 
 @font-face {
     font-family: "Google Sans";
-    src: url("composeResources/orma.shared.generated.resources/font/google_sans_bold.ttf") format("truetype");
+    src: url("fonts/google_sans_bold.woff2") format("woff2");
     font-style: normal;
     font-weight: 700;
     font-display: block;

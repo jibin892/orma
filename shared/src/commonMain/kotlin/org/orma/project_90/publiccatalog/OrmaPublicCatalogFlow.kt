@@ -5,13 +5,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -1365,32 +1365,58 @@ private fun PublicCatalogProducts(
                     activeCartType = selectedCartItemType,
                     onTypeChange = { selectedTypeFilter = it },
                 )
-                PublicCatalogCategoryFilter(
-                    catalog = catalog,
-                    selectedCategoryId = selectedCategoryId,
-                    onCategoryChange = onCategoryChange,
-                )
-                PublicCatalogOffersStrip(
-                    products = searchedProducts,
-                    quantities = quantities,
-                    activeCartType = selectedCartItemType,
-                    onApplyOffer = { productId ->
-                        onQuantityChange(productId, (quantities[productId] ?: 0).coerceAtLeast(1))
-                    },
-                )
-                if (searchedProducts.isEmpty()) {
-                    PublicCatalogEmpty(
-                        title = "No matches",
-                        body = "Try another search or category.",
-                    )
-                } else {
-                    PublicCatalogProductGrid(
-                        products = searchedProducts,
-                        quantities = quantities,
-                        activeCartType = selectedCartItemType,
-                        onQuantityChange = onQuantityChange,
-                    )
-                }
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(20.dp),
+                    content = {
+                        PublicCatalogCategoryFilter(
+                            catalog = catalog,
+                            selectedCategoryId = selectedCategoryId,
+                            onCategoryChange = onCategoryChange,
+                        )
+                        PublicCatalogOffersStrip(
+                            products = searchedProducts,
+                            quantities = quantities,
+                            activeCartType = selectedCartItemType,
+                            onApplyOffer = { productId ->
+                                onQuantityChange(productId, (quantities[productId] ?: 0).coerceAtLeast(1))
+                            },
+                        )
+                        if (searchedProducts.isEmpty()) {
+                            PublicCatalogEmpty(
+                                title = "No matches",
+                                body = "Try another search or category.",
+                            )
+                        } else {
+                          Column ( verticalArrangement = Arrangement.spacedBy(12.dp),){
+                              Column(
+                                  modifier = Modifier.fillMaxWidth(),
+                                  verticalArrangement = Arrangement.spacedBy(2.dp),
+                              ) {
+                                  Text(
+                                      text = "Catalog",
+                                      style = MaterialTheme.typography.titleSmall,
+                                      color = OrmaColors.TextPrimary,
+                                      fontWeight = FontWeight.SemiBold,
+                                      maxLines = 1,
+                                      overflow = TextOverflow.Ellipsis,
+                                  )
+//                                Text(
+//                                    text = "Swipe and apply an offer to this session cart.",
+//                                    style = MaterialTheme.typography.bodyMedium,
+//                                    color = OrmaColors.TextSecondary,
+//                                    maxLines = 1,
+//                                    overflow = TextOverflow.Ellipsis,
+//                                )
+                              }
+                              PublicCatalogProductGrid(
+                                  products = searchedProducts,
+                                  quantities = quantities,
+                                  activeCartType = selectedCartItemType,
+                                  onQuantityChange = onQuantityChange,
+                              )
+                          }
+                        }
+                    })
             }
         }
     }
@@ -1812,16 +1838,16 @@ private fun PublicCatalogCheckout(
                 onNewOrder = onNewOrder,
             )
         } else {
-            PublicCatalogCheckoutHeader(
-                title = checkoutTitle,
-                body = checkoutPrompt,
-                itemCount = itemCount,
-                total = estimatedTotal,
-                offerSavings = offerSavings,
-                currency = currency,
-                ready = submitEnabled,
-                submitting = submitting,
-            )
+//            PublicCatalogCheckoutHeader(
+//                title = checkoutTitle,
+//                body = checkoutPrompt,
+//                itemCount = itemCount,
+//                total = estimatedTotal,
+//                offerSavings = offerSavings,
+//                currency = currency,
+//                ready = submitEnabled,
+//                submitting = submitting,
+//            )
             PublicCatalogSelectionSummary(
                 catalog = catalog,
                 selectedItems = selectedItems,
@@ -1845,11 +1871,11 @@ private fun PublicCatalogCheckout(
                     )
                 }
             } else {
-                PublicCatalogTrustStrip(
-                    hasUpi = hasUpi,
-                    hasWhatsApp = hasWhatsApp,
-                    selectedFulfillment = selectedFulfillment,
-                )
+//                PublicCatalogTrustStrip(
+//                    hasUpi = hasUpi,
+//                    hasWhatsApp = hasWhatsApp,
+//                    selectedFulfillment = selectedFulfillment,
+//                )
                 OrmaSectionHeader(text = "Contact details")
                 OrmaTextField(
                     value = customerName,
@@ -1972,7 +1998,7 @@ private fun PublicCatalogCheckoutHeader(
                     modifier = Modifier.padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
-                    PublicCatalogCheckoutTitle(title = title, body = body, status = status)
+//                    PublicCatalogCheckoutTitle(title = title, body = body, status = status)
                     metrics.chunked(2).forEach { rowMetrics ->
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -1997,12 +2023,12 @@ private fun PublicCatalogCheckoutHeader(
                     horizontalArrangement = Arrangement.spacedBy(18.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    PublicCatalogCheckoutTitle(
-                        title = title,
-                        body = body,
-                        status = status,
-                        modifier = Modifier.weight(1f),
-                    )
+//                    PublicCatalogCheckoutTitle(
+//                        title = title,
+//                        body = body,
+//                        status = status,
+//                        modifier = Modifier.weight(1f),
+//                    )
                     Column(
                         modifier = Modifier.widthIn(min = 150.dp, max = 190.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp),

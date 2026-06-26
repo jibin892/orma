@@ -240,6 +240,37 @@ fun Route.dashboardRoutes(
         call.respondWorkspaceResult(offer)
     }
 
+    put("/offers/{id}") {
+        val repository = dashboardRepository ?: return@put call.dashboardDatabaseNotConfigured()
+        val firebaseUser = call.verifiedFirebaseUser(config) ?: return@put
+        val offerId = call.parameters["id"].orEmpty()
+        val request = call.receive<ProductOfferRequest>()
+        val scope = request.appliesTo.normalizedOfferScope()
+        if (request.name.isBlank()) {
+            call.respondValidation("offer_name_required", "Enter the offer name.")
+            return@put
+        }
+        if ((request.discountValue.toDoubleOrNull() ?: 0.0) <= 0.0) {
+            call.respondValidation("offer_discount_required", "Enter a discount greater than zero.")
+            return@put
+        }
+        if (scope == "category" && request.categoryId.isNullOrBlank()) {
+            call.respondValidation("offer_category_required", "Choose the category for this offer.")
+            return@put
+        }
+        if (scope == "product" && request.productId.isNullOrBlank()) {
+            call.respondValidation("offer_product_required", "Choose the product or service for this offer.")
+            return@put
+        }
+        val offer = try {
+            repository.updateProductOffer(firebaseUser, offerId, request)
+        } catch (error: DashboardOrderValidationException) {
+            call.respondValidation(error.code, error.message ?: "Check the offer details.")
+            return@put
+        }
+        call.respondWorkspaceResult(offer)
+    }
+
     get("/products/export") {
         val repository = dashboardRepository ?: return@get call.dashboardDatabaseNotConfigured()
         val firebaseUser = call.verifiedFirebaseUser(config) ?: return@get
