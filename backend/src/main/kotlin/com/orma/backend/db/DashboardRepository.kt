@@ -133,6 +133,101 @@ private val ProductCsvColumns = listOf(
 
 private val RequiredProductCsvColumns = listOf("name")
 
+private fun productImportTemplateCsv(
+    businessMode: String,
+    currency: String,
+): String {
+    val itemTypes = businessMode.templateItemTypes()
+    val examples = itemTypes.map { itemType -> productImportTemplateRow(itemType, currency.ifBlank { "INR" }) }
+    return (listOf(ProductCsvColumns) + examples)
+        .joinToString("\n") { row -> row.joinToString(",") { it.csvTemplateEscaped() } } + "\n"
+}
+
+private fun String.csvTemplateEscaped(): String =
+    if (any { it == '"' || it == ',' || it == '\n' || it == '\r' }) {
+        "\"" + replace("\"", "\"\"") + "\""
+    } else {
+        this
+    }
+
+private fun String.templateItemTypes(): List<String> =
+    when (trim().lowercase().replace("-", "_")) {
+        "service_selling", "services" -> listOf("service")
+        "appointment", "appointments", "booking" -> listOf("appointment")
+        "mixed", "multi", "hybrid" -> listOf("product", "service", "appointment")
+        else -> listOf("product")
+    }
+
+private fun productImportTemplateRow(itemType: String, currency: String): List<String> =
+    when (itemType) {
+        "service" -> listOf(
+            "",
+            "service",
+            "",
+            "",
+            "",
+            "",
+            "service",
+            "",
+            "",
+            currency,
+            "",
+            "false",
+            "",
+            "",
+            "false",
+            "60",
+            "false",
+            "",
+            "Preferred supplier",
+            "active",
+        )
+        "appointment" -> listOf(
+            "",
+            "appointment",
+            "",
+            "",
+            "",
+            "",
+            "booking",
+            "",
+            "",
+            currency,
+            "",
+            "false",
+            "",
+            "",
+            "false",
+            "30",
+            "true",
+            "",
+            "",
+            "active",
+        )
+        else -> listOf(
+            "",
+            "product",
+            "",
+            "",
+            "",
+            "",
+            "pcs",
+            "",
+            "",
+            currency,
+            "",
+            "false",
+            "",
+            "",
+            "true",
+            "",
+            "false",
+            "",
+            "",
+            "active",
+        )
+    }
+
 class DashboardRepository(
     private val dataSource: DataSource,
     private val config: AppConfig,
@@ -929,7 +1024,10 @@ class DashboardRepository(
                 fileName = "orma-products-template-${access.workspaceId.take(8)}.csv",
                 columns = ProductCsvColumns,
                 requiredColumns = RequiredProductCsvColumns,
-                csv = ProductCsvColumns.joinToString(",") { it.csvEscaped() } + "\n",
+                csv = productImportTemplateCsv(
+                    businessMode = access.businessMode,
+                    currency = access.currency,
+                ),
             )
         }
     }

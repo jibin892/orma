@@ -24639,12 +24639,19 @@ private fun ProductEditorScreen(
                 ),
         )
     }
+    var customUnitVisible by rememberSaveable(product?.id) { mutableStateOf(false) }
     val categoryOptions = remember(state.dashboard.categories, draft.itemType) {
         state.dashboard.categories.filter { it.matchesCategoryItemType(draft.itemType) }
     }
+    val unitOptions = remember(draft.itemType) { draft.itemType.catalogUnitOptions() }
     LaunchedEffect(draft.itemType, draft.categoryId, state.dashboard.categories) {
         if (draft.categoryId.isNotBlank() && categoryOptions.none { it.id == draft.categoryId }) {
             draft = draft.copy(categoryId = "")
+        }
+    }
+    LaunchedEffect(draft.itemType, draft.unit, unitOptions) {
+        if (draft.unit.isNotBlank() && unitOptions.none { it.equals(draft.unit, ignoreCase = true) }) {
+            customUnitVisible = true
         }
     }
     val productImagePicker = rememberOrmaBusinessLogoPicker { result ->
@@ -24830,15 +24837,40 @@ private fun ProductEditorScreen(
             if (stockFieldsVisible) {
                 OrmaTextField(draft.sku, { draft = draft.copy(sku = it.uppercase().take(40)) }, "SKU", modifier = Modifier.weight(1f), placeholder = "Optional")
             }
-            DashboardDropdownPicker(
-                label = "Unit",
-                selected = draft.unit.takeIf { it.isNotBlank() },
-                placeholder = if (stockFieldsVisible) "Choose unit" else "Choose billing unit",
-                options = draft.itemType.catalogUnitOptions(),
-                optionLabel = { it },
-                onSelected = { draft = draft.copy(unit = it) },
+            Column(
                 modifier = Modifier.weight(1f),
-            )
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                DashboardDropdownPicker(
+                    label = "Unit",
+                    selected = draft.unit.takeIf { it.isNotBlank() },
+                    placeholder = if (stockFieldsVisible) "Choose unit" else "Choose billing unit",
+                    options = unitOptions,
+                    optionLabel = { it },
+                    onSelected = {
+                        draft = draft.copy(unit = it)
+                        customUnitVisible = false
+                    },
+                )
+                if (customUnitVisible) {
+                    OrmaTextField(
+                        value = draft.unit,
+                        onValueChange = { draft = draft.copy(unit = it.take(24)) },
+                        label = "Custom unit",
+                        placeholder = when (draft.itemType) {
+                            "service" -> "visit, shift, package"
+                            "appointment" -> "slot, booking"
+                            else -> "tray, dozen, roll"
+                        },
+                    )
+                } else {
+                    OrmaTextButton(
+                        text = "Add custom unit",
+                        onClick = { customUnitVisible = true },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
         }
         if (attemptedSubmit) unitError?.let { FormValidationText(it) }
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -25071,7 +25103,10 @@ private fun ProductTransferSheet(
 ) {
     var importMode by rememberSaveable { mutableStateOf(true) }
     val template = state.dashboard.productImportTemplate
-    val fallbackTemplate = productImportCsvTemplate()
+    val fallbackTemplate = productImportCsvTemplate(
+        businessMode = state.dashboardBusinessMode(),
+        currency = state.dashboard.summary.currency,
+    )
     val templateCsv = template?.csv?.takeIf { it.isNotBlank() }?.withProductImportCategoryColumn()
     val requiredColumns = template?.requiredColumns?.takeIf { it.isNotEmpty() } ?: listOf("name")
     var csvText by rememberSaveable { mutableStateOf(templateCsv ?: fallbackTemplate) }
@@ -30081,8 +30116,11 @@ private fun filteredDashboardProducts(
     }
 }
 
-private fun productImportCsvTemplate(): String =
-    listOf(
+private fun productImportCsvTemplate(
+    businessMode: String,
+    currency: String,
+): String {
+    val headers = listOf(
         "name",
         "itemType",
         "categoryName",
@@ -30103,7 +30141,94 @@ private fun productImportCsvTemplate(): String =
         "expiryDate",
         "supplierName",
         "status",
-    ).joinToString(",") { it.csvCell() } + "\n"
+    )
+    val examples = businessMode.productImportTemplateItemTypes().map { itemType ->
+        productImportTemplateExampleRow(itemType = itemType, currency = currency.ifBlank { "INR" })
+    }
+    return (listOf(headers) + examples)
+        .joinToString("\n") { row -> row.joinToString(",") { it.csvCell() } } + "\n"
+}
+
+private fun String.productImportTemplateItemTypes(): List<String> =
+    when (normalizedDashboardBusinessMode()) {
+        "service_selling" -> listOf("service")
+        "appointment" -> listOf("appointment")
+        "mixed" -> listOf("product", "service", "appointment")
+        else -> listOf("product")
+    }
+
+private fun productImportTemplateExampleRow(
+    itemType: String,
+    currency: String,
+): List<String> =
+    when (itemType) {
+        "service" -> listOf(
+            "",
+            "service",
+            "",
+            "",
+            "",
+            "",
+            "service",
+            "",
+            "",
+            currency,
+            "",
+            "false",
+            "",
+            "",
+            "false",
+            "60",
+            "false",
+            "",
+            "Preferred supplier",
+            "active",
+        )
+        "appointment" -> listOf(
+            "",
+            "appointment",
+            "",
+            "",
+            "",
+            "",
+            "booking",
+            "",
+            "",
+            currency,
+            "",
+            "false",
+            "",
+            "",
+            "false",
+            "30",
+            "true",
+            "",
+            "",
+            "active",
+        )
+        else -> listOf(
+            "",
+            "product",
+            "",
+            "",
+            "",
+            "",
+            "pcs",
+            "",
+            "",
+            currency,
+            "",
+            "false",
+            "",
+            "",
+            "true",
+            "",
+            "false",
+            "",
+            "",
+            "active",
+        )
+    }
 
 private fun String.withProductImportCategoryColumn(): String {
     val lines = lineSequence().toList()
