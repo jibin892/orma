@@ -24324,12 +24324,16 @@ private fun OfferFormSheet(
     var attemptedSubmit by rememberSaveable(offer?.id) { mutableStateOf(false) }
     val categories = state.dashboard.categories.sortedWith(compareBy<OrmaProductCategory> { it.itemType }.thenBy { it.name })
     val products = state.dashboard.products.sortedWith(compareBy<OrmaProduct> { it.itemType }.thenBy { it.name })
+    val customers = state.dashboard.customers.sortedBy { it.name.lowercase() }
     val selectedCategory = categories.firstOrNull { it.id == draft.categoryId }
     val selectedProduct = products.firstOrNull { it.id == draft.productId }
+    val selectedCustomer = customers.firstOrNull { it.id == draft.customerId }
     val today = ormaCurrentIsoDate().take(10)
     val startDate = draft.startsAt.dashboardOfferDatePrefixOrNull()
     val endDate = draft.endsAt.dashboardOfferDatePrefixOrNull()
     val discountValue = draft.discountValue.toDoubleOrNull() ?: 0.0
+    val discountCapAmount = draft.discountCapAmount.toDoubleOrNull()
+    val couponCode = draft.couponCode.dashboardCouponInput()
     val nameError = if (draft.name.trim().length >= 2) null else "Enter at least 2 characters."
     val targetError = when (draft.appliesTo) {
         "category" -> if (draft.categoryId.isBlank()) "Choose the category for this offer." else null
@@ -24340,6 +24344,16 @@ private fun OfferFormSheet(
         discountValue <= 0.0 -> "Enter a discount greater than zero."
         draft.discountType == "percentage" && discountValue > 100.0 -> "Percentage discount cannot be above 100%."
         else -> null
+    }
+    val capError = when {
+        draft.discountType != "percentage" || draft.discountCapAmount.isBlank() -> null
+        discountCapAmount == null || discountCapAmount <= 0.0 -> "Enter a cap amount greater than zero, or leave it empty."
+        else -> null
+    }
+    val couponError = if (draft.customerId.isNotBlank() && couponCode.isBlank()) {
+        "Enter a coupon code for a customer-specific offer."
+    } else {
+        null
     }
     val dateError = when {
         draft.startsAt.isNotBlank() && startDate == null -> "Choose a valid start date."
@@ -24356,6 +24370,8 @@ private fun OfferFormSheet(
     val formReady = nameError == null &&
         targetError == null &&
         discountError == null &&
+        capError == null &&
+        couponError == null &&
         dateError == null &&
         scopedTargetReady
     DashboardFormSheet(
@@ -24478,7 +24494,7 @@ private fun OfferFormSheet(
             options = listOf("percentage", "fixed"),
             selected = draft.discountType,
             label = { if (it == "fixed") "Fixed" else "%" },
-            onSelected = { draft = draft.copy(discountType = it) },
+            onSelected = { draft = draft.copy(discountType = it, discountCapAmount = if (it == "percentage") draft.discountCapAmount else "") },
         )
         OrmaTextField(
             value = draft.discountValue,
@@ -24490,13 +24506,59 @@ private fun OfferFormSheet(
             if ((attemptedSubmit || draft.discountValue.isNotBlank()) && discountError != null) {
                 FormValidationText(discountError)
             }
+            if (draft.discountType == "percentage") {
+                OrmaTextField(
+                    value = draft.discountCapAmount,
+                    onValueChange = { draft = draft.copy(discountCapAmount = it.moneyInput()) },
+                    label = "Maximum discount amount",
+                    placeholder = "No cap",
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                )
+                if ((attemptedSubmit || draft.discountCapAmount.isNotBlank()) && capError != null) {
+                    FormValidationText(capError)
+                }
+            }
             DashboardChecklistRow(
                 text = if (draft.discountType == "fixed") {
                     "Fixed discounts reduce each matching item by this amount."
                 } else {
-                    "Percentage discounts are capped at 100%."
+                    "Percentage discounts can run without a cap, or stop at the maximum amount above."
                 },
             )
+        }
+        DashboardRecordCard {
+            Text(
+                text = "Coupon and customer",
+                style = MaterialTheme.typography.titleSmall,
+                color = OrmaColors.TextPrimary,
+            )
+            OrmaTextField(
+                value = draft.couponCode,
+                onValueChange = { draft = draft.copy(couponCode = it.dashboardCouponInput()) },
+                label = "Coupon code",
+                placeholder = "Optional",
+            )
+            DashboardDropdownPicker(
+                label = "Customer",
+                selected = selectedCustomer,
+                placeholder = "All customers",
+                options = customers,
+                optionLabel = { customer ->
+                    listOf(customer.name, customer.phoneNumber.orEmpty().ifBlank { customer.email.orEmpty() })
+                        .filter { it.isNotBlank() }
+                        .joinToString(" / ")
+                },
+                onSelected = { draft = draft.copy(customerId = it.id) },
+                supportingText = "Choose a customer only when this coupon should work for one saved customer.",
+                onClear = if (draft.customerId.isNotBlank()) {
+                    { draft = draft.copy(customerId = "") }
+                } else {
+                    null
+                },
+            )
+            if ((attemptedSubmit || draft.customerId.isNotBlank()) && couponError != null) {
+                FormValidationText(couponError)
+            }
         }
         DashboardRecordCard {
             Text(
@@ -24529,6 +24591,7 @@ private fun OfferFormSheet(
             draft = draft,
             selectedCategory = selectedCategory,
             selectedProduct = selectedProduct,
+            selectedCustomer = selectedCustomer,
             discountValue = discountValue,
         )
         OrmaActionRow(
@@ -24541,6 +24604,12 @@ private fun OfferFormSheet(
                             name = draft.name.trim(),
                             description = draft.description.trim(),
                             discountValue = discountValue.toDashboardMoneyInput(),
+                            discountCapAmount = if (draft.discountType == "percentage") {
+                                discountCapAmount?.toDashboardMoneyInput().orEmpty()
+                            } else {
+                                ""
+                            },
+                            couponCode = couponCode,
                             startsAt = startDate.orEmpty(),
                             endsAt = endDate.orEmpty(),
                         ),
@@ -24559,6 +24628,7 @@ private fun DashboardOfferPreviewCard(
     draft: OrmaProductOfferDraft,
     selectedCategory: OrmaProductCategory?,
     selectedProduct: OrmaProduct?,
+    selectedCustomer: OrmaCustomer?,
     discountValue: Double,
 ) {
     val startDate = draft.startsAt.dashboardOfferDatePrefixOrNull()
@@ -24581,6 +24651,8 @@ private fun DashboardOfferPreviewCard(
     }
     val discountLabel = if (draft.discountType == "fixed") {
         "Fixed ${discountValue.toDashboardMoneyInput()}"
+    } else if (draft.discountCapAmount.isNotBlank()) {
+        "${discountValue.toDashboardMoneyInput()}% up to ${draft.discountCapAmount.toDoubleOrNull().orZero().toDashboardMoneyInput()}"
     } else {
         "${discountValue.toDashboardMoneyInput()}%"
     }
@@ -24622,6 +24694,8 @@ private fun DashboardOfferPreviewCard(
                 "Target" to target,
                 "Scope" to draft.appliesTo.dashboardOfferScopeLabel(),
                 "Discount" to discountLabel,
+                "Coupon" to draft.couponCode.dashboardCouponInput().ifBlank { "No coupon required" },
+                "Customer" to (selectedCustomer?.name ?: "All customers"),
                 "Schedule" to schedule,
             ),
         )
@@ -24641,10 +24715,13 @@ private fun OrmaProductOffer.toProductOfferDraft(): OrmaProductOfferDraft =
         appliesTo = appliesTo.ifBlank { "all" },
         productId = productId.orEmpty(),
         categoryId = categoryId.orEmpty(),
+        customerId = customerId.orEmpty(),
         name = name,
         description = description.orEmpty(),
         discountType = discountType.ifBlank { "percentage" },
         discountValue = discountValue,
+        discountCapAmount = discountCapAmount.orEmpty(),
+        couponCode = couponCode.orEmpty(),
         startsAt = startsAt.dashboardOfferDatePrefixOrNull().orEmpty(),
         endsAt = endsAt.dashboardOfferDatePrefixOrNull().orEmpty(),
     )
@@ -24660,6 +24737,8 @@ private fun OrmaProductOffer.dashboardOfferDiscountLabel(): String {
     val value = discountValue.toDoubleOrNull().orZero().toDashboardMoneyInput()
     return if (discountType.trim().lowercase() == "fixed") {
         "Fixed $value"
+    } else if (!discountCapAmount.isNullOrBlank()) {
+        "$value% up to ${discountCapAmount.toDoubleOrNull().orZero().toDashboardMoneyInput()}"
     } else {
         "$value%"
     }
@@ -29598,6 +29677,7 @@ private fun OrmaProduct.dashboardAppliedOffer(offers: List<OrmaProductOffer>): D
     return offers
         .asSequence()
         .filter { it.status.trim().lowercase() == "active" }
+        .filter { it.customerId.isNullOrBlank() && it.couponCode.isNullOrBlank() }
         .filter { it.dashboardOfferAppliesTo(this) }
         .filter { it.dashboardOfferActiveOn(today) }
         .mapNotNull { offer -> offer.toDashboardAppliedOffer(originalPrice) }
@@ -29625,11 +29705,21 @@ private fun OrmaProductOffer.dashboardOfferActiveOn(today: String): Boolean {
 private fun String?.dashboardOfferDatePrefixOrNull(): String? =
     orEmpty().take(10).takeIf { it.dashboardIsoDatePartsOrNull() != null }
 
+private fun String.dashboardCouponInput(): String =
+    uppercase()
+        .filter { it.isLetterOrDigit() || it == '-' || it == '_' }
+        .take(40)
+
 private fun OrmaProductOffer.toDashboardAppliedOffer(originalPrice: Double): DashboardAppliedOffer? {
     val value = discountValue.toDoubleOrNull().orZero().coerceAtLeast(0.0)
-    val discount = when (discountType.trim().lowercase()) {
+    val rawDiscount = when (discountType.trim().lowercase()) {
         "fixed" -> value.coerceAtMost(originalPrice)
         else -> originalPrice * value.coerceAtMost(100.0) / 100.0
+    }
+    val discount = if (discountType.trim().lowercase() == "percentage") {
+        discountCapAmount?.toDoubleOrNull()?.takeIf { it > 0.0 }?.let { rawDiscount.coerceAtMost(it) } ?: rawDiscount
+    } else {
+        rawDiscount
     }.coerceIn(0.0, originalPrice)
     if (discount <= 0.0) return null
     return DashboardAppliedOffer(
