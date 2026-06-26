@@ -9492,7 +9492,7 @@ private fun sortedDashboardInvoices(
         DashboardInvoiceSortCustomer -> invoices.sortedBy { it.customerName.orEmpty().lowercase() }
         DashboardInvoiceSortTotal -> invoices.sortedBy { it.total.toDoubleOrNull().orZero() }
         DashboardInvoiceSortStatus -> invoices.sortedBy { it.invoiceStatusLabel() }
-        else -> invoices.sortedBy { invoiceNumberFor(state, it) }
+        else -> invoices.sortedBy { billingDocumentNumberFor(state, it) }
     }
     return if (ascending) sorted else sorted.asReversed()
 }
@@ -10864,6 +10864,7 @@ private fun DashboardWorkspaceToolbarCard(
         ) {
             BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
                 val compact = maxWidth < 760.dp
+                val primaryIsBack = primaryText?.trim()?.startsWith("Back to", ignoreCase = true) == true
                 val titleBlock: @Composable (Modifier) -> Unit = { modifier ->
                     Column(
                         modifier = modifier,
@@ -10892,12 +10893,20 @@ private fun DashboardWorkspaceToolbarCard(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         if (primaryText != null && onPrimary != null) {
-                            DashboardWideActionButton(
-                                text = primaryText,
-                                onClick = onPrimary,
-                                primary = true,
-                                enabled = primaryEnabled,
-                            )
+                            if (primaryIsBack) {
+                                DashboardToolbarHeaderActionButton(
+                                    text = "Back",
+                                    onClick = onPrimary,
+                                    enabled = primaryEnabled,
+                                )
+                            } else {
+                                DashboardWideActionButton(
+                                    text = primaryText,
+                                    onClick = onPrimary,
+                                    primary = true,
+                                    enabled = primaryEnabled,
+                                )
+                            }
                         }
                         if (tertiaryText != null && onTertiary != null) {
                             DashboardToolbarHeaderActionButton(
@@ -10935,6 +10944,13 @@ private fun DashboardWorkspaceToolbarCard(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
+                                if (primaryIsBack && onPrimary != null) {
+                                    DashboardToolbarHeaderActionButton(
+                                        text = "Back",
+                                        onClick = onPrimary,
+                                        enabled = primaryEnabled,
+                                    )
+                                }
                                 if (tertiaryText != null && onTertiary != null) {
                                     DashboardToolbarHeaderActionButton(
                                         text = tertiaryText,
@@ -10955,7 +10971,7 @@ private fun DashboardWorkspaceToolbarCard(
                                 )
                             }
                         }
-                        if (primaryText != null && onPrimary != null) {
+                        if (!primaryIsBack && primaryText != null && onPrimary != null) {
                             DashboardWideActionButton(
                                 text = primaryText,
                                 onClick = onPrimary,
@@ -11406,14 +11422,20 @@ private fun DashboardCatalogSearchToolbar(
 private fun DashboardInvoiceFocusToolbar(
     state: OnboardingUiState,
     actions: OnboardingActions,
-    onCreateInvoice: () -> Unit,
+    documentKind: String,
+    onCreateDocument: () -> Unit,
 ) {
+    val documentTitle = documentKind.billingDocumentTitle()
     DashboardWorkspaceToolbarCard(
-        title = "Invoice focus",
-        body = "Find invoice-ready work, then preview tax details before sharing.",
+        title = "$documentTitle focus",
+        body = if (documentKind == DashboardBillingDocumentQuotation) {
+            "Prepare customer estimates, preview totals, and convert the work when approved."
+        } else {
+            "Find invoice-ready work, then preview tax details before sharing."
+        },
         badgeText = if (state.dashboard.loading) "SYNC" else "LIVE",
-        primaryText = "Create invoice",
-        onPrimary = onCreateInvoice,
+        primaryText = documentKind.billingDocumentActionLabel(),
+        onPrimary = onCreateDocument,
         primaryEnabled = !state.dashboard.loading &&
             state.hasDashboardPermission(DashboardTeamPermissionCreateSale),
         secondaryText = if (state.dashboard.loading) "Syncing" else "Refresh",
@@ -11683,9 +11705,10 @@ private fun DashboardInvoicesContent(
     wide: Boolean,
     onRequestScrollTop: () -> Unit,
 ) {
-    var showInvoiceBuilderPage by rememberSaveable { mutableStateOf(false) }
+    var activeBillingDocument by rememberSaveable { mutableStateOf(DashboardBillingDocumentInvoice) }
+    var builderDocumentKind by rememberSaveable { mutableStateOf<String?>(null) }
     var previewOrderId by rememberSaveable { mutableStateOf<String?>(null) }
-    val invoices = filteredDashboardInvoiceOrders(state)
+    val invoices = billingDocumentOrders(state, activeBillingDocument)
     val previewOrder = invoices.firstOrNull { it.id == previewOrderId }
     fun openInvoicePreview(order: OrmaOrder) {
         previewOrderId = order.id
@@ -11701,19 +11724,22 @@ private fun DashboardInvoicesContent(
         }
     }
 
-    if (showInvoiceBuilderPage) {
+    if (builderDocumentKind != null) {
+        val documentKind = builderDocumentKind ?: DashboardBillingDocumentInvoice
         OrmaBackHandler(
             enabled = !wide,
-            onBack = { showInvoiceBuilderPage = false },
+            onBack = { builderDocumentKind = null },
         )
         DashboardInvoiceBuilderPage(
             state = state,
             actions = actions,
             wide = wide,
-            onBack = { showInvoiceBuilderPage = false },
+            documentKind = documentKind,
+            onBack = { builderDocumentKind = null },
             onSubmit = { draft ->
                 actions.onCreateOrder(draft)
-                showInvoiceBuilderPage = false
+                activeBillingDocument = documentKind
+                builderDocumentKind = null
             },
         )
         return
@@ -11740,46 +11766,64 @@ private fun DashboardInvoicesContent(
             state = state,
             actions = actions,
             invoices = invoices,
-            onCreateInvoice = { showInvoiceBuilderPage = true },
+            activeDocumentKind = activeBillingDocument,
+            onDocumentKindChange = { next ->
+                activeBillingDocument = next
+                previewOrderId = null
+            },
+            onCreateDocument = { builderDocumentKind = activeBillingDocument },
             onPreviewInvoice = ::openInvoicePreview,
         )
     } else {
+        val documentTitle = activeBillingDocument.billingDocumentTitle()
+        val documentLower = activeBillingDocument.billingDocumentLowerLabel()
         DashboardListScaffold(
-            eyebrow = "INVOICES",
-            title = "Tax invoices",
+            eyebrow = "BILLING",
+            title = if (activeBillingDocument == DashboardBillingDocumentQuotation) "Quotations" else "Tax invoices",
             body = if (invoices.isEmpty()) {
-                "Create an invoice from manual line items or open an existing order as a tax invoice."
+                "Create a $documentLower from customer details and line items."
             } else if (state.hasActiveInvoiceFilter()) {
-                "${invoices.size} matching invoice records from ${state.dashboard.orders.size} orders"
+                "${invoices.size} matching $documentLower records from ${state.dashboard.orders.size} orders"
             } else {
-                "${invoices.size} invoice records ready from order activity"
+                "${invoices.size} $documentLower records ready from order activity"
             },
-            primaryText = "Create invoice",
-            onPrimary = { showInvoiceBuilderPage = true },
+            primaryText = activeBillingDocument.billingDocumentActionLabel(),
+            onPrimary = { builderDocumentKind = activeBillingDocument },
             secondaryText = if (state.dashboard.loading) "Refreshing..." else "Refresh",
             onSecondary = actions.onDashboardRefresh,
             loading = state.dashboard.loading,
             wide = false,
         ) {
+            DashboardCompactSegmentedPicker(
+                options = DashboardBillingDocumentTabs,
+                selected = activeBillingDocument,
+                label = { it.billingDocumentTabLabel() },
+                onSelected = {
+                    activeBillingDocument = it
+                    previewOrderId = null
+                },
+            )
             if (invoices.isEmpty()) {
                 DashboardEmptyModuleCard(
                     icon = DashboardNavIconKind.Invoice,
-                    title = if (state.hasActiveInvoiceFilter()) "No matching invoices" else "No invoices yet",
+                    title = if (state.hasActiveInvoiceFilter()) "No matching ${documentLower}s" else "No ${documentLower}s yet",
                     body = if (state.hasActiveInvoiceFilter()) {
-                        "Try another invoice, order number, or customer search."
+                        "Try another $documentLower, order number, or customer search."
                     } else {
-                        "Create a manual invoice with line items, tax settings, and customer billing details."
+                        "Create a manual $documentLower with line items, tax settings, and customer details."
                     },
                 )
                 DashboardInvoiceCreateGuideCard(
                     state = state,
-                    onCreate = { showInvoiceBuilderPage = true },
+                    documentKind = activeBillingDocument,
+                    onCreate = { builderDocumentKind = activeBillingDocument },
                 )
             } else {
-                DashboardInvoiceSummaryCard(state = state, invoices = invoices)
+                DashboardInvoiceSummaryCard(state = state, invoices = invoices, documentKind = activeBillingDocument)
                 DashboardInvoiceCreateGuideCard(
                     state = state,
-                    onCreate = { showInvoiceBuilderPage = true },
+                    documentKind = activeBillingDocument,
+                    onCreate = { builderDocumentKind = activeBillingDocument },
                 )
                 DashboardInvoiceRecords(
                     state = state,
@@ -11787,6 +11831,7 @@ private fun DashboardInvoicesContent(
                     selectedOrderId = null,
                     onSelect = ::openInvoicePreview,
                     wide = false,
+                    documentKind = activeBillingDocument,
                 )
             }
         }
@@ -11798,20 +11843,24 @@ private fun DashboardInvoiceBuilderPage(
     state: OnboardingUiState,
     actions: OnboardingActions,
     wide: Boolean,
+    documentKind: String,
     onBack: () -> Unit,
     onSubmit: (OrmaOrderDraft) -> Unit,
 ) {
+    val documentTitle = documentKind.billingDocumentTitle()
+    val documentLower = documentKind.billingDocumentLowerLabel()
+    val isQuotation = documentKind == DashboardBillingDocumentQuotation
     var attemptedSubmit by rememberSaveable { mutableStateOf(false) }
     var draft by remember {
         mutableStateOf(
             OrmaOrderDraft(
                 orderType = "sale",
                 fulfillmentType = "standard",
-                status = "confirmed",
+                status = if (isQuotation) "draft" else "confirmed",
                 currency = state.dashboard.summary.currency.ifBlank { state.draft.currency.ifBlank { "INR" } },
                 customerCountry = state.draft.country.ifBlank { "India" },
                 items = emptyList(),
-                notes = "Created from invoice desk",
+                notes = if (isQuotation) quotationNotes("Created from quotation desk") else "Created from invoice desk",
             ),
         )
     }
@@ -11967,13 +12016,14 @@ private fun DashboardInvoiceBuilderPage(
                     customerCountry = draft.customerCountry.trim(),
                     customerPostalCode = draft.customerPostalCode.trim(),
                     orderType = "sale",
-                    paidTotal = draft.paidTotal.trim().ifBlank { "0" },
+                    status = if (isQuotation) "draft" else draft.status,
+                    paidTotal = if (isQuotation) "0" else draft.paidTotal.trim().ifBlank { "0" },
                     discountTotal = dashboardOrderOfferDiscountTotal(
                         items = submittedItems,
                         products = state.dashboard.products,
                         offers = state.dashboard.offers,
                     ).toDashboardMoneyInput(),
-                    notes = draft.notes.trim(),
+                    notes = if (isQuotation) quotationNotes(draft.notes) else draft.notes.trim(),
                     fulfillmentType = "standard",
                     items = submittedItems,
                 ),
@@ -11988,10 +12038,10 @@ private fun DashboardInvoiceBuilderPage(
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         DashboardWorkspaceToolbarCard(
-            title = "Create tax invoice",
-            body = "Build customer billing, choose products by category, review line items, and save the invoice.",
+            title = if (isQuotation) "Create quotation" else "Create tax invoice",
+            body = "Build customer billing, choose products by category, review line items, and save the $documentLower.",
             badgeText = "FULL PAGE",
-            primaryText = "Back to invoices",
+            primaryText = if (isQuotation) "Back to quotations" else "Back to invoices",
             onPrimary = onBack,
             secondaryText = null,
             onSecondary = null,
@@ -12022,6 +12072,7 @@ private fun DashboardInvoiceBuilderPage(
                         invoiceLookupErrorMessage = invoiceLookupErrorMessage,
                         invoiceGstinError = invoiceGstinError,
                         defaultTaxError = defaultTaxError,
+                        documentKind = documentKind,
                         onDraftChange = { draft = it },
                         onTaxEnabledChange = { enabled ->
                             taxEnabled = enabled
@@ -12078,6 +12129,7 @@ private fun DashboardInvoiceBuilderPage(
                         formReady = formReady,
                         defaultTaxError = defaultTaxError,
                         invoiceGstinError = invoiceGstinError,
+                        documentKind = documentKind,
                         onDraftChange = { draft = it },
                         onMarkPaid = ::markFullyPaid,
                         onSubmit = ::submitInvoice,
@@ -12107,6 +12159,7 @@ private fun DashboardInvoiceBuilderPage(
                             invoiceLookupErrorMessage = invoiceLookupErrorMessage,
                             invoiceGstinError = invoiceGstinError,
                             defaultTaxError = defaultTaxError,
+                            documentKind = documentKind,
                             onDraftChange = { draft = it },
                             onTaxEnabledChange = { enabled ->
                                 taxEnabled = enabled
@@ -12177,6 +12230,7 @@ private fun DashboardInvoiceBuilderPage(
                             formReady = formReady,
                             defaultTaxError = defaultTaxError,
                             invoiceGstinError = invoiceGstinError,
+                            documentKind = documentKind,
                             onDraftChange = { draft = it },
                             onMarkPaid = ::markFullyPaid,
                             onSubmit = ::submitInvoice,
@@ -12739,12 +12793,15 @@ private fun DashboardInvoiceCustomerTaxCard(
     invoiceLookupErrorMessage: String?,
     invoiceGstinError: String?,
     defaultTaxError: String?,
+    documentKind: String,
     onDraftChange: (OrmaOrderDraft) -> Unit,
     onTaxEnabledChange: (Boolean) -> Unit,
     onDefaultTaxRateChange: (String) -> Unit,
     onApplyTaxToAll: () -> Unit,
     onGstinSearch: () -> Unit,
 ) {
+    val documentTitle = documentKind.billingDocumentTitle()
+    val documentLower = documentKind.billingDocumentLowerLabel()
     DashboardRecordCard {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -12768,7 +12825,7 @@ private fun DashboardInvoiceCustomerTaxCard(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            OrmaBadge(text = "SALE INVOICE", tone = OrmaStatusTone.Info)
+            OrmaBadge(text = documentTitle.uppercase(), tone = OrmaStatusTone.Info)
         }
         if (state.dashboard.customers.isNotEmpty()) {
             DashboardChipPicker(
@@ -12783,7 +12840,7 @@ private fun DashboardInvoiceCustomerTaxCard(
         OrmaTextField(
             value = draft.customerName,
             onValueChange = { onDraftChange(draft.copy(customerName = it, customerId = "")) },
-            label = "Invoice customer name",
+            label = "$documentTitle customer name",
             placeholder = "Optional",
         )
         BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
@@ -12828,9 +12885,9 @@ private fun DashboardInvoiceCustomerTaxCard(
         OrmaSwitchRow(
             title = "GST/VAT",
             body = if (taxEnabled) {
-                "Set a default rate, then override individual invoice lines when needed."
+                "Set a default rate, then override individual $documentLower lines when needed."
             } else {
-                "Tax is disabled. Every invoice line will save with zero tax."
+                "Tax is disabled. Every $documentLower line will save with zero tax."
             },
             checked = taxEnabled,
             onCheckedChange = onTaxEnabledChange,
@@ -13177,11 +13234,15 @@ private fun DashboardInvoiceCheckoutPanel(
     formReady: Boolean,
     defaultTaxError: String?,
     invoiceGstinError: String?,
+    documentKind: String,
     onDraftChange: (OrmaOrderDraft) -> Unit,
     onMarkPaid: () -> Unit,
     onSubmit: () -> Unit,
     onCancel: () -> Unit,
 ) {
+    val documentLower = documentKind.billingDocumentLowerLabel()
+    val documentTitle = documentKind.billingDocumentTitle()
+    val isQuotation = documentKind == DashboardBillingDocumentQuotation
     DashboardRecordCard {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -13198,7 +13259,11 @@ private fun DashboardInvoiceCheckoutPanel(
                     color = OrmaColors.TextPrimary,
                 )
                 Text(
-                    text = "Set status, payment amount, notes, then create the invoice.",
+                    text = if (isQuotation) {
+                        "Review customer details, notes, and save the quotation."
+                    } else {
+                        "Set status, payment amount, notes, then create the invoice."
+                    },
                     style = MaterialTheme.typography.bodyMedium,
                     color = OrmaColors.TextSecondary,
                     maxLines = 2,
@@ -13208,74 +13273,80 @@ private fun DashboardInvoiceCheckoutPanel(
             OrmaBadge(text = totalText, tone = OrmaStatusTone.Success)
         }
         Text(
-            text = "Invoice status",
+            text = "$documentTitle status",
             modifier = Modifier.padding(start = 4.dp),
             style = MaterialTheme.typography.labelMedium,
             color = OrmaColors.TextSecondary,
         )
-        OrmaSegmentedRow(
-            options = DashboardOrderStatuses,
-            selected = draft.status,
-            label = { it.dashboardStatusLabel() },
-            onSelected = { onDraftChange(draft.withOrderStatus(it)) },
-        )
+        if (isQuotation) {
+            OrmaBadge(text = "DRAFT QUOTATION", tone = OrmaStatusTone.Info)
+        } else {
+            OrmaSegmentedRow(
+                options = DashboardOrderStatuses,
+                selected = draft.status,
+                label = { it.dashboardStatusLabel() },
+                onSelected = { onDraftChange(draft.withOrderStatus(it)) },
+            )
+        }
         OrmaCalendarDateTimeField(
             value = draft.scheduledAt,
             onValueChange = { onDraftChange(draft.copy(scheduledAt = it)) },
-            label = "Invoice date",
+            label = "$documentTitle date",
             placeholder = "Optional date",
-            supportingText = "Use when the invoice should carry a scheduled or service date.",
+            supportingText = "Use when the $documentLower should carry a scheduled or service date.",
             allowClear = true,
         )
-        Text(
-            text = "Payment",
-            modifier = Modifier.padding(start = 4.dp),
-            style = MaterialTheme.typography.labelMedium,
-            color = OrmaColors.TextSecondary,
-        )
-        DashboardCompactSegmentedPicker(
-            options = DashboardOrderPaymentModes,
-            selected = draft.paymentMode,
-            label = { it.paymentModeLabel() },
-            onSelected = { onDraftChange(draft.withPaymentMode(it)) },
-        )
-        BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-            if (maxWidth < 430.dp) {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OrmaTextField(
-                        value = draft.paidTotal,
-                        onValueChange = { onDraftChange(draft.copy(paidTotal = it.moneyInput())) },
-                        label = "Paid amount",
-                        placeholder = "0",
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    )
-                    DashboardWideActionButton(
-                        text = "Mark paid",
-                        onClick = onMarkPaid,
-                        enabled = draft.items.isNotEmpty(),
+        if (!isQuotation) {
+            Text(
+                text = "Payment",
+                modifier = Modifier.padding(start = 4.dp),
+                style = MaterialTheme.typography.labelMedium,
+                color = OrmaColors.TextSecondary,
+            )
+            DashboardCompactSegmentedPicker(
+                options = DashboardOrderPaymentModes,
+                selected = draft.paymentMode,
+                label = { it.paymentModeLabel() },
+                onSelected = { onDraftChange(draft.withPaymentMode(it)) },
+            )
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                if (maxWidth < 430.dp) {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        OrmaTextField(
+                            value = draft.paidTotal,
+                            onValueChange = { onDraftChange(draft.copy(paidTotal = it.moneyInput())) },
+                            label = "Paid amount",
+                            placeholder = "0",
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        )
+                        DashboardWideActionButton(
+                            text = "Mark paid",
+                            onClick = onMarkPaid,
+                            enabled = draft.items.isNotEmpty(),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                } else {
+                    Row(
                         modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-            } else {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalAlignment = Alignment.Bottom,
-                ) {
-                    OrmaTextField(
-                        value = draft.paidTotal,
-                        onValueChange = { onDraftChange(draft.copy(paidTotal = it.moneyInput())) },
-                        label = "Paid amount",
-                        placeholder = "0",
-                        modifier = Modifier.weight(1f),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    )
-                    DashboardWideActionButton(
-                        text = "Mark paid",
-                        onClick = onMarkPaid,
-                        enabled = draft.items.isNotEmpty(),
-                        modifier = Modifier.widthIn(min = 132.dp),
-                    )
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.Bottom,
+                    ) {
+                        OrmaTextField(
+                            value = draft.paidTotal,
+                            onValueChange = { onDraftChange(draft.copy(paidTotal = it.moneyInput())) },
+                            label = "Paid amount",
+                            placeholder = "0",
+                            modifier = Modifier.weight(1f),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        )
+                        DashboardWideActionButton(
+                            text = "Mark paid",
+                            onClick = onMarkPaid,
+                            enabled = draft.items.isNotEmpty(),
+                            modifier = Modifier.widthIn(min = 132.dp),
+                        )
+                    }
                 }
             }
         }
@@ -13286,8 +13357,10 @@ private fun DashboardInvoiceCheckoutPanel(
                 if (offerDiscountTotal > 0.0) {
                     add("Offer savings" to dashboardMoney(offerDiscountTotal.toDashboardMoneyInput(), draft.currency))
                 }
-                add("Paid" to dashboardMoney(draft.paidTotal.ifBlank { "0" }, draft.currency))
-                add("Balance payable" to dashboardMoney(balancePayable.toDashboardMoneyInput(), draft.currency))
+                if (!isQuotation) {
+                    add("Paid" to dashboardMoney(draft.paidTotal.ifBlank { "0" }, draft.currency))
+                    add("Balance payable" to dashboardMoney(balancePayable.toDashboardMoneyInput(), draft.currency))
+                }
             },
         )
         OrmaTextField(
@@ -13299,7 +13372,7 @@ private fun DashboardInvoiceCheckoutPanel(
             minLines = 2,
         )
         OrmaActionRow(
-            primaryText = "Create invoice",
+            primaryText = documentKind.billingDocumentActionLabel(),
             onPrimary = onSubmit,
             primaryEnabled = true,
             secondaryText = "Back",
@@ -13381,19 +13454,28 @@ private fun DashboardInvoicesWorkspace(
     state: OnboardingUiState,
     actions: OnboardingActions,
     invoices: List<OrmaOrder>,
-    onCreateInvoice: () -> Unit,
+    activeDocumentKind: String,
+    onDocumentKindChange: (String) -> Unit,
+    onCreateDocument: () -> Unit,
     onPreviewInvoice: (OrmaOrder) -> Unit,
 ) {
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
+        DashboardCompactSegmentedPicker(
+            options = DashboardBillingDocumentTabs,
+            selected = activeDocumentKind,
+            label = { it.billingDocumentTabLabel() },
+            onSelected = onDocumentKindChange,
+        )
         DashboardInvoiceFocusToolbar(
             state = state,
             actions = actions,
-            onCreateInvoice = onCreateInvoice,
+            documentKind = activeDocumentKind,
+            onCreateDocument = onCreateDocument,
         )
-        DashboardInvoiceKpiStrip(state = state, invoices = invoices)
+        DashboardInvoiceKpiStrip(state = state, invoices = invoices, documentKind = activeDocumentKind)
         DashboardInvoiceSearchToolbar(
             state = state,
             actions = actions,
@@ -13402,6 +13484,7 @@ private fun DashboardInvoicesWorkspace(
             state = state,
             actions = actions,
             invoices = invoices,
+            documentKind = activeDocumentKind,
             onPreviewInvoice = onPreviewInvoice,
         )
     }
@@ -13411,7 +13494,10 @@ private fun DashboardInvoicesWorkspace(
 private fun DashboardInvoiceKpiStrip(
     state: OnboardingUiState,
     invoices: List<OrmaOrder>,
+    documentKind: String,
 ) {
+    val documentPlural = if (documentKind == DashboardBillingDocumentQuotation) "Quotations" else "Invoices"
+    val documentValueLabel = if (documentKind == DashboardBillingDocumentQuotation) "Quotation value" else "Invoice value"
     val currency = invoices.firstOrNull()?.currency ?: state.dashboard.summary.currency.ifBlank { "INR" }
     val readyCount = invoices.count { it.status in setOf("paid", "completed") }
     val draftCount = (invoices.size - readyCount).coerceAtLeast(0)
@@ -13421,13 +13507,13 @@ private fun DashboardInvoiceKpiStrip(
     DashboardFocusMetricStrip(
         metrics = listOf(
             DashboardFocusMetric(
-                label = "Invoices",
+                label = documentPlural,
                 value = invoices.size.toString(),
                 detail = if (state.hasActiveInvoiceFilter()) "after filters" else "ready records",
                 tone = OrmaStatusTone.Info,
             ),
             DashboardFocusMetric(
-                label = "Invoice value",
+                label = documentValueLabel,
                 value = dashboardMoney(total.toDashboardMoneyInput(), currency),
                 detail = "before settlement",
                 tone = OrmaStatusTone.Success,
@@ -13454,8 +13540,11 @@ private fun DashboardInvoiceRecordsSurface(
     state: OnboardingUiState,
     actions: OnboardingActions,
     invoices: List<OrmaOrder>,
+    documentKind: String,
     onPreviewInvoice: (OrmaOrder) -> Unit,
 ) {
+    val documentTitle = documentKind.billingDocumentTitle()
+    val documentLower = documentKind.billingDocumentLowerLabel()
     val invoicePagination = state.dashboard.invoicePagination
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -13471,8 +13560,8 @@ private fun DashboardInvoiceRecordsSurface(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             DashboardRecordsSurfaceHeader(
-                title = "Invoice records",
-                body = "Search invoices, narrow by date, then open the tax document preview.",
+                title = "$documentTitle records",
+                body = "Search ${documentLower}s, narrow by date, then open the document preview.",
                 badgeText = dashboardLoadingAwareShownBadge(state.dashboard.loading, invoices.size, invoicePagination),
             )
             if (invoices.isEmpty()) {
@@ -13482,14 +13571,14 @@ private fun DashboardInvoiceRecordsSurface(
                     DashboardInlineEmptyRecords(
                         icon = DashboardNavIconKind.Invoice,
                         title = when {
-                            !state.dashboard.errorMessage.isNullOrBlank() -> "Could not load invoices"
-                            state.hasActiveInvoiceFilter() -> "No matching invoices"
-                            else -> "No invoices yet"
+                            !state.dashboard.errorMessage.isNullOrBlank() -> "Could not load ${documentLower}s"
+                            state.hasActiveInvoiceFilter() -> "No matching ${documentLower}s"
+                            else -> "No ${documentLower}s yet"
                         },
                         body = when {
                             !state.dashboard.errorMessage.isNullOrBlank() -> state.dashboard.errorMessage.orEmpty()
-                            state.hasActiveInvoiceFilter() -> "Clear filters or search another invoice, order, or customer."
-                            else -> "Create a manual invoice or complete a sale to generate invoice records."
+                            state.hasActiveInvoiceFilter() -> "Clear filters or search another $documentLower, order, or customer."
+                            else -> "Create a manual $documentLower from customer details and line items."
                         },
                     )
                 }
@@ -13510,6 +13599,7 @@ private fun DashboardInvoiceRecordsSurface(
                 DashboardInvoiceTable(
                     state = state,
                     invoices = sortedInvoices,
+                    documentKind = documentKind,
                     sortKey = sortKey,
                     sortAscending = sortAscending,
                     onSortChange = { nextSortKey ->
@@ -13577,7 +13667,10 @@ private fun DashboardInvoiceBillingFocusCard(
 private fun DashboardInvoiceSummaryCard(
     state: OnboardingUiState,
     invoices: List<OrmaOrder>,
+    documentKind: String = DashboardBillingDocumentInvoice,
 ) {
+    val documentTitle = documentKind.billingDocumentTitle()
+    val documentLower = documentKind.billingDocumentLowerLabel()
     val currency = invoices.firstOrNull()?.currency ?: state.dashboard.summary.currency
     val readyCount = invoices.count { it.status in setOf("paid", "completed") }
     val draftCount = invoices.size - readyCount
@@ -13593,12 +13686,12 @@ private fun DashboardInvoiceSummaryCard(
                 verticalArrangement = Arrangement.spacedBy(5.dp),
             ) {
                 Text(
-                    text = "Invoice desk",
+                    text = "$documentTitle desk",
                     style = MaterialTheme.typography.titleMedium,
                     color = OrmaColors.TextPrimary,
                 )
                 Text(
-                    text = "Generated from order totals, tax, customer, and workspace billing details.",
+                    text = "Generated from totals, tax, customer, and workspace billing details.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = OrmaColors.TextSecondary,
                     maxLines = 2,
@@ -13615,9 +13708,9 @@ private fun DashboardInvoiceSummaryCard(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             DashboardMiniMetricCell(
-                label = "Invoice value",
+                label = "$documentTitle value",
                 value = dashboardMoney(total, currency),
-                detail = "${invoices.size} records",
+                detail = "${invoices.size} $documentLower records",
                 modifier = Modifier.weight(1f),
                 tone = OrmaStatusTone.Success,
             )
@@ -13639,11 +13732,13 @@ private fun DashboardInvoiceRecords(
     selectedOrderId: String?,
     onSelect: (OrmaOrder) -> Unit,
     wide: Boolean,
+    documentKind: String = DashboardBillingDocumentInvoice,
 ) {
+    val documentTitle = documentKind.billingDocumentTitle()
     if (wide) {
         DashboardWideDataSurface(
-            title = "Invoice records",
-            columns = listOf("Invoice", "Customer", "Total", "Status", "Action"),
+            title = "$documentTitle records",
+            columns = listOf(documentTitle, "Customer", "Total", "Status", "Action"),
         ) {
             invoices.forEach { order ->
                 DashboardWideInvoiceRow(
@@ -13676,11 +13771,13 @@ private fun DashboardInvoiceRecords(
 private fun DashboardInvoiceTable(
     state: OnboardingUiState,
     invoices: List<OrmaOrder>,
+    documentKind: String,
     sortKey: String,
     sortAscending: Boolean,
     onSortChange: (String) -> Unit,
     onPreviewInvoice: (OrmaOrder) -> Unit,
 ) {
+    val documentTitle = documentKind.billingDocumentTitle()
     LazyColumn(
         modifier = Modifier
             .fillMaxWidth()
@@ -13703,7 +13800,7 @@ private fun DashboardInvoiceTable(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         DashboardSaleHeaderCell(
-                            text = "Invoice",
+                            text = documentTitle,
                             sortKey = DashboardInvoiceSortInvoice,
                             activeSortKey = sortKey,
                             sortAscending = sortAscending,
@@ -13795,7 +13892,7 @@ private fun DashboardWideInvoiceRow(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             DashboardWideCell(
-                primary = invoiceNumberFor(state, order),
+                primary = billingDocumentNumberFor(state, order),
                 secondary = order.orderNumber.ifBlank { order.orderType.orderTypeLabel() },
                 modifier = Modifier.weight(1.22f),
             )
@@ -13866,7 +13963,7 @@ private fun DashboardInvoiceRow(
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     Text(
-                        text = invoiceNumberFor(state, order),
+                        text = billingDocumentNumberFor(state, order),
                         style = MaterialTheme.typography.titleSmall,
                         color = OrmaColors.TextPrimary,
                         maxLines = 1,
@@ -13886,7 +13983,7 @@ private fun DashboardInvoiceRow(
                 )
             }
             DashboardMetricLine(
-                label = "Invoice total",
+                label = "${order.billingDocumentKind().billingDocumentTitle()} total",
                 value = dashboardMoney(order.total, order.currency),
                 detail = "Tax ${dashboardMoney(order.taxTotal, order.currency)} · Paid ${dashboardMoney(order.paidTotal, order.currency)}",
             )
@@ -13897,8 +13994,11 @@ private fun DashboardInvoiceRow(
 @Composable
 private fun DashboardInvoiceCreateGuideCard(
     state: OnboardingUiState,
+    documentKind: String,
     onCreate: () -> Unit,
 ) {
+    val documentTitle = documentKind.billingDocumentTitle()
+    val documentLower = documentKind.billingDocumentLowerLabel()
     DashboardRecordCard {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -13910,12 +14010,12 @@ private fun DashboardInvoiceCreateGuideCard(
                 verticalArrangement = Arrangement.spacedBy(5.dp),
             ) {
                 Text(
-                    text = "Invoice setup",
+                    text = "$documentTitle setup",
                     style = MaterialTheme.typography.titleMedium,
                     color = OrmaColors.TextPrimary,
                 )
                 Text(
-                    text = "Use the top Create invoice action when you need a manual invoice with customer billing and tax behavior.",
+                    text = "Use the top ${documentKind.billingDocumentActionLabel()} action when you need a manual $documentLower with customer and tax behavior.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = OrmaColors.TextSecondary,
                     maxLines = 3,
@@ -13933,10 +14033,10 @@ private fun DashboardInvoiceCreateGuideCard(
         ) {
             DashboardChecklistRow(text = "Enable GST/VAT or keep the invoice tax-free.")
             DashboardChecklistRow(text = "Add manual line items with separate tax percentages.")
-            DashboardChecklistRow(text = "Save it as an invoice-ready sale record.")
+            DashboardChecklistRow(text = "Save it as a ${documentLower}-ready record.")
         }
         OrmaSecondaryButton(
-            text = "Create invoice",
+            text = documentKind.billingDocumentActionLabel(),
             onClick = onCreate,
             modifier = Modifier.fillMaxWidth(),
             enabled = state.hasDashboardPermission(DashboardTeamPermissionCreateSale),
@@ -14084,12 +14184,14 @@ private fun DashboardInvoicePreviewScreen(
     val exporter = rememberOrmaOrderDocumentExporter()
     var documentStatus by rememberSaveable(order.id) { mutableStateOf<String?>(null) }
     val canDownloadDocuments = state.hasDashboardPermission(DashboardTeamPermissionDownloadInvoice)
+    val documentKind = order.billingDocumentKind()
+    val documentTitle = documentKind.billingDocumentTitle()
     fun downloadInvoicePdf() {
         val document = orderInvoicePdfDocument(state = state, order = order)
         val message = if (exporter.downloadPdf(fileName = document.fileName, pdfBase64 = document.pdfBase64)) {
-            "Invoice PDF download complete."
+            "$documentTitle PDF download complete."
         } else {
-            "Invoice PDF download is not available on this device yet."
+            "$documentTitle PDF download is not available on this device yet."
         }
         documentStatus = message
         onDownloadStatus(message)
@@ -14099,8 +14201,8 @@ private fun DashboardInvoicePreviewScreen(
         verticalArrangement = Arrangement.spacedBy(if (wide) 16.dp else 12.dp),
     ) {
         DashboardDetailPageHeaderCard(
-            title = "Invoice preview",
-            body = "${invoiceNumberFor(state, order)} · ${order.customerName ?: "Walk-in customer"}",
+            title = "$documentTitle preview",
+            body = "${billingDocumentNumberFor(state, order)} · ${order.customerName ?: "Walk-in customer"}",
             badgeText = order.invoiceStatusLabel().uppercase(),
             badgeTone = order.invoiceStatusTone(),
             onBack = onBack,
@@ -14258,6 +14360,7 @@ private fun DashboardInvoicePreviewSummaryCard(
     order: OrmaOrder,
     documentStatus: String?,
 ) {
+    val documentTitle = order.billingDocumentKind().billingDocumentTitle()
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = OrmaShapes.StandardCell,
@@ -14281,7 +14384,7 @@ private fun DashboardInvoicePreviewSummaryCard(
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     Text(
-                        text = invoiceNumberFor(state, order),
+                        text = billingDocumentNumberFor(state, order),
                         style = MaterialTheme.typography.titleSmall,
                         color = OrmaColors.TextPrimary,
                         maxLines = 1,
@@ -14304,7 +14407,7 @@ private fun DashboardInvoicePreviewSummaryCard(
                 rows = listOf(
                     "Total" to dashboardMoney(order.total, order.currency),
                     "Tax" to dashboardMoney(order.taxTotal, order.currency),
-                    "Paid" to dashboardMoney(order.paidTotal, order.currency),
+                    if (order.isDashboardQuotation()) "Estimated total" to dashboardMoney(order.total, order.currency) else "Paid" to dashboardMoney(order.paidTotal, order.currency),
                 ),
             )
             documentStatus?.let { status ->
@@ -14325,19 +14428,21 @@ private fun DashboardInvoicePreviewSheet(
 ) {
     val exporter = rememberOrmaOrderDocumentExporter()
     var documentStatus by rememberSaveable(order.id) { mutableStateOf<String?>(null) }
+    val documentKind = order.billingDocumentKind()
+    val documentTitle = documentKind.billingDocumentTitle()
     fun downloadInvoicePdf() {
         val document = orderInvoicePdfDocument(state = state, order = order)
         val message = if (exporter.downloadPdf(fileName = document.fileName, pdfBase64 = document.pdfBase64)) {
-            "Invoice PDF download complete."
+            "$documentTitle PDF download complete."
         } else {
-            "Invoice PDF download is not available on this device yet."
+            "$documentTitle PDF download is not available on this device yet."
         }
         documentStatus = message
         onDownloadStatus(message)
     }
     DashboardFormSheet(
-        title = "Invoice preview",
-        body = "${invoiceNumberFor(state, order)} · ${order.customerName ?: "Walk-in customer"}",
+        title = "$documentTitle preview",
+        body = "${billingDocumentNumberFor(state, order)} · ${order.customerName ?: "Walk-in customer"}",
         onDismiss = onDismiss,
         wide = wide,
     ) {
@@ -14352,7 +14457,7 @@ private fun DashboardInvoicePreviewSheet(
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     Text(
-                        text = invoiceNumberFor(state, order),
+                        text = billingDocumentNumberFor(state, order),
                         style = MaterialTheme.typography.titleSmall,
                         color = OrmaColors.TextPrimary,
                         maxLines = 1,
@@ -14435,6 +14540,7 @@ private fun DashboardInvoicePreviewDocumentCard(
     order: OrmaOrder,
     wide: Boolean,
 ) {
+    val documentTitle = order.billingDocumentKind().billingDocumentTitle()
     DashboardRecordCard {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -14446,7 +14552,7 @@ private fun DashboardInvoicePreviewDocumentCard(
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 Text(
-                    text = "Invoice document",
+                    text = "$documentTitle document",
                     style = MaterialTheme.typography.titleMedium,
                     color = OrmaColors.TextPrimary,
                 )
@@ -14482,11 +14588,12 @@ private fun DashboardInvoicePreviewCard(
     order: OrmaOrder?,
     wide: Boolean,
 ) {
+    val documentTitle = order?.billingDocumentKind()?.billingDocumentTitle() ?: "Invoice"
     if (order == null) {
         DashboardEmptyModuleCard(
             icon = DashboardNavIconKind.Invoice,
-            title = "Select an invoice",
-            body = "Choose an order record to preview the tax invoice.",
+            title = "Select a document",
+            body = "Choose a billing record to preview the document.",
         )
         return
     }
@@ -14498,12 +14605,12 @@ private fun DashboardInvoicePreviewCard(
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(
-                    text = "Tax invoice preview",
+                    text = "$documentTitle preview",
                     style = MaterialTheme.typography.titleMedium,
                     color = OrmaColors.TextPrimary,
                 )
                 Text(
-                    text = "Based on the provided DarDoc invoice template.",
+                    text = "Based on the shared billing document template.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = OrmaColors.TextSecondary,
                 )
@@ -14536,6 +14643,7 @@ private fun DashboardInvoiceDocument(
     compact: Boolean,
     modifier: Modifier = Modifier,
 ) {
+    val documentNumber = billingDocumentNumberFor(state, order)
     val issuerName = invoiceIssuerName(state)
     val customer = order.customerId?.let { id -> state.dashboard.customers.firstOrNull { it.id == id } }
     val billToName = order.customerName?.takeIf { it.isNotBlank() } ?: customer?.name ?: "Walk-in customer"
@@ -14585,12 +14693,12 @@ private fun DashboardInvoiceDocument(
                         verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
                         Text(
-                            text = "CUSTOMER BILLING",
+                            text = if (order.isDashboardQuotation()) "CUSTOMER QUOTATION" else "CUSTOMER BILLING",
                             style = MaterialTheme.typography.labelSmall,
                             color = OrmaColors.ScreenBackground.copy(alpha = 0.46f),
                         )
                         Text(
-                            text = invoiceNumberFor(state, order),
+                            text = documentNumber,
                             style = MaterialTheme.typography.titleSmall,
                             color = OrmaColors.ScreenBackground,
                         )
@@ -14611,7 +14719,7 @@ private fun DashboardInvoiceDocument(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = "Tax Invoice",
+                    text = if (order.isDashboardQuotation()) "Quotation" else "Tax Invoice",
                     style = if (compact) MaterialTheme.typography.titleLarge else MaterialTheme.typography.headlineSmall,
                     color = OrmaColors.TextPrimary,
                 )
@@ -14628,7 +14736,7 @@ private fun DashboardInvoiceDocument(
                 InvoiceItemsTable(state = state, order = order, compact = compact)
                 InvoiceTotalsBlock(order = order)
                 InvoiceAmountWords(order = order)
-                InvoiceTermsAndSignature(state = state, billToName = billToName)
+                InvoiceTermsAndSignature(state = state, order = order, billToName = billToName)
                 InvoiceFooter(state = state, order = order)
             }
         }
@@ -14640,6 +14748,7 @@ private fun InvoiceMetaBand(
     state: OnboardingUiState,
     order: OrmaOrder,
 ) {
+    val documentTitle = order.billingDocumentKind().billingDocumentTitle()
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(14.dp),
@@ -14650,8 +14759,8 @@ private fun InvoiceMetaBand(
             modifier = Modifier.weight(1f),
         )
         InvoiceMetaCell(
-            label = "Invoice No.",
-            value = invoiceNumberFor(state, order),
+            label = "$documentTitle No.",
+            value = billingDocumentNumberFor(state, order),
             modifier = Modifier.weight(1f),
         )
         InvoiceMetaCell(
@@ -14778,7 +14887,7 @@ private fun InvoiceItemsTable(
                 shadowElevation = 0.dp,
             ) {
                 Text(
-                    text = "No billable line items are available for this invoice yet.",
+                    text = "No billable line items are available for this ${order.billingDocumentKind().billingDocumentLowerLabel()} yet.",
                     modifier = Modifier.padding(14.dp),
                     style = MaterialTheme.typography.bodyMedium,
                     color = OrmaColors.TextSecondary,
@@ -14974,8 +15083,10 @@ private fun InvoiceAmountWords(order: OrmaOrder) {
 @Composable
 private fun InvoiceTermsAndSignature(
     state: OnboardingUiState,
+    order: OrmaOrder,
     billToName: String,
 ) {
+    val isQuotation = order.isDashboardQuotation()
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(18.dp),
@@ -14991,9 +15102,9 @@ private fun InvoiceTermsAndSignature(
                 color = OrmaColors.TextSecondary,
             )
             listOf(
-                "This invoice reflects the amount captured for the referenced order.",
-                "Payment is due as per the agreed payment terms.",
-                "Discrepancies must be reported within 48 hours of receipt.",
+                if (isQuotation) "This quotation reflects the estimated amount for the requested work." else "This invoice reflects the amount captured for the referenced order.",
+                if (isQuotation) "Final billing may change if quantities, taxes, or fulfilment details change." else "Payment is due as per the agreed payment terms.",
+                if (isQuotation) "Quotation validity and acceptance terms are subject to workspace policy." else "Discrepancies must be reported within 48 hours of receipt.",
                 state.draft.invoiceFooter.ifBlank { "Thank you for your business." },
             ).forEachIndexed { index, term ->
                 Text(
@@ -15089,7 +15200,7 @@ private fun InvoiceFooter(
             )
         }
         Text(
-            text = "${invoiceNumberFor(state, order)} · ${invoiceIssueDateLabel(order)}",
+            text = "${billingDocumentNumberFor(state, order)} · ${invoiceIssueDateLabel(order)}",
             style = MaterialTheme.typography.bodySmall,
             color = OrmaColors.TextTertiary,
             textAlign = TextAlign.End,
@@ -16127,8 +16238,6 @@ private fun DashboardProductsWorkspace(
                 DashboardProductKpiStrip(state = state, products = products)
                 DashboardCatalogOperationsPanel(
                     state = state,
-                    onSupplierClick = onSupplierClick,
-                    onOfferClick = onOfferClick,
                 )
                 DashboardCatalogSearchToolbar(
                     state = state,
@@ -17545,8 +17654,6 @@ private fun DashboardProductRecordsSurface(
 @Composable
 private fun DashboardCatalogOperationsPanel(
     state: OnboardingUiState,
-    onSupplierClick: () -> Unit,
-    onOfferClick: () -> Unit,
 ) {
     val supplierCount = state.dashboard.suppliers.size
     val offerCount = state.dashboard.offers.size
@@ -17586,22 +17693,6 @@ private fun DashboardCatalogOperationsPanel(
                 BookingMetric("Low stock", lowStock.toString(), "restock queue"),
             ),
         )
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            OrmaSecondaryButton(
-                text = "Suppliers",
-                onClick = onSupplierClick,
-                modifier = Modifier.weight(1f),
-            )
-            OrmaSecondaryButton(
-                text = "Offers",
-                onClick = onOfferClick,
-                modifier = Modifier.weight(1f),
-                enabled = state.hasDashboardPermission(DashboardTeamPermissionCreateOffer),
-            )
-        }
     }
 }
 
@@ -27804,6 +27895,65 @@ private fun invoiceNumberFor(state: OnboardingUiState, order: OrmaOrder): String
     return "$prefix-$orderRef"
 }
 
+private const val DashboardBillingDocumentInvoice = "invoice"
+private const val DashboardBillingDocumentQuotation = "quotation"
+private const val DashboardQuotationMarker = "[ORMA_DOCUMENT=quotation]"
+
+private val DashboardBillingDocumentTabs = listOf(
+    DashboardBillingDocumentInvoice,
+    DashboardBillingDocumentQuotation,
+)
+
+private fun String.billingDocumentTabLabel(): String =
+    when (trim().lowercase()) {
+        DashboardBillingDocumentQuotation -> "Quotation"
+        else -> "Invoice"
+    }
+
+private fun OrmaOrder.isDashboardQuotation(): Boolean =
+    notes.orEmpty().contains(DashboardQuotationMarker, ignoreCase = true)
+
+private fun OrmaOrder.billingDocumentKind(): String =
+    if (isDashboardQuotation()) DashboardBillingDocumentQuotation else DashboardBillingDocumentInvoice
+
+private fun String.billingDocumentTitle(): String =
+    if (trim().lowercase() == DashboardBillingDocumentQuotation) "Quotation" else "Invoice"
+
+private fun String.billingDocumentLowerLabel(): String =
+    billingDocumentTitle().lowercase()
+
+private fun String.billingDocumentActionLabel(): String =
+    if (trim().lowercase() == DashboardBillingDocumentQuotation) "Create quotation" else "Create invoice"
+
+private fun billingDocumentNumberFor(state: OnboardingUiState, order: OrmaOrder): String {
+    if (!order.isDashboardQuotation()) return invoiceNumberFor(state, order)
+    val prefix = state.draft.invoicePrefix
+        .trim()
+        .uppercase()
+        .ifBlank { "ORMA" }
+    val orderRef = order.orderNumber
+        .trim()
+        .removePrefix("$prefix-")
+        .ifBlank { order.id.take(8).uppercase() }
+    return "$prefix-QTN-$orderRef"
+}
+
+private fun quotationNotes(notes: String): String {
+    val cleanNotes = notes
+        .replace(DashboardQuotationMarker, "")
+        .trim()
+        .ifBlank { "Created from quotation desk" }
+    return "$cleanNotes $DashboardQuotationMarker".trim()
+}
+
+private fun billingDocumentOrders(
+    state: OnboardingUiState,
+    documentKind: String,
+): List<OrmaOrder> {
+    val quotations = documentKind.trim().lowercase() == DashboardBillingDocumentQuotation
+    return filteredDashboardInvoiceOrders(state).filter { it.isDashboardQuotation() == quotations }
+}
+
 private fun invoiceIssuerName(state: OnboardingUiState): String =
     state.workspaceLegalName
         .ifBlank { state.workspaceName }
@@ -27973,11 +28123,13 @@ private fun orderInvoiceDocument(
     state: OnboardingUiState,
     order: OrmaOrder,
 ): OrderHtmlDocument {
-    val invoiceNumber = invoiceNumberFor(state, order)
-    val title = "Invoice $invoiceNumber"
+    val documentKind = order.billingDocumentKind()
+    val documentTitle = documentKind.billingDocumentTitle()
+    val invoiceNumber = billingDocumentNumberFor(state, order)
+    val title = "$documentTitle $invoiceNumber"
     return OrderHtmlDocument(
         title = title,
-        fileName = "${orderDocumentFileStem(invoiceNumber)}-invoice.html",
+        fileName = "${orderDocumentFileStem(invoiceNumber)}-${documentKind}.html",
         html = orderInvoiceHtml(state = state, order = order, invoiceNumber = invoiceNumber, title = title),
     )
 }
@@ -27986,11 +28138,13 @@ private fun orderInvoicePdfDocument(
     state: OnboardingUiState,
     order: OrmaOrder,
 ): OrderPdfDocument {
-    val invoiceNumber = invoiceNumberFor(state, order)
-    val title = "Invoice $invoiceNumber"
+    val documentKind = order.billingDocumentKind()
+    val documentTitle = documentKind.billingDocumentTitle()
+    val invoiceNumber = billingDocumentNumberFor(state, order)
+    val title = "$documentTitle $invoiceNumber"
     return OrderPdfDocument(
         title = title,
-        fileName = "${orderDocumentFileStem(invoiceNumber)}-invoice.pdf",
+        fileName = "${orderDocumentFileStem(invoiceNumber)}-${documentKind}.pdf",
         pdfBase64 = orderInvoicePdfBase64(state = state, order = order, invoiceNumber = invoiceNumber),
     )
 }
@@ -28027,6 +28181,8 @@ private fun orderInvoicePdfBase64(
     order: OrmaOrder,
     invoiceNumber: String,
 ): String {
+    val isQuotation = order.isDashboardQuotation()
+    val documentTitle = if (isQuotation) "Quotation" else "Tax Invoice"
     val customer = order.customerId?.let { id -> state.dashboard.customers.firstOrNull { it.id == id } }
     val billToName = order.customerName?.takeIf { it.isNotBlank() } ?: customer?.name ?: "Walk-in customer"
     val reference = order.orderNumber.ifBlank { order.id.take(8).uppercase() }
@@ -28107,6 +28263,7 @@ private fun drawInvoicePreviewPdfPage(
     pageNumber: Int,
     pageCount: Int,
 ) {
+    val isQuotation = order.isDashboardQuotation()
     canvas.fillRect(24.0, 24.0, 547.0, 794.0, "FFFDF8")
     canvas.strokeRect(24.0, 24.0, 547.0, 794.0, "E7E0D4", 0.8)
     canvas.fillRect(36.0, 744.0, 523.0, 68.0, "143D3D")
@@ -28121,16 +28278,16 @@ private fun drawInvoicePreviewPdfPage(
         size = 9,
         color = "D8E4E0",
     )
-    canvas.text(404.0, 788.0, "CUSTOMER BILLING", 8, "D8E4E0", "F2")
+    canvas.text(404.0, 788.0, if (isQuotation) "CUSTOMER QUOTATION" else "CUSTOMER BILLING", 8, "D8E4E0", "F2")
     canvas.text(404.0, 770.0, invoiceNumber, 13, "FFFDF8", "F2")
     canvas.text(404.0, 753.0, invoiceIssueDateLabel(order), 9, "D8E4E0")
 
-    canvas.text(56.0, 709.0, "Tax Invoice", 21, "143D3D", "F2")
+    canvas.text(56.0, 709.0, if (isQuotation) "Quotation" else "Tax Invoice", 21, "143D3D", "F2")
     drawInvoicePdfPill(canvas, 465.0, 694.0, 74.0, 24.0, "ORIGINAL", "E9F7F2", "62A6A2")
     canvas.line(56.0, 680.0, 539.0, 680.0, "EFE8DD", 0.8)
 
     drawInvoicePdfMetaCell(canvas, 56.0, 648.0, "DATE OF ISSUE", invoiceIssueDateLabel(order), 96.0)
-    drawInvoicePdfMetaCell(canvas, 184.0, 648.0, "INVOICE NO.", invoiceNumber, 104.0)
+    drawInvoicePdfMetaCell(canvas, 184.0, 648.0, if (isQuotation) "QUOTATION NO." else "INVOICE NO.", invoiceNumber, 104.0)
     drawInvoicePdfMetaCell(canvas, 318.0, 648.0, "REFERENCE", reference, 92.0)
     drawInvoicePdfMetaCell(
         canvas = canvas,
@@ -28169,7 +28326,7 @@ private fun drawInvoicePreviewPdfPage(
     if (page.items.isEmpty()) {
         canvas.fillRect(56.0, rowY - 16.0, 483.0, 34.0, "F4F7FB")
         canvas.strokeRect(56.0, rowY - 16.0, 483.0, 34.0, "E7E0D4", 0.5)
-        canvas.text(70.0, rowY + 4.0, "No billable line items are available for this invoice yet.", 9, "7C9290")
+        canvas.text(70.0, rowY + 4.0, "No billable line items are available for this ${if (isQuotation) "quotation" else "invoice"} yet.", 9, "7C9290")
         rowY -= 44.0
     } else {
         page.items.forEachIndexed { index, item ->
@@ -28319,6 +28476,7 @@ private fun drawInvoicePdfTotalsAndTerms(
     billToName: String,
     y: Double,
 ) {
+    val isQuotation = order.isDashboardQuotation()
     val items = invoiceRenderableItems(order)
     val topY = y.coerceAtLeast(214.0)
     canvas.fillRect(56.0, topY - 38.0, 218.0, 82.0, "F4F7FB")
@@ -28352,9 +28510,9 @@ private fun drawInvoicePdfTotalsAndTerms(
     val termsY = 128.0
     canvas.text(56.0, termsY, "TERMS & CONDITIONS", 7, "7C9290", "F2")
     listOf(
-        "This invoice reflects the amount captured for the referenced order.",
-        "Payment is due as per the agreed payment terms.",
-        "Discrepancies must be reported within 48 hours of receipt.",
+        if (isQuotation) "This quotation reflects the estimated amount for the requested work." else "This invoice reflects the amount captured for the referenced order.",
+        if (isQuotation) "Final billing may change if quantities, taxes, or fulfilment details change." else "Payment is due as per the agreed payment terms.",
+        if (isQuotation) "Quotation validity and acceptance terms are subject to workspace policy." else "Discrepancies must be reported within 48 hours of receipt.",
         state.draft.invoiceFooter.ifBlank { "Thank you for your business." },
     ).forEachIndexed { index, term ->
         canvas.text(56.0, termsY - 17.0 - (index * 12.0), "${index + 1}. ${term.orderPdfShort(62)}", 7, "7C9290")
@@ -28497,6 +28655,8 @@ private fun orderInvoiceHtml(
     invoiceNumber: String,
     title: String,
 ): String {
+    val isQuotation = order.isDashboardQuotation()
+    val documentTitle = if (isQuotation) "Quotation" else "Tax Invoice"
     val customer = order.customerId?.let { id -> state.dashboard.customers.firstOrNull { it.id == id } }
     val billToName = order.customerName?.takeIf { it.isNotBlank() } ?: customer?.name ?: "Walk-in customer"
     val billToDetail = invoiceBillToDetail(order = order, customer = customer)
@@ -28625,7 +28785,7 @@ private fun orderInvoiceHtml(
                 <p class="muted">${invoiceIssuerSubLine(state).orderDocumentLineBreaks()}</p>
               </div>
               <div class="right">
-                <p class="label">Tax invoice</p>
+                <p class="label">${documentTitle.orderDocumentEscaped()}</p>
                 <h2>${invoiceNumber.orderDocumentEscaped()}</h2>
                 <p class="muted">${invoiceIssueDateLabel(order).orderDocumentEscaped()}</p>
               </div>
@@ -28633,9 +28793,10 @@ private fun orderInvoiceHtml(
             <section class="content">
               <div class="meta">
                 ${orderDocumentMetaCell("Issue date", invoiceIssueDateLabel(order))}
+                ${orderDocumentMetaCell(if (isQuotation) "Quotation no." else "Invoice no.", invoiceNumber)}
                 ${orderDocumentMetaCell("Reference", order.orderNumber.ifBlank { order.id.take(8).uppercase() })}
                 ${orderDocumentMetaCell("Status", order.status.dashboardStatusLabel())}
-                ${orderDocumentMetaCell("Payment", order.paymentMode.paymentModeLabel())}
+                ${orderDocumentMetaCell(if (isQuotation) "Validity" else "Payment", if (isQuotation) "Subject to confirmation" else order.paymentMode.paymentModeLabel())}
               </div>
               <div class="party">
                 <div>
@@ -28817,6 +28978,7 @@ private fun String.receiptLine(width: Int): String =
         .take(width)
 
 private fun orderDocumentItemsTable(order: OrmaOrder): String {
+    val documentLower = order.billingDocumentKind().billingDocumentLowerLabel()
     val rows = invoiceRenderableItems(order).mapIndexed { index, item ->
         val description = item.description.ifBlank { item.productName ?: "Line item" }
         """
@@ -28833,7 +28995,7 @@ private fun orderDocumentItemsTable(order: OrmaOrder): String {
     val body = rows.ifBlank {
         """
             <tr>
-              <td colspan="6">No billable line items are available for this invoice yet.</td>
+              <td colspan="6">No billable line items are available for this ${documentLower.orderDocumentEscaped()} yet.</td>
             </tr>
         """.trimIndent()
     }
@@ -29996,6 +30158,8 @@ private fun filteredDashboardInvoiceOrders(state: OnboardingUiState): List<OrmaO
         .filter { order ->
             val textMatches = listOf(
                 invoiceNumberFor(state, order),
+                billingDocumentNumberFor(state, order),
+                order.billingDocumentKind().billingDocumentTitle(),
                 order.orderNumber,
                 order.customerName.orEmpty(),
                 order.customerPhoneNumber.orEmpty(),
