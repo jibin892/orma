@@ -223,6 +223,18 @@ fun Route.dashboardRoutes(
             call.respondValidation("offer_discount_required", "Enter a discount greater than zero.")
             return@post
         }
+        if (request.discountType.equals("percentage", ignoreCase = true) && (request.discountValue.toDoubleOrNull() ?: 0.0) > 100.0) {
+            call.respondValidation("offer_discount_too_high", "Percentage discount cannot be above 100%.")
+            return@post
+        }
+        if (!request.discountCapAmount.isNullOrBlank() && (request.discountCapAmount.toDoubleOrNull() ?: -1.0) <= 0.0) {
+            call.respondValidation("offer_cap_invalid", "Enter a cap amount greater than zero, or leave it empty.")
+            return@post
+        }
+        if (!request.customerId.isNullOrBlank() && request.couponCode.isNullOrBlank()) {
+            call.respondValidation("offer_coupon_required", "Enter a coupon code for a customer-specific offer.")
+            return@post
+        }
         if (scope == "category" && request.categoryId.isNullOrBlank()) {
             call.respondValidation("offer_category_required", "Choose the category for this offer.")
             return@post
@@ -252,6 +264,18 @@ fun Route.dashboardRoutes(
         }
         if ((request.discountValue.toDoubleOrNull() ?: 0.0) <= 0.0) {
             call.respondValidation("offer_discount_required", "Enter a discount greater than zero.")
+            return@put
+        }
+        if (request.discountType.equals("percentage", ignoreCase = true) && (request.discountValue.toDoubleOrNull() ?: 0.0) > 100.0) {
+            call.respondValidation("offer_discount_too_high", "Percentage discount cannot be above 100%.")
+            return@put
+        }
+        if (!request.discountCapAmount.isNullOrBlank() && (request.discountCapAmount.toDoubleOrNull() ?: -1.0) <= 0.0) {
+            call.respondValidation("offer_cap_invalid", "Enter a cap amount greater than zero, or leave it empty.")
+            return@put
+        }
+        if (!request.customerId.isNullOrBlank() && request.couponCode.isNullOrBlank()) {
+            call.respondValidation("offer_coupon_required", "Enter a coupon code for a customer-specific offer.")
             return@put
         }
         if (scope == "category" && request.categoryId.isNullOrBlank()) {

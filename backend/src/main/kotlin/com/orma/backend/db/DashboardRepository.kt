@@ -1715,6 +1715,7 @@ class DashboardRepository(
                 offer.description as offer_description,
                 offer.discount_type,
                 offer.discount_value,
+                offer.discount_cap_amount,
                 (
                     select pi.storage_path
                     from product_images pi
@@ -1731,6 +1732,8 @@ class DashboardRepository(
                 from product_offers po
                 where po.workspace_id = products.workspace_id
                   and po.status = 'active'
+                  and po.customer_id is null
+                  and po.coupon_code is null
                   and (po.starts_at is null or po.starts_at <= now())
                   and (po.ends_at is null or po.ends_at >= current_date)
                   and (
@@ -1742,7 +1745,11 @@ class DashboardRepository(
                   case po.applies_to when 'product' then 0 when 'category' then 1 else 2 end,
                   case
                     when po.discount_type = 'fixed' then least(po.discount_value, products.selling_price)
-                    else least(products.selling_price, products.selling_price * least(po.discount_value, 100) / 100)
+                    else least(
+                      products.selling_price,
+                      coalesce(po.discount_cap_amount, products.selling_price),
+                      products.selling_price * least(po.discount_value, 100) / 100
+                    )
                   end desc,
                   po.created_at desc
                 limit 1
@@ -1911,6 +1918,7 @@ class DashboardRepository(
                 offer.description as offer_description,
                 offer.discount_type,
                 offer.discount_value,
+                offer.discount_cap_amount,
                 (
                     select pi.storage_path
                     from product_images pi
@@ -1927,6 +1935,8 @@ class DashboardRepository(
                 from product_offers po
                 where po.workspace_id = products.workspace_id
                   and po.status = 'active'
+                  and po.customer_id is null
+                  and po.coupon_code is null
                   and (po.starts_at is null or po.starts_at <= now())
                   and (po.ends_at is null or po.ends_at >= current_date)
                   and (
@@ -1938,7 +1948,11 @@ class DashboardRepository(
                   case po.applies_to when 'product' then 0 when 'category' then 1 else 2 end,
                   case
                     when po.discount_type = 'fixed' then least(po.discount_value, products.selling_price)
-                    else least(products.selling_price, products.selling_price * least(po.discount_value, 100) / 100)
+                    else least(
+                      products.selling_price,
+                      coalesce(po.discount_cap_amount, products.selling_price),
+                      products.selling_price * least(po.discount_value, 100) / 100
+                    )
                   end desc,
                   po.created_at desc
                 limit 1
@@ -2835,10 +2849,14 @@ class DashboardRepository(
                     p.name as product_name,
                     po.category_id::text,
                     pc.name as category_name,
+                    po.customer_id::text,
+                    c.name as customer_name,
                     po.name,
                     po.description,
                     po.discount_type,
                     po.discount_value,
+                    po.discount_cap_amount,
+                    po.coupon_code,
                     po.starts_at::text,
                     po.ends_at::text,
                     po.status,
@@ -2848,12 +2866,13 @@ class DashboardRepository(
                 from product_offers po
                 left join products p on p.id = po.product_id
                 left join product_categories pc on pc.id = po.category_id
+                left join customers c on c.id = po.customer_id
                 where po.workspace_id = ?::uuid and po.status = 'active'
                 """.trimIndent(),
             )
             if (search != null) {
-                append(" and (po.name ilike ? or coalesce(p.name, '') ilike ? or coalesce(pc.name, '') ilike ?)")
-                repeat(3) { params.add(search.ilikePattern()) }
+                append(" and (po.name ilike ? or coalesce(p.name, '') ilike ? or coalesce(pc.name, '') ilike ? or coalesce(c.name, '') ilike ? or coalesce(po.coupon_code, '') ilike ?)")
+                repeat(5) { params.add(search.ilikePattern()) }
             }
             appendCreatedDateWhere(filters, params, "po.created_at")
             append(" order by po.created_at desc limit ${filters.limit.sanitizedLimit()} offset ${filters.offset()}")
@@ -2878,12 +2897,15 @@ class DashboardRepository(
         request: ProductOfferRequest,
     ): ProductOfferResponse {
         val appliesTo = request.appliesTo.cleanOfferScope()
+        val discountType = request.discountType.cleanDiscountType()
+        val capAmount = request.discountCapAmount.cleanOfferCapAmount(discountType)
+        val couponCode = request.couponCode.cleanCouponCode()
         val sql = """
             insert into product_offers (
-                workspace_id, product_id, category_id, applies_to, name, description,
-                discount_type, discount_value, starts_at, ends_at, updated_at
+                workspace_id, product_id, category_id, customer_id, applies_to, name, description,
+                discount_type, discount_value, discount_cap_amount, coupon_code, starts_at, ends_at, updated_at
             )
-            values (?::uuid, ?::uuid, ?::uuid, ?, ?, ?, ?, ?, ?::timestamptz, ?::timestamptz, now())
+            values (?::uuid, ?::uuid, ?::uuid, ?::uuid, ?, ?, ?, ?, ?, ?, ?, ?::timestamptz, ?::timestamptz, now())
             returning
                 id::text,
                 applies_to,
@@ -2891,10 +2913,14 @@ class DashboardRepository(
                 (select name from products where id = product_offers.product_id) as product_name,
                 category_id::text,
                 (select name from product_categories where id = product_offers.category_id) as category_name,
+                customer_id::text,
+                (select name from customers where id = product_offers.customer_id) as customer_name,
                 name,
                 description,
                 discount_type,
                 discount_value,
+                discount_cap_amount,
+                coupon_code,
                 starts_at::text,
                 ends_at::text,
                 status,
@@ -2905,13 +2931,16 @@ class DashboardRepository(
             statement.setString(1, workspaceId)
             statement.setNullableUuid(2, if (appliesTo == "product") request.productId else null)
             statement.setNullableUuid(3, if (appliesTo == "category") request.categoryId else null)
-            statement.setString(4, appliesTo)
-            statement.setString(5, request.name.cleanName())
-            statement.setNullableString(6, request.description?.cleanOptional())
-            statement.setString(7, request.discountType.cleanDiscountType())
-            statement.setBigDecimal(8, request.discountValue.decimalOrZero().coerceAtLeast(BigDecimal.ZERO))
-            statement.setNullableString(9, request.startsAt?.cleanOptional())
-            statement.setNullableString(10, request.endsAt?.cleanOptional())
+            statement.setNullableUuid(4, request.customerId)
+            statement.setString(5, appliesTo)
+            statement.setString(6, request.name.cleanName())
+            statement.setNullableString(7, request.description?.cleanOptional())
+            statement.setString(8, discountType)
+            statement.setBigDecimal(9, request.discountValue.decimalOrZero().coerceAtLeast(BigDecimal.ZERO))
+            if (capAmount == null) statement.setNull(10, java.sql.Types.NUMERIC) else statement.setBigDecimal(10, capAmount)
+            statement.setNullableString(11, couponCode)
+            statement.setNullableString(12, request.startsAt?.cleanOptional())
+            statement.setNullableString(13, request.endsAt?.cleanOptional())
             statement.executeQuery().use { result ->
                 result.next()
                 result.toProductOfferResponse()
@@ -2925,10 +2954,14 @@ class DashboardRepository(
         request: ProductOfferRequest,
     ): ProductOfferResponse? {
         val appliesTo = request.appliesTo.cleanOfferScope()
+        val discountType = request.discountType.cleanDiscountType()
+        val capAmount = request.discountCapAmount.cleanOfferCapAmount(discountType)
+        val couponCode = request.couponCode.cleanCouponCode()
         val sql = """
             update product_offers
-            set product_id = ?::uuid, category_id = ?::uuid, applies_to = ?, name = ?, description = ?,
-                discount_type = ?, discount_value = ?, starts_at = ?::timestamptz, ends_at = ?::timestamptz,
+            set product_id = ?::uuid, category_id = ?::uuid, customer_id = ?::uuid, applies_to = ?, name = ?, description = ?,
+                discount_type = ?, discount_value = ?, discount_cap_amount = ?, coupon_code = ?,
+                starts_at = ?::timestamptz, ends_at = ?::timestamptz,
                 updated_at = now()
             where id = ?::uuid and workspace_id = ?::uuid and status = 'active'
             returning
@@ -2938,10 +2971,14 @@ class DashboardRepository(
                 (select name from products where id = product_offers.product_id) as product_name,
                 category_id::text,
                 (select name from product_categories where id = product_offers.category_id) as category_name,
+                customer_id::text,
+                (select name from customers where id = product_offers.customer_id) as customer_name,
                 name,
                 description,
                 discount_type,
                 discount_value,
+                discount_cap_amount,
+                coupon_code,
                 starts_at::text,
                 ends_at::text,
                 status,
@@ -2951,15 +2988,18 @@ class DashboardRepository(
         return prepareStatement(sql).use { statement ->
             statement.setNullableUuid(1, if (appliesTo == "product") request.productId else null)
             statement.setNullableUuid(2, if (appliesTo == "category") request.categoryId else null)
-            statement.setString(3, appliesTo)
-            statement.setString(4, request.name.cleanName())
-            statement.setNullableString(5, request.description?.cleanOptional())
-            statement.setString(6, request.discountType.cleanDiscountType())
-            statement.setBigDecimal(7, request.discountValue.decimalOrZero().coerceAtLeast(BigDecimal.ZERO))
-            statement.setNullableString(8, request.startsAt?.cleanOptional())
-            statement.setNullableString(9, request.endsAt?.cleanOptional())
-            statement.setString(10, offerId)
-            statement.setString(11, workspaceId)
+            statement.setNullableUuid(3, request.customerId)
+            statement.setString(4, appliesTo)
+            statement.setString(5, request.name.cleanName())
+            statement.setNullableString(6, request.description?.cleanOptional())
+            statement.setString(7, discountType)
+            statement.setBigDecimal(8, request.discountValue.decimalOrZero().coerceAtLeast(BigDecimal.ZERO))
+            if (capAmount == null) statement.setNull(9, java.sql.Types.NUMERIC) else statement.setBigDecimal(9, capAmount)
+            statement.setNullableString(10, couponCode)
+            statement.setNullableString(11, request.startsAt?.cleanOptional())
+            statement.setNullableString(12, request.endsAt?.cleanOptional())
+            statement.setString(13, offerId)
+            statement.setString(14, workspaceId)
             statement.executeQuery().use { result ->
                 if (result.next()) result.toProductOfferResponse() else null
             }
@@ -4391,10 +4431,14 @@ class DashboardRepository(
             productName = getString("product_name"),
             categoryId = getString("category_id"),
             categoryName = getString("category_name"),
+            customerId = getString("customer_id"),
+            customerName = getString("customer_name"),
             name = getString("name"),
             description = getString("description"),
             discountType = getString("discount_type"),
             discountValue = getBigDecimal("discount_value").decimalString(),
+            discountCapAmount = getBigDecimal("discount_cap_amount")?.decimalString(),
+            couponCode = getString("coupon_code"),
             startsAt = getString("starts_at"),
             endsAt = getString("ends_at"),
             status = getString("status"),
@@ -4432,10 +4476,11 @@ class DashboardRepository(
         val price = getBigDecimal("selling_price") ?: BigDecimal.ZERO
         val discountType = getString("discount_type")
         val discountValue = getBigDecimal("discount_value") ?: BigDecimal.ZERO
+        val discountCapAmount = getBigDecimal("discount_cap_amount")
         val discount = if (getString("offer_id") == null) {
             BigDecimal.ZERO
         } else {
-            discountAmount(price, discountType, discountValue)
+            discountAmount(price, discountType, discountValue, discountCapAmount)
         }
         val finalPrice = price.subtract(discount).coerceAtLeast(BigDecimal.ZERO).scaled()
         return PublicCatalogProductResponse(
@@ -4953,6 +4998,19 @@ class DashboardRepository(
     private fun String?.cleanOptionalUpper(): String? =
         cleanOptional()?.uppercase()
 
+    private fun String?.cleanCouponCode(): String? =
+        cleanOptional()
+            ?.uppercase()
+            ?.filter { it.isLetterOrDigit() || it == '-' || it == '_' }
+            ?.take(40)
+            ?.ifBlank { null }
+
+    private fun String?.cleanOfferCapAmount(discountType: String): BigDecimal? =
+        takeIf { discountType == "percentage" }
+            ?.decimalOrZero()
+            ?.takeIf { it > BigDecimal.ZERO }
+            ?.scaled()
+
     private fun String?.cleanIsoDateOrNull(): String? =
         this
             ?.trim()
@@ -5275,15 +5333,20 @@ class DashboardRepository(
         price: BigDecimal,
         discountType: String?,
         discountValue: BigDecimal,
+        discountCapAmount: BigDecimal? = null,
     ): BigDecimal {
         val safeValue = discountValue.coerceAtLeast(BigDecimal.ZERO)
         return when (discountType?.cleanDiscountType()) {
             "fixed" -> safeValue.coerceAtMost(price).scaled()
-            else -> price
-                .multiply(safeValue.coerceAtMost(BigDecimal("100")))
-                .divide(BigDecimal("100"), 2, RoundingMode.HALF_UP)
-                .coerceAtMost(price)
-                .scaled()
+            else -> {
+                val rawDiscount = price
+                    .multiply(safeValue.coerceAtMost(BigDecimal("100")))
+                    .divide(BigDecimal("100"), 2, RoundingMode.HALF_UP)
+                val cap = discountCapAmount?.takeIf { it > BigDecimal.ZERO }
+                (if (cap == null) rawDiscount else rawDiscount.coerceAtMost(cap))
+                    .coerceAtMost(price)
+                    .scaled()
+            }
         }
     }
 
