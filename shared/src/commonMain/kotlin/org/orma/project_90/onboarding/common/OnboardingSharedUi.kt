@@ -28357,9 +28357,9 @@ private fun drawInvoicePreviewPdfPage(
         size = 9,
         color = "D8E4E0",
     )
-    canvas.text(404.0, 788.0, if (isQuotation) "CUSTOMER QUOTATION" else "CUSTOMER BILLING", 8, "D8E4E0", "F2")
-    canvas.text(404.0, 770.0, invoiceNumber, 13, "FFFDF8", "F2")
-    canvas.text(404.0, 753.0, invoiceIssueDateLabel(order), 9, "D8E4E0")
+    canvas.textEnd(539.0, 788.0, if (isQuotation) "CUSTOMER QUOTATION" else "CUSTOMER BILLING", 8, "D8E4E0", "F2")
+    canvas.textEnd(539.0, 770.0, invoiceNumber, 13, "FFFDF8", "F2")
+    canvas.textEnd(539.0, 753.0, invoiceIssueDateLabel(order), 9, "D8E4E0")
 
     canvas.text(56.0, 709.0, if (isQuotation) "Quotation" else "Tax Invoice", 21, "143D3D", "F2")
     drawInvoicePdfPill(canvas, 465.0, 694.0, 74.0, 24.0, "ORIGINAL", "E9F7F2", "62A6A2")
@@ -28506,10 +28506,10 @@ private fun drawInvoicePdfItemsHeader(
     canvas.text(58.0, headerY, "#", 7, "7C9290", "F2")
     canvas.text(86.0, headerY, "ITEM / DESCRIPTION", 7, "7C9290", "F2")
     canvas.text(266.0, headerY, "UOM", 7, "7C9290", "F2")
-    canvas.text(320.0, headerY, "QTY", 7, "7C9290", "F2")
-    canvas.text(358.0, headerY, "UNIT PRICE", 7, "7C9290", "F2")
-    canvas.text(432.0, headerY, "VAT", 7, "7C9290", "F2")
-    canvas.text(486.0, headerY, "AMOUNT", 7, "7C9290", "F2")
+    canvas.textEnd(344.0, headerY, "QTY", 7, "7C9290", "F2")
+    canvas.textEnd(420.0, headerY, "UNIT PRICE", 7, "7C9290", "F2")
+    canvas.textEnd(468.0, headerY, "VAT", 7, "7C9290", "F2")
+    canvas.textEnd(539.0, headerY, "AMOUNT", 7, "7C9290", "F2")
     canvas.line(56.0, headerY - 9.0, 539.0, headerY - 9.0, "EFE8DD", 0.7)
     return headerY - 28.0
 }
@@ -28540,10 +28540,10 @@ private fun drawInvoicePdfItemRow(
         canvas.text(86.0, rowY - 13.0, it.orderPdfShort(31), 8, "9AA9A7")
     }
     canvas.text(266.0, rowY, (product?.unit ?: "Service").orderPdfShort(10), 8, "7C9290")
-    canvas.text(320.0, rowY, orderQuantityText(item.quantity.toDoubleOrNull().orZero()).orderPdfShort(8), 8, "143D3D")
-    canvas.text(358.0, rowY, dashboardMoney(item.unitPrice, order.currency).orderPdfShort(13), 8, "143D3D")
-    canvas.text(432.0, rowY, item.taxRate.invoiceTaxLabel().orderPdfShort(8), 8, "7C9290")
-    canvas.text(486.0, rowY, dashboardMoney(item.lineTotal, order.currency).orderPdfShort(13), 8, "143D3D", "F2")
+    canvas.textEnd(344.0, rowY, orderQuantityText(item.quantity.toDoubleOrNull().orZero()).orderPdfShort(8), 8, "143D3D")
+    canvas.textEnd(420.0, rowY, dashboardMoney(item.unitPrice, order.currency).orderPdfShort(13), 8, "143D3D")
+    canvas.textEnd(468.0, rowY, item.taxRate.invoiceTaxLabel().orderPdfShort(8), 8, "7C9290")
+    canvas.textEnd(539.0, rowY, dashboardMoney(item.lineTotal, order.currency).orderPdfShort(13), 8, "143D3D", "F2")
     canvas.line(56.0, rowY - 19.0, 539.0, rowY - 19.0, "EFE8DD", 0.55)
     return rowY - 34.0
 }
@@ -28584,7 +28584,7 @@ private fun drawInvoicePdfTotalsAndTerms(
     totalY = drawInvoicePdfTotalRow(canvas, totalY, "Tax", dashboardMoney(order.taxTotal, order.currency))
     canvas.line(332.0, totalY + 5.0, 523.0, totalY + 5.0, "E7E0D4", 0.7)
     canvas.text(332.0, totalY - 12.0, "GRAND TOTAL", 8, "143D3D", "F2")
-    canvas.text(424.0, totalY - 12.0, dashboardMoney(order.total, order.currency).orderPdfShort(15), 12, "143D3D", "F2")
+    canvas.textEnd(523.0, totalY - 12.0, dashboardMoney(order.total, order.currency).orderPdfShort(15), 12, "143D3D", "F2")
 
     val termsY = 128.0
     canvas.text(56.0, termsY, "TERMS & CONDITIONS", 7, "7C9290", "F2")
@@ -28607,7 +28607,7 @@ private fun drawInvoicePdfTotalRow(
     value: String,
 ): Double {
     canvas.text(332.0, y, label.orderPdfShort(24), 8, "7C9290")
-    canvas.text(444.0, y, value.orderPdfShort(14), 8, "143D3D", "F2")
+    canvas.textEnd(523.0, y, value.orderPdfShort(14), 8, "143D3D", "F2")
     return y - 15.0
 }
 
@@ -29224,6 +29224,19 @@ private class OrderPdfCanvas {
             .append(") Tj\nET\n")
     }
 
+    fun textEnd(
+        rightX: Double,
+        y: Double,
+        value: String,
+        size: Int,
+        color: String,
+        font: String = "F1",
+    ) {
+        val safeValue = value.orderDocumentPdfSafe()
+        if (safeValue.isBlank()) return
+        text(rightX - safeValue.orderPdfApproxWidth(size, font), y, safeValue, size, color, font)
+    }
+
     fun content(): String = commands.toString()
 }
 
@@ -29405,6 +29418,19 @@ private fun String.orderPdfRgb(): String {
     val green = hex.substring(2, 4).toIntOrNull(16) ?: 0
     val blue = hex.substring(4, 6).toIntOrNull(16) ?: 0
     return "${(red / 255.0).orderPdfNumber()} ${(green / 255.0).orderPdfNumber()} ${(blue / 255.0).orderPdfNumber()}"
+}
+
+private fun String.orderPdfApproxWidth(size: Int, font: String = "F1"): Double {
+    val weightFactor = if (font == "F2") 0.58 else 0.53
+    return sumOf { character ->
+        when {
+            character == ' ' -> size * 0.28
+            character in ".,:;|!Iil'" -> size * 0.26
+            character in "MW@#%" -> size * 0.82
+            character.isDigit() -> size * 0.54
+            else -> size * weightFactor
+        }
+    }
 }
 
 private fun Double.orderPdfNumber(): String {
