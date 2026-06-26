@@ -11253,6 +11253,7 @@ private fun DashboardCatalogSearchToolbar(
     primaryEnabled: Boolean = true,
     onSupplierClick: (() -> Unit)? = null,
     onCategoryClick: () -> Unit,
+    onTransferClick: (() -> Unit)? = null,
     showToolActions: Boolean = true,
 ) {
     val filters = state.dashboard.filtersForScope(DashboardFilterScopeProducts)
@@ -11344,10 +11345,19 @@ private fun DashboardCatalogSearchToolbar(
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
+                            if (onTransferClick != null) {
+                                DashboardWideActionButton(
+                                    text = "Import / Export",
+                                    onClick = onTransferClick,
+                                    modifier = Modifier.weight(1f),
+                                    enabled = !state.dashboard.loading,
+                                )
+                            }
                             DashboardWideActionButton(
                                 text = "Category",
                                 onClick = onCategoryClick,
                                 modifier = Modifier.weight(1f),
+                                enabled = !state.dashboard.loading && state.canCreateDashboardCatalogItem(),
                             )
                         }
                     }
@@ -11404,10 +11414,19 @@ private fun DashboardCatalogSearchToolbar(
                                 horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
+                                if (onTransferClick != null) {
+                                    DashboardWideActionButton(
+                                        text = "Import / Export",
+                                        onClick = onTransferClick,
+                                        modifier = Modifier.widthIn(min = 190.dp, max = 230.dp),
+                                        enabled = !state.dashboard.loading,
+                                    )
+                                }
                                 DashboardWideActionButton(
                                     text = "Category",
                                     onClick = onCategoryClick,
                                     modifier = Modifier.width(160.dp),
+                                    enabled = !state.dashboard.loading && state.canCreateDashboardCatalogItem(),
                                 )
                             }
                         }
@@ -15969,6 +15988,7 @@ private fun DashboardProductsContent(
     var showSupplierSheet by rememberSaveable { mutableStateOf(false) }
     var showCategorySheet by rememberSaveable { mutableStateOf(false) }
     var showOfferSheet by rememberSaveable { mutableStateOf(false) }
+    var showProductTransferSheet by rememberSaveable { mutableStateOf(false) }
     var selectedProductTab by rememberSaveable { mutableStateOf(DashboardProductWorkspaceTabItems) }
     var editProductId by rememberSaveable { mutableStateOf<String?>(null) }
     var editSupplierId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -16054,6 +16074,7 @@ private fun DashboardProductsContent(
             onCategoryClick = { if (canCreateCatalogItem) showCategorySheet = true },
             onSupplierClick = { showSupplierSheet = true },
             onOfferClick = { if (canCreateOffer) showOfferSheet = true },
+            onTransferClick = { showProductTransferSheet = true },
             suppliers = visibleSuppliers,
             offers = state.dashboard.offers,
             onAddSupplier = { showSupplierSheet = true },
@@ -16079,6 +16100,7 @@ private fun DashboardProductsContent(
             onAddOffer = { if (canCreateOffer) showOfferSheet = true },
             onCategoryClick = { if (canCreateCatalogItem) showCategorySheet = true },
             onSupplierClick = { showSupplierSheet = true },
+            onTransferClick = { showProductTransferSheet = true },
             onProductClick = ::openProduct,
             onEditProduct = { product -> if (canCreateCatalogItem) editProductId = product.id },
             onStockClick = { product -> if (canManageStock) stockProductId = product.id },
@@ -16135,6 +16157,13 @@ private fun DashboardProductsContent(
             },
         )
     }
+    if (showProductTransferSheet) {
+        ProductTransferSheet(
+            state = state,
+            actions = actions,
+            onDismiss = { showProductTransferSheet = false },
+        )
+    }
     stockProduct?.takeIf { canManageStock }?.let { product ->
         StockAdjustmentSheet(
             product = product,
@@ -16181,6 +16210,7 @@ private fun DashboardProductsWorkspace(
     onCategoryClick: () -> Unit,
     onSupplierClick: () -> Unit,
     onOfferClick: () -> Unit,
+    onTransferClick: () -> Unit,
     suppliers: List<OrmaSupplier>,
     offers: List<OrmaProductOffer>,
     onAddSupplier: () -> Unit,
@@ -16257,6 +16287,7 @@ private fun DashboardProductsWorkspace(
                     primaryEnabled = state.canCreateDashboardCatalogItem(),
                     onSupplierClick = onSupplierClick,
                     onCategoryClick = onCategoryClick,
+                    onTransferClick = onTransferClick,
                 )
                 DashboardProductRecordsSurface(
                     state = state,
@@ -16288,6 +16319,7 @@ private fun DashboardMobileProductCatalogWorkspace(
     onAddOffer: () -> Unit,
     onCategoryClick: () -> Unit,
     onSupplierClick: () -> Unit,
+    onTransferClick: () -> Unit,
     onProductClick: (OrmaProduct) -> Unit,
     onEditProduct: (OrmaProduct) -> Unit,
     onStockClick: (OrmaProduct) -> Unit,
@@ -16352,6 +16384,7 @@ private fun DashboardMobileProductCatalogWorkspace(
                 onAddProduct = onAddProduct,
                 onSupplierClick = onSupplierClick,
                 onCategoryClick = onCategoryClick,
+                onTransferClick = onTransferClick,
                 onResetFilters = { clearDashboardWorkspaceFilters(state, actions, DashboardFilterScopeProducts) },
             )
             DashboardProductRecords(
@@ -16446,6 +16479,7 @@ private fun DashboardMobileCatalogSearchCard(
     onAddProduct: () -> Unit,
     onSupplierClick: () -> Unit,
     onCategoryClick: () -> Unit,
+    onTransferClick: () -> Unit,
     onResetFilters: () -> Unit,
 ) {
     val filters = state.dashboard.filtersForScope(DashboardFilterScopeProducts)
@@ -16515,6 +16549,11 @@ private fun DashboardMobileCatalogSearchCard(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            DashboardToolbarHeaderActionButton(
+                text = "Import / Export",
+                onClick = onTransferClick,
+                enabled = !state.dashboard.loading,
+            )
             DashboardToolbarHeaderActionButton(
                 text = "Supplier",
                 onClick = onSupplierClick,
@@ -29521,20 +29560,33 @@ private fun String.invoiceTaxLabel(): String {
 
 private fun invoiceAmountInWords(order: OrmaOrder): String {
     val amount = order.total.toDoubleOrNull()?.coerceAtLeast(0.0) ?: 0.0
-    val whole = kotlin.math.floor(amount).toLong()
-    val cents = kotlin.math.round((amount - whole) * 100.0).toInt().coerceIn(0, 99)
+    val currency = order.currency.ifBlank { "INR" }.uppercase()
+    val minorTotal = kotlin.math.round(amount * 100.0).toLong().coerceAtLeast(0L)
+    val whole = minorTotal / 100L
+    val minor = (minorTotal % 100L).toInt()
     return buildString {
-        append(order.currency.ifBlank { "INR" })
+        append(currency)
         append(" ")
         append(invoiceNumberToWords(whole))
-        if (cents > 0) {
+        if (minor > 0) {
             append(" and ")
-            append(invoiceNumberToWords(cents.toLong()))
-            append(" cents")
+            append(invoiceNumberToWords(minor.toLong()))
+            append(" ")
+            append(invoiceMinorUnitName(currency, minor))
         }
         append(" Only")
     }
 }
+
+private fun invoiceMinorUnitName(currency: String, amount: Int): String =
+    when (currency.uppercase()) {
+        "INR" -> if (amount == 1) "Paisa" else "Paise"
+        "AED" -> if (amount == 1) "Fil" else "Fils"
+        "BHD", "IQD", "JOD", "KWD", "LYD", "OMR", "TND" -> if (amount == 1) "Fils" else "Fils"
+        "GBP" -> if (amount == 1) "Penny" else "Pence"
+        "EUR" -> if (amount == 1) "Cent" else "Cents"
+        else -> if (amount == 1) "Cent" else "Cents"
+    }
 
 private fun invoiceNumberToWords(number: Long): String {
     val ones = listOf(
