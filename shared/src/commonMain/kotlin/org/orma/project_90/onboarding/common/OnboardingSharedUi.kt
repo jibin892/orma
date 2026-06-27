@@ -130,6 +130,7 @@ import org.orma.project_90.backend.OrmaProduct
 import org.orma.project_90.backend.OrmaProductCategory
 import org.orma.project_90.backend.OrmaProductCategoryDraft
 import org.orma.project_90.backend.OrmaProductDraft
+import org.orma.project_90.backend.OrmaProductVariantDraft
 import org.orma.project_90.backend.OrmaStockAdjustmentDraft
 import org.orma.project_90.backend.OrmaProductOffer
 import org.orma.project_90.backend.OrmaProductOfferDraft
@@ -18714,6 +18715,7 @@ private fun DashboardMarketingSetupWorkspace(
                         state = state,
                         metaConnection = metaConnection,
                         shopLink = shopLink,
+                        onEditMetaIds = { showMetaSetupSheet = true },
                     )
                 },
             )
@@ -18723,6 +18725,7 @@ private fun DashboardMarketingSetupWorkspace(
                 state = state,
                 metaConnection = metaConnection,
                 shopLink = shopLink,
+                onEditMetaIds = { showMetaSetupSheet = true },
             )
         }
     }
@@ -18779,7 +18782,7 @@ private fun dashboardMetaSetupStepSpecs(
         body = if (webhookReady) {
             "Webhook delivery is ready for incoming messages and status updates."
         } else {
-            "Paste the ORMA callback URL in Meta Webhooks and use the verify token stored in Render."
+            "Paste the ORMA callback URL in Meta Webhooks and use the verify token stored in Render. If any ID is wrong, use Edit saved IDs."
         },
         complete = webhookReady,
     ),
@@ -18874,6 +18877,7 @@ private fun DashboardMetaCurrentStepActions(
             )
             "webhook" -> listOf(
                 "Copy webhook URL" to onCopyWebhook,
+                "Edit saved IDs" to onEditMetaIds,
                 "Open Meta setup" to onOpenMeta,
             )
             "templates" -> listOf(
@@ -18992,6 +18996,7 @@ private fun DashboardMetaSetupAccountCard(
     state: OnboardingUiState,
     metaConnection: OrmaMetaConnectionStatus?,
     shopLink: String,
+    onEditMetaIds: () -> Unit,
 ) {
     DashboardRecordCard {
         Text(
@@ -19016,6 +19021,16 @@ private fun DashboardMetaSetupAccountCard(
                 "Messaging" to (metaConnection?.messagingStatus?.dashboardTitleCase() ?: "Not configured"),
                 "Public link" to shopLink.ifBlank { "Hidden until setup completes" },
             ),
+        )
+        OrmaSecondaryButton(
+            text = "Paste or edit Meta IDs",
+            onClick = onEditMetaIds,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Text(
+            text = "Paste Business ID, WABA ID, Phone Number ID, catalog ID, Page ID, and Instagram ID here. Then press Save WhatsApp setup.",
+            style = MaterialTheme.typography.bodySmall,
+            color = OrmaColors.TextSecondary,
         )
     }
 }
@@ -26135,6 +26150,12 @@ private fun ProductEditorScreen(
                 onSelected = { draft = draft.copy(supplierId = it.id) },
             )
         }
+        ProductOptionsEditor(
+            itemType = draft.itemType,
+            unit = draft.unit,
+            variants = draft.variants,
+            onVariantsChange = { draft = draft.copy(variants = it) },
+        )
         CatalogAvailabilityPicker(
             itemType = draft.itemType,
             selectedStatus = draft.status,
@@ -26170,6 +26191,28 @@ private fun ProductEditorScreen(
                             categoryName = if (draft.categoryId.isBlank()) draft.categoryName.trim() else "",
                             taxRate = draft.taxRate.trim().ifBlank { "0" },
                             status = draft.status.normalizedCatalogAvailabilityStatus(),
+                            variants = draft.variants
+                                .filter { it.name.trim().isNotBlank() }
+                                .map { variant ->
+                                    variant.copy(
+                                        name = variant.name.trim(),
+                                        sku = variant.sku.trim(),
+                                        barcode = variant.barcode.trim(),
+                                        sellingPrice = variant.sellingPrice.trim(),
+                                        costPrice = variant.costPrice.trim(),
+                                        stockQuantity = if (draft.itemType == "product") {
+                                            variant.stockQuantity.trim()
+                                        } else {
+                                            ""
+                                        },
+                                        durationMinutes = if (draft.itemType == "product") {
+                                            ""
+                                        } else {
+                                            variant.durationMinutes.trim()
+                                        },
+                                        status = variant.status.normalizedCatalogAvailabilityStatus(),
+                                    )
+                                },
                         ),
                     )
                 }
@@ -26179,6 +26222,172 @@ private fun ProductEditorScreen(
             onSecondary = onDismiss,
         )
         }
+    }
+}
+
+@Composable
+private fun ProductOptionsEditor(
+    itemType: String,
+    unit: String,
+    variants: List<OrmaProductVariantDraft>,
+    onVariantsChange: (List<OrmaProductVariantDraft>) -> Unit,
+) {
+    val title = when (itemType) {
+        "service" -> "Service options"
+        "appointment" -> "Appointment packages"
+        else -> "Product options"
+    }
+    val nameLabel = when (itemType) {
+        "service" -> "Option name"
+        "appointment" -> "Package name"
+        else -> "Variant name"
+    }
+    DashboardRecordCard {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.Top,
+        ) {
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(text = title, style = MaterialTheme.typography.titleSmall, color = OrmaColors.TextPrimary)
+                Text(
+                    text = when (itemType) {
+                        "service" -> "Add levels such as full service, half service, or standard service."
+                        "appointment" -> "Add appointment package choices customers can book."
+                        else -> "Add sizes, flavours, colors, or packages under this one product."
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = OrmaColors.TextSecondary,
+                )
+            }
+            OrmaBadge(text = "${variants.count { it.name.isNotBlank() }} ADDED", tone = OrmaStatusTone.Info)
+        }
+        if (variants.isEmpty()) {
+            DashboardChecklistRow(text = "Optional. Leave empty when this ${itemType.sellableItemTypeLabel().lowercase()} has one price and setup.")
+        }
+        variants.forEachIndexed { index, variant ->
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = OrmaShapes.SmallCard,
+                color = OrmaColors.CellBackground,
+                contentColor = OrmaColors.TextPrimary,
+                border = BorderStroke(0.6.dp, OrmaColors.Hairline),
+                tonalElevation = 0.dp,
+                shadowElevation = 0.dp,
+            ) {
+                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "${itemType.sellableItemTypeLabel()} option ${index + 1}",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = OrmaColors.TextSecondary,
+                        )
+                        OrmaTextButton(
+                            text = "Remove",
+                            onClick = { onVariantsChange(variants.filterIndexed { itemIndex, _ -> itemIndex != index }) },
+                        )
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        OrmaTextField(
+                            value = variant.name,
+                            onValueChange = { value ->
+                                onVariantsChange(variants.mapIndexed { itemIndex, old ->
+                                    if (itemIndex == index) old.copy(name = value.take(80)) else old
+                                })
+                            },
+                            label = nameLabel,
+                            placeholder = when (itemType) {
+                                "service" -> "Full service"
+                                "appointment" -> "Single package"
+                                else -> "Medium, Large, XL"
+                            },
+                            modifier = Modifier.weight(1f),
+                        )
+                        OrmaTextField(
+                            value = variant.sellingPrice,
+                            onValueChange = { value ->
+                                onVariantsChange(variants.mapIndexed { itemIndex, old ->
+                                    if (itemIndex == index) old.copy(sellingPrice = value.moneyInput()) else old
+                                })
+                            },
+                            label = "Selling price",
+                            placeholder = "Default",
+                            modifier = Modifier.weight(1f),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        )
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        OrmaTextField(
+                            value = if (itemType == "product") variant.stockQuantity else variant.durationMinutes,
+                            onValueChange = { value ->
+                                onVariantsChange(variants.mapIndexed { itemIndex, old ->
+                                    if (itemIndex != index) {
+                                        old
+                                    } else if (itemType == "product") {
+                                        old.copy(stockQuantity = value.moneyInput())
+                                    } else {
+                                        old.copy(durationMinutes = value.filter(Char::isDigit).take(4))
+                                    }
+                                })
+                            },
+                            label = if (itemType == "product") "Stock" else "Duration",
+                            placeholder = if (itemType == "product") "0 $unit" else "Minutes",
+                            modifier = Modifier.weight(1f),
+                            keyboardOptions = KeyboardOptions(keyboardType = if (itemType == "product") KeyboardType.Decimal else KeyboardType.Number),
+                        )
+                        OrmaTextField(
+                            value = variant.costPrice,
+                            onValueChange = { value ->
+                                onVariantsChange(variants.mapIndexed { itemIndex, old ->
+                                    if (itemIndex == index) old.copy(costPrice = value.moneyInput()) else old
+                                })
+                            },
+                            label = "Cost price",
+                            placeholder = "Default",
+                            modifier = Modifier.weight(1f),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        )
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        OrmaTextField(
+                            value = variant.sku,
+                            onValueChange = { value ->
+                                onVariantsChange(variants.mapIndexed { itemIndex, old ->
+                                    if (itemIndex == index) old.copy(sku = value.uppercase().take(40)) else old
+                                })
+                            },
+                            label = "SKU",
+                            placeholder = "Optional",
+                            modifier = Modifier.weight(1f),
+                        )
+                        OrmaTextField(
+                            value = variant.barcode,
+                            onValueChange = { value ->
+                                onVariantsChange(variants.mapIndexed { itemIndex, old ->
+                                    if (itemIndex == index) old.copy(barcode = value.take(80)) else old
+                                })
+                            },
+                            label = "Barcode",
+                            placeholder = "Optional",
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
+            }
+        }
+        DashboardWideActionButton(
+            text = "Add ${when (itemType) {
+                "service" -> "service option"
+                "appointment" -> "appointment package"
+                else -> "product option"
+            }}",
+            iconKind = OrmaFlatIconKind.Add,
+            onClick = { onVariantsChange(variants + OrmaProductVariantDraft(status = "active")) },
+        )
     }
 }
 
@@ -26205,6 +26414,19 @@ private fun OrmaProduct.toProductDraft(): OrmaProductDraft =
         expiryDate = expiryDate.orEmpty(),
         supplierId = supplierId.orEmpty(),
         status = status.ifBlank { "active" },
+        variants = variants.map { variant ->
+            OrmaProductVariantDraft(
+                id = variant.id,
+                name = variant.name,
+                sku = variant.sku.orEmpty(),
+                barcode = variant.barcode.orEmpty(),
+                sellingPrice = variant.sellingPrice.blankWhenZeroForProductForm(),
+                costPrice = variant.costPrice.blankWhenZeroForProductForm(),
+                stockQuantity = variant.stockQuantity.blankWhenZeroForProductForm(),
+                durationMinutes = variant.durationMinutes?.toString().orEmpty(),
+                status = variant.status,
+            )
+        },
         image = null,
     )
 
@@ -28076,6 +28298,7 @@ private fun DashboardOrderCartLine(
         mutableStateOf(expandDetailsInitially || item.productId.isBlank())
     }
     val lineCurrency = product?.currency ?: currency
+    val selectedVariant = product?.variants?.firstOrNull { it.id == item.variantId }
     val appliedOffer = item.dashboardAppliedOffer(product, offers)
     val lineOfferSavings = appliedOffer
         ?.let { it.discountAmount * item.quantity.toDoubleOrNull().orZero() }
@@ -28222,6 +28445,39 @@ private fun DashboardOrderCartLine(
                             )
                         },
                     )
+                }
+                if (product != null && product.variants.isNotEmpty()) {
+                    DashboardChipPicker(
+                        label = when (product.itemType) {
+                            "service" -> "Service option"
+                            "appointment" -> "Appointment package"
+                            else -> "Product option"
+                        },
+                        options = product.variants.filter { it.status == "active" },
+                        selectedId = item.variantId,
+                        optionId = { it.id },
+                        optionLabel = { variant ->
+                            buildString {
+                                append(variant.name)
+                                variant.sellingPrice.takeIf { it.isNotBlank() && it != "0.00" }?.let {
+                                    append(" · ")
+                                    append(dashboardMoney(it, lineCurrency))
+                                }
+                            }
+                        },
+                        onSelected = { variant ->
+                            onChange(
+                                item.copy(
+                                    variantId = variant.id,
+                                    description = "${product.name} - ${variant.name}",
+                                    unitPrice = variant.sellingPrice.ifBlank { product.sellingPrice.ifBlank { item.unitPrice } },
+                                ),
+                            )
+                        },
+                    )
+                    if (selectedVariant == null && item.variantId.isBlank()) {
+                        DashboardChecklistRow(text = "Choose an option when this item has sizes, packages, or service levels.")
+                    }
                 }
                 OrmaTextField(
                     item.description,
@@ -31010,6 +31266,7 @@ private fun OrmaOrder.toOrderDraft(): OrmaOrderDraft =
 private fun OrmaOrderItem.toOrderItemDraft(): OrmaOrderItemDraft =
     OrmaOrderItemDraft(
         productId = productId.orEmpty(),
+        variantId = variantId.orEmpty(),
         description = productName ?: description,
         quantity = quantity.ifBlank { "1" },
         unitPrice = unitPrice.ifBlank { "0" },
