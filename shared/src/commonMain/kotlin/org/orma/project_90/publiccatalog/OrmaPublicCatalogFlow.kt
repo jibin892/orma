@@ -52,6 +52,7 @@ import org.orma.project_90.backend.OrmaPublicCatalogOrderDraft
 import org.orma.project_90.backend.OrmaPublicCatalogOrderItemDraft
 import org.orma.project_90.backend.OrmaPublicCatalogOrderReceipt
 import org.orma.project_90.backend.OrmaPublicCatalogProduct
+import org.orma.project_90.backend.OrmaProductVariant
 import org.orma.project_90.backend.createOrmaBackendClient
 import org.orma.project_90.designsystem.OrmaAdaptiveSurface
 import org.orma.project_90.designsystem.OrmaBadge
@@ -97,20 +98,26 @@ fun OrmaPublicCatalogFlow(
     var scheduledAt by remember(workspaceId) { mutableStateOf("") }
     var paymentMode by remember(workspaceId) { mutableStateOf("pay_on_spot") }
 
-    fun updateQuantity(productId: String, quantity: Int) {
+    fun updateQuantity(cartKey: String, quantity: Int) {
+        val productId = cartKey.publicCatalogCartProductId()
         val products = catalog?.products.orEmpty()
         val product = products.firstOrNull { it.id == productId } ?: return
         val activeType = products.firstOrNull { item ->
-            item.id != productId && (quantities[item.id] ?: 0) > 0
+            item.id != productId && quantities.any { (key, count) ->
+                count > 0 && key.publicCatalogCartProductId() == item.id
+            }
         }?.itemType?.publicCatalogNormalizedItemType()
         val productType = product.itemType.publicCatalogNormalizedItemType()
-        if (quantity > 0 && activeType != null && activeType != productType && (quantities[productId] ?: 0) == 0) {
+        if (quantity > 0 && activeType != null && activeType != productType && (quantities[cartKey] ?: 0) == 0) {
             error = "Clear the ${activeType.publicCatalogItemTypeLabel().lowercase()} selection before choosing ${productType.publicCatalogItemTypeLabel().lowercase()} items."
             return
         }
-        val maxQuantity = product.publicCatalogMaxSelectableQuantity()
+        val variant = cartKey.publicCatalogCartVariantId()?.let { variantId ->
+            product.variants.firstOrNull { it.id == variantId }
+        }
+        val maxQuantity = product.publicCatalogMaxSelectableQuantity(variant)
         quantities = quantities.toMutableMap().apply {
-            if (quantity <= 0 || maxQuantity <= 0) remove(productId) else put(productId, quantity.coerceIn(1, maxQuantity))
+            if (quantity <= 0 || maxQuantity <= 0) remove(cartKey) else put(cartKey, quantity.coerceIn(1, maxQuantity))
         }
     }
 
@@ -143,12 +150,20 @@ fun OrmaPublicCatalogFlow(
             .filter { selectedCategoryId == "all" || it.categoryId == selectedCategoryId }
         val selectedItems = catalog?.products
             .orEmpty()
-            .mapNotNull { product ->
-                val quantity = quantities[product.id] ?: 0
-                if (quantity > 0) PublicCatalogSelection(product = product, quantity = quantity) else null
+            .flatMap { product ->
+                quantities.mapNotNull { (cartKey, quantity) ->
+                    if (quantity <= 0 || cartKey.publicCatalogCartProductId() != product.id) {
+                        null
+                    } else {
+                        val variant = cartKey.publicCatalogCartVariantId()?.let { variantId ->
+                            product.variants.firstOrNull { it.id == variantId }
+                        }
+                        PublicCatalogSelection(product = product, variant = variant, quantity = quantity)
+                    }
+                }
             }
         val total = selectedItems.sumOf { selection ->
-            selection.product.customerPrice.toDoubleOrNull().orZero() * selection.quantity
+            selection.customerPrice.toDoubleOrNull().orZero() * selection.quantity
         }
         val selectedItemTypes = selectedItems
             .map { it.product.itemType.publicCatalogNormalizedItemType() }
@@ -195,6 +210,7 @@ fun OrmaPublicCatalogFlow(
                     items = selectedItems.map {
                         OrmaPublicCatalogOrderItemDraft(
                             productId = it.product.id,
+                            variantId = it.variant?.id,
                             quantity = it.quantity.toString(),
                         )
                     },
@@ -1332,6 +1348,11 @@ private fun PublicCatalogProducts(
             product.name.contains(cleanSearchQuery, ignoreCase = true) ||
             product.description.orEmpty().contains(cleanSearchQuery, ignoreCase = true) ||
             product.categoryName.orEmpty().contains(cleanSearchQuery, ignoreCase = true) ||
+            product.variants.any { variant ->
+                variant.name.contains(cleanSearchQuery, ignoreCase = true) ||
+                    variant.sku.orEmpty().contains(cleanSearchQuery, ignoreCase = true) ||
+                    variant.barcode.orEmpty().contains(cleanSearchQuery, ignoreCase = true)
+            } ||
             productType.publicCatalogItemTypeLabel().contains(cleanSearchQuery, ignoreCase = true))
     }
     Column(
@@ -1717,11 +1738,18 @@ private fun PublicCatalogProductGrid(
                     verticalAlignment = Alignment.Top,
                 ) {
                     rowItems.forEach { product ->
+                        val parentKey = product.publicCatalogCartKey()
                         PublicCatalogProductTile(
                             product = product,
-                            quantity = quantities[product.id] ?: 0,
+                            quantity = quantities[parentKey] ?: 0,
+                            variantQuantities = product.variants.associate { variant ->
+                                variant.id to (quantities[product.publicCatalogCartKey(variant.id)] ?: 0)
+                            },
                             activeCartType = activeCartType,
-                            onQuantityChange = { onQuantityChange(product.id, it) },
+                            onQuantityChange = { onQuantityChange(parentKey, it) },
+                            onVariantQuantityChange = { variantId, quantity ->
+                                onQuantityChange(product.publicCatalogCartKey(variantId), quantity)
+                            },
                             modifier = Modifier.weight(1f),
                         )
                     }
@@ -2210,11 +2238,13 @@ private fun PublicCatalogTrustItem(
 private fun PublicCatalogProductTile(
     product: OrmaPublicCatalogProduct,
     quantity: Int,
+    variantQuantities: Map<String, Int>,
     activeCartType: String?,
     onQuantityChange: (Int) -> Unit,
+    onVariantQuantityChange: (String, Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val selected = quantity > 0
+    val selected = quantity > 0 || variantQuantities.any { it.value > 0 }
     val productType = product.itemType.publicCatalogNormalizedItemType()
     val lockedByType = activeCartType != null && activeCartType != productType && !selected
     val enabled = product.inStock && !lockedByType
@@ -2231,7 +2261,9 @@ private fun PublicCatalogProductTile(
         modifier = modifier
             .fillMaxWidth()
             .clickable(enabled = enabled) {
-                onQuantityChange(if (quantity == 0) 1 else quantity)
+                if (product.variants.isEmpty()) {
+                    onQuantityChange(if (quantity == 0) 1 else quantity)
+                }
             },
         shape = OrmaShapes.StandardCell,
         color = when {
@@ -2315,12 +2347,64 @@ private fun PublicCatalogProductTile(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                QuantityStepper(
-                    quantity = quantity,
-                    enabled = enabled || selected,
-                    maxQuantity = maxQuantity,
-                    onQuantityChange = onQuantityChange,
-                )
+                if (product.variants.isEmpty()) {
+                    QuantityStepper(
+                        quantity = quantity,
+                        enabled = enabled || selected,
+                        maxQuantity = maxQuantity,
+                        onQuantityChange = onQuantityChange,
+                    )
+                }
+            }
+            if (product.variants.isNotEmpty()) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    product.variants.filter { it.status == "active" }.forEach { variant ->
+                        val variantQuantity = variantQuantities[variant.id] ?: 0
+                        val variantMaxQuantity = product.publicCatalogMaxSelectableQuantity(variant)
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable(enabled = enabled && variantMaxQuantity > 0) {
+                                    onVariantQuantityChange(variant.id, if (variantQuantity == 0) 1 else variantQuantity)
+                                },
+                            shape = OrmaShapes.Capsule,
+                            color = if (variantQuantity > 0) OrmaColors.Accent.copy(alpha = 0.10f) else OrmaColors.ScreenBackground,
+                            contentColor = OrmaColors.TextPrimary,
+                            border = BorderStroke(0.6.dp, OrmaColors.Hairline),
+                            tonalElevation = 0.dp,
+                            shadowElevation = 0.dp,
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text(
+                                        text = variant.name.ifBlank { "Option" },
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = OrmaColors.TextPrimary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Text(
+                                        text = "${product.currency} ${variant.sellingPrice.ifBlank { product.customerPrice }}",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = OrmaColors.TextSecondary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                                QuantityStepper(
+                                    quantity = variantQuantity,
+                                    enabled = enabled && variantMaxQuantity > 0,
+                                    maxQuantity = variantMaxQuantity,
+                                    onQuantityChange = { onVariantQuantityChange(variant.id, it) },
+                                )
+                            }
+                        }
+                    }
+                }
             }
             Surface(
                 modifier = Modifier.fillMaxWidth(),
@@ -2902,7 +2986,9 @@ private fun PublicCatalogSummaryLine(
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             Text(
-                text = selection.product.name.ifBlank { "Item" },
+                text = listOf(selection.product.name.ifBlank { "Item" }, selection.variant?.name)
+                    .filterNotNull()
+                    .joinToString(" - "),
                 style = MaterialTheme.typography.bodyLarge,
                 color = OrmaColors.TextPrimary,
                 fontWeight = FontWeight.SemiBold,
@@ -2910,7 +2996,7 @@ private fun PublicCatalogSummaryLine(
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                text = "${selection.quantity} x ${selection.product.currency} ${selection.product.customerPrice}",
+                text = "${selection.quantity} x ${selection.product.currency} ${selection.customerPrice}",
                 style = MaterialTheme.typography.labelMedium,
                 color = OrmaColors.TextSecondary,
                 maxLines = 1,
@@ -3172,10 +3258,20 @@ private fun PublicCatalogSkeleton() {
 
 private data class PublicCatalogSelection(
     val product: OrmaPublicCatalogProduct,
+    val variant: OrmaProductVariant? = null,
     val quantity: Int,
 ) {
-    val lineTotal: Double = product.customerPrice.toDoubleOrNull().orZero() * quantity
+    val customerPrice: String = variant?.sellingPrice?.takeIf { it.isNotBlank() } ?: product.customerPrice
+    val lineTotal: Double = customerPrice.toDoubleOrNull().orZero() * quantity
 }
+
+private fun OrmaPublicCatalogProduct.publicCatalogCartKey(variantId: String? = null): String =
+    if (variantId.isNullOrBlank()) id else "$id|$variantId"
+
+private fun String.publicCatalogCartProductId(): String = substringBefore("|")
+
+private fun String.publicCatalogCartVariantId(): String? =
+    substringAfter("|", "").takeIf { it.isNotBlank() }
 
 private fun Double?.orZero(): Double = this ?: 0.0
 
@@ -3187,7 +3283,10 @@ private fun List<PublicCatalogSelection>.catalogOrderFlow(): String =
     }
 
 private fun List<PublicCatalogSelection>.publicCatalogOfferSavingsTotal(): Double =
-    sumOf { selection -> selection.product.publicCatalogOfferSavings() * selection.quantity }
+    sumOf { selection ->
+        val parentSavings = selection.product.publicCatalogOfferSavings()
+        if (selection.variant == null) parentSavings * selection.quantity else 0.0
+    }
 
 private fun String.publicCatalogNormalizedItemType(): String =
     when (trim().lowercase()) {
@@ -3210,10 +3309,11 @@ private fun String.publicCatalogItemTypeLabel(): String =
         else -> "Product"
     }
 
-private fun OrmaPublicCatalogProduct.publicCatalogMaxSelectableQuantity(): Int =
+private fun OrmaPublicCatalogProduct.publicCatalogMaxSelectableQuantity(variant: OrmaProductVariant? = null): Int =
     when {
         !inStock -> 0
-        itemType.publicCatalogNormalizedItemType() == "product" && trackStock -> stockQuantity.toDoubleOrNull()
+        variant != null && variant.status.trim().lowercase() != "active" -> 0
+        itemType.publicCatalogNormalizedItemType() == "product" && trackStock -> (variant?.stockQuantity ?: stockQuantity).toDoubleOrNull()
             ?.toInt()
             ?.coerceIn(0, 99)
             ?: 0

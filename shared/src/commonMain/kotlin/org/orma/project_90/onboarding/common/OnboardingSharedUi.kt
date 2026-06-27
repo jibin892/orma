@@ -12160,7 +12160,11 @@ private fun DashboardInvoiceBuilderPage(
         draft = draft.copy(items = draft.items.filterIndexed { itemIndex, _ -> itemIndex != index })
     }
     fun addOrIncrementProduct(product: OrmaProduct) {
-        val existingIndex = draft.items.indexOfFirst { it.productId == product.id }
+        val existingIndex = if (product.variants.isEmpty()) {
+            draft.items.indexOfFirst { it.productId == product.id }
+        } else {
+            -1
+        }
         if (existingIndex >= 0) {
             val item = draft.items[existingIndex]
             updateItem(
@@ -12543,7 +12547,11 @@ private fun DashboardOrderBuilderPage(
         draft = draft.copy(items = draft.items.filterIndexed { itemIndex, _ -> itemIndex != index })
     }
     fun addOrIncrementProduct(product: OrmaProduct) {
-        val existingIndex = draft.items.indexOfFirst { it.productId == product.id }
+        val existingIndex = if (product.variants.isEmpty()) {
+            draft.items.indexOfFirst { it.productId == product.id }
+        } else {
+            -1
+        }
         if (existingIndex >= 0) {
             val item = draft.items[existingIndex]
             updateItem(
@@ -18568,7 +18576,6 @@ private fun DashboardMarketingSetupWorkspace(
     )
     val completedSteps = setupSteps.count { it.complete }
     val currentIndex = setupSteps.indexOfFirst { !it.complete }.takeIf { it >= 0 } ?: setupSteps.lastIndex
-    val currentStep = setupSteps[currentIndex]
     val businessName = state.workspaceName.ifBlank { "Current business" }
     val clipboard = rememberOrmaClipboard()
     val uriHandler = LocalUriHandler.current
@@ -18606,9 +18613,12 @@ private fun DashboardMarketingSetupWorkspace(
                     modifier = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
                         OrmaBadge(
-                            text = "STEP ${currentIndex + 1} OF ${setupSteps.size}",
+                            text = "NEXT STEP ${currentIndex + 1}",
                             tone = OrmaStatusTone.Warning,
                         )
                         OrmaBadge(
@@ -18648,46 +18658,14 @@ private fun DashboardMarketingSetupWorkspace(
             )
             HorizontalDivider(color = OrmaColors.Divider)
             Text(
-                text = "Current step",
-                style = MaterialTheme.typography.titleSmall,
-                color = OrmaColors.TextPrimary,
-            )
-            Text(
-                text = currentStep.title,
+                text = "Follow the setup steps below",
                 style = MaterialTheme.typography.titleMedium,
                 color = OrmaColors.TextPrimary,
             )
             Text(
-                text = currentStep.body,
+                text = "Step 1 is where you paste and save Meta IDs. After each step is done, continue to the next orange step.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = OrmaColors.TextSecondary,
-            )
-            OrmaKeyValueList(
-                rows = dashboardMetaCurrentStepRows(
-                    stepKey = currentStep.key,
-                    state = state,
-                    metaConnection = metaConnection,
-                    shopLink = shopLink,
-                ),
-            )
-            DashboardMetaCurrentStepActions(
-                stepKey = currentStep.key,
-                actionLoading = state.dashboard.loading || state.dashboard.metaActionLoading,
-                hasShopLink = shopLink.isNotBlank(),
-                onEditMetaIds = { showMetaSetupSheet = true },
-                onOpenMeta = { openPage("Meta setup", DashboardMetaAppsUrl) },
-                onOpenWhatsApp = { openPage("WhatsApp Manager", DashboardWhatsAppManagerUrl) },
-                onCopyWebhook = { copyValue("Webhook URL", DashboardMetaWebhookCallbackUrl) },
-                onCopyEnvKeys = {
-                    copyValue(
-                        "Meta env keys",
-                        "META_APP_ID, META_APP_SECRET, META_SYSTEM_USER_ACCESS_TOKEN, META_TOKEN_ENCRYPTION_SECRET, META_WEBHOOK_VERIFY_TOKEN",
-                    )
-                },
-                onCreateTemplates = actions.onSyncMetaWhatsAppTemplates,
-                onRefreshTemplates = actions.onLoadMetaWhatsAppTemplates,
-                onCheckCatalog = actions.onSyncMetaCatalog,
-                onCopyShopLink = { copyValue("Shop link", shopLink) },
             )
             metaConnection?.lastError?.takeIf { it.isNotBlank() }?.let { error ->
                 DashboardChecklistRow(text = "Last Meta error: $error")
@@ -18704,30 +18682,33 @@ private fun DashboardMarketingSetupWorkspace(
                 )
             }
         }
-        if (wide) {
-            DashboardModuleWorkspace(
-                wide = true,
-                primary = {
-                    DashboardMetaSetupProgressCard(steps = setupSteps)
-                },
-                secondary = {
-                    DashboardMetaSetupAccountCard(
-                        state = state,
-                        metaConnection = metaConnection,
-                        shopLink = shopLink,
-                        onEditMetaIds = { showMetaSetupSheet = true },
-                    )
-                },
-            )
-        } else {
-            DashboardMetaSetupProgressCard(steps = setupSteps)
-            DashboardMetaSetupAccountCard(
-                state = state,
-                metaConnection = metaConnection,
-                shopLink = shopLink,
-                onEditMetaIds = { showMetaSetupSheet = true },
-            )
-        }
+        DashboardMetaSetupStepByStepCard(
+            steps = setupSteps,
+            state = state,
+            metaConnection = metaConnection,
+            shopLink = shopLink,
+            actionLoading = state.dashboard.loading || state.dashboard.metaActionLoading,
+            onEditMetaIds = { showMetaSetupSheet = true },
+            onOpenMeta = { openPage("Meta setup", DashboardMetaAppsUrl) },
+            onOpenWhatsApp = { openPage("WhatsApp Manager", DashboardWhatsAppManagerUrl) },
+            onCopyWebhook = { copyValue("Webhook URL", DashboardMetaWebhookCallbackUrl) },
+            onCopyEnvKeys = {
+                copyValue(
+                    "Meta env keys",
+                    "META_APP_ID, META_APP_SECRET, META_SYSTEM_USER_ACCESS_TOKEN, META_TOKEN_ENCRYPTION_SECRET, META_WEBHOOK_VERIFY_TOKEN",
+                )
+            },
+            onCreateTemplates = actions.onSyncMetaWhatsAppTemplates,
+            onRefreshTemplates = actions.onLoadMetaWhatsAppTemplates,
+            onCheckCatalog = actions.onSyncMetaCatalog,
+            onCopyShopLink = { copyValue("Shop link", shopLink) },
+        )
+        DashboardMetaSetupAccountCard(
+            state = state,
+            metaConnection = metaConnection,
+            shopLink = shopLink,
+            onEditMetaIds = { showMetaSetupSheet = true },
+        )
     }
 
     if (showMetaSetupSheet) {
@@ -18847,6 +18828,166 @@ private fun dashboardMetaCurrentStepRows(
         "Last check" to (metaConnection?.lastSyncAt ?: "Not checked yet"),
         "Public link" to shopLink.ifBlank { "Created after workspace setup" },
     )
+}
+
+@Composable
+private fun DashboardMetaSetupStepByStepCard(
+    steps: List<DashboardMetaSetupStepSpec>,
+    state: OnboardingUiState,
+    metaConnection: OrmaMetaConnectionStatus?,
+    shopLink: String,
+    actionLoading: Boolean,
+    onEditMetaIds: () -> Unit,
+    onOpenMeta: () -> Unit,
+    onOpenWhatsApp: () -> Unit,
+    onCopyWebhook: () -> Unit,
+    onCopyEnvKeys: () -> Unit,
+    onCreateTemplates: () -> Unit,
+    onRefreshTemplates: () -> Unit,
+    onCheckCatalog: () -> Unit,
+    onCopyShopLink: () -> Unit,
+) {
+    DashboardRecordCard {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.Top,
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    text = "Step-by-step setup",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = OrmaColors.TextPrimary,
+                )
+                Text(
+                    text = "Open each step, paste or copy the shown values, save it, then move to the next step.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = OrmaColors.TextSecondary,
+                )
+            }
+            OrmaBadge(
+                text = "${steps.count { it.complete }}/${steps.size}",
+                tone = if (steps.all { it.complete }) OrmaStatusTone.Success else OrmaStatusTone.Info,
+            )
+        }
+        steps.forEachIndexed { index, step ->
+            if (index > 0) HorizontalDivider(color = OrmaColors.Divider)
+            val previousDone = steps.take(index).all { it.complete }
+            DashboardMetaSetupDetailedStep(
+                number = index + 1,
+                step = step,
+                enabled = previousDone,
+                state = state,
+                metaConnection = metaConnection,
+                shopLink = shopLink,
+                actionLoading = actionLoading,
+                onEditMetaIds = onEditMetaIds,
+                onOpenMeta = onOpenMeta,
+                onOpenWhatsApp = onOpenWhatsApp,
+                onCopyWebhook = onCopyWebhook,
+                onCopyEnvKeys = onCopyEnvKeys,
+                onCreateTemplates = onCreateTemplates,
+                onRefreshTemplates = onRefreshTemplates,
+                onCheckCatalog = onCheckCatalog,
+                onCopyShopLink = onCopyShopLink,
+            )
+        }
+    }
+}
+
+@Composable
+private fun DashboardMetaSetupDetailedStep(
+    number: Int,
+    step: DashboardMetaSetupStepSpec,
+    enabled: Boolean,
+    state: OnboardingUiState,
+    metaConnection: OrmaMetaConnectionStatus?,
+    shopLink: String,
+    actionLoading: Boolean,
+    onEditMetaIds: () -> Unit,
+    onOpenMeta: () -> Unit,
+    onOpenWhatsApp: () -> Unit,
+    onCopyWebhook: () -> Unit,
+    onCopyEnvKeys: () -> Unit,
+    onCreateTemplates: () -> Unit,
+    onRefreshTemplates: () -> Unit,
+    onCheckCatalog: () -> Unit,
+    onCopyShopLink: () -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            OrmaBadge(
+                text = if (step.complete) "OK" else number.toString(),
+                tone = if (step.complete) OrmaStatusTone.Success else OrmaStatusTone.Warning,
+            )
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    text = "Step $number. ${step.title}",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = OrmaColors.TextPrimary,
+                )
+                Text(
+                    text = step.body,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = OrmaColors.TextSecondary,
+                )
+            }
+            OrmaBadge(
+                text = when {
+                    step.complete -> "DONE"
+                    enabled -> "NEXT"
+                    else -> "LOCKED"
+                },
+                tone = when {
+                    step.complete -> OrmaStatusTone.Success
+                    enabled -> OrmaStatusTone.Warning
+                    else -> OrmaStatusTone.Info
+                },
+            )
+        }
+        OrmaKeyValueList(
+            rows = dashboardMetaCurrentStepRows(
+                stepKey = step.key,
+                state = state,
+                metaConnection = metaConnection,
+                shopLink = shopLink,
+            ),
+        )
+        if (!enabled) {
+            Text(
+                text = "Complete the previous step first.",
+                style = MaterialTheme.typography.bodySmall,
+                color = OrmaColors.TextSecondary,
+            )
+        }
+        DashboardMetaCurrentStepActions(
+            stepKey = step.key,
+            actionLoading = actionLoading || !enabled,
+            hasShopLink = shopLink.isNotBlank(),
+            onEditMetaIds = onEditMetaIds,
+            onOpenMeta = onOpenMeta,
+            onOpenWhatsApp = onOpenWhatsApp,
+            onCopyWebhook = onCopyWebhook,
+            onCopyEnvKeys = onCopyEnvKeys,
+            onCreateTemplates = onCreateTemplates,
+            onRefreshTemplates = onRefreshTemplates,
+            onCheckCatalog = onCheckCatalog,
+            onCopyShopLink = onCopyShopLink,
+        )
+    }
 }
 
 @Composable
@@ -23244,65 +23385,86 @@ private fun DashboardCustomerRow(
     customer: OrmaCustomer,
     onDetailsClick: () -> Unit,
 ) {
-    val contact = listOfNotNull(customer.phoneNumber, customer.email).joinToString(" / ").ifBlank { "No contact added" }
-    val location = listOfNotNull(customer.city, customer.region, customer.country).joinToString(", ")
-    DashboardMobileRecordCard(
-        modifier = Modifier.clickable(onClick = onDetailsClick),
+    val title = customer.name.trim().ifBlank { "Unnamed customer" }
+    val subtitle = customer.mobileCustomerPrimaryLine()
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 86.dp)
+            .clickable(onClick = onDetailsClick),
+        shape = OrmaShapes.StandardCell,
+        color = OrmaColors.CardBackground,
+        contentColor = OrmaColors.TextPrimary,
+        border = BorderStroke(0.7.dp, OrmaColors.Hairline),
+        tonalElevation = 0.dp,
+        shadowElevation = OrmaElevation.None,
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 14.dp),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            Surface(
+                modifier = Modifier.size(54.dp),
+                shape = CircleShape,
+                color = OrmaColors.Accent,
+                contentColor = OrmaColors.OnAccent,
+                tonalElevation = 0.dp,
+                shadowElevation = 0.dp,
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Text(
+                        text = customer.mobileCustomerInitials(),
+                        style = MaterialTheme.typography.titleSmall,
+                        color = OrmaColors.ScreenBackground,
+                        maxLines = 1,
+                        overflow = TextOverflow.Clip,
+                    )
+                }
+            }
             Column(
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(3.dp),
+                verticalArrangement = Arrangement.spacedBy(5.dp),
             ) {
                 Text(
-                    text = customer.name,
+                    text = title,
                     style = MaterialTheme.typography.titleSmall,
                     color = OrmaColors.TextPrimary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    text = contact,
+                    text = subtitle,
                     style = MaterialTheme.typography.bodySmall,
                     color = OrmaColors.TextSecondary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                location.takeIf { it.isNotBlank() }?.let {
-                    Text(
-                        text = it,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = OrmaColors.TextTertiary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                OrmaBadge(
-                    text = customer.status.dashboardTeamStatusLabel().uppercase(),
-                    tone = if (customer.status.lowercase() == "active") OrmaStatusTone.Success else OrmaStatusTone.Info,
-                )
-                OrmaFlatIcon(
-                    kind = OrmaFlatIconKind.ChevronRight,
-                    modifier = Modifier.size(16.dp),
-                    color = OrmaColors.TextTertiary,
-                )
             }
         }
-        DashboardWideActionButton(
-            text = "Open details",
-            onClick = onDetailsClick,
-            modifier = Modifier.fillMaxWidth(),
-            primary = true,
-        )
+    }
+}
+
+private fun OrmaCustomer.mobileCustomerPrimaryLine(): String {
+    email?.trim()?.takeIf(String::isNotBlank)?.let { return it }
+    phoneNumber?.trim()?.takeIf(String::isNotBlank)?.let { return it }
+    return listOfNotNull(city, region, country)
+        .mapNotNull { it.trim().takeIf(String::isNotBlank) }
+        .joinToString(", ")
+        .ifBlank { "No contact added" }
+}
+
+private fun OrmaCustomer.mobileCustomerInitials(): String {
+    val source = name.trim()
+        .ifBlank { email.orEmpty().substringBefore("@").replace(".", " ").replace("_", " ") }
+        .ifBlank { phoneNumber.orEmpty() }
+    val words = source.split(" ", "-", "_").filter { it.isNotBlank() }
+    return when {
+        words.size >= 2 -> words.take(2).joinToString("") { it.take(1).uppercase() }
+        words.size == 1 -> words.first().take(2).uppercase()
+        else -> "CU"
     }
 }
 
@@ -26385,7 +26547,6 @@ private fun ProductOptionsEditor(
                 "appointment" -> "appointment package"
                 else -> "product option"
             }}",
-            iconKind = OrmaFlatIconKind.Add,
             onClick = { onVariantsChange(variants + OrmaProductVariantDraft(status = "active")) },
         )
     }
@@ -27080,7 +27241,11 @@ private fun OrderFormSheet(
         draft = draft.copy(items = draft.items.filterIndexed { itemIndex, _ -> itemIndex != index })
     }
     fun addOrIncrementProduct(product: OrmaProduct) {
-        val existingIndex = draft.items.indexOfFirst { it.productId == product.id }
+        val existingIndex = if (product.variants.isEmpty()) {
+            draft.items.indexOfFirst { it.productId == product.id }
+        } else {
+            -1
+        }
         if (existingIndex >= 0) {
             val item = draft.items[existingIndex]
             updateItem(
