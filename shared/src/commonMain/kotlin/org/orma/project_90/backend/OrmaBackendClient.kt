@@ -271,8 +271,34 @@ data class OrmaProduct(
     val lowStock: Boolean,
     val status: String,
     val imageUrl: String? = null,
+    val variants: List<OrmaProductVariant> = emptyList(),
     val createdAt: String = "",
     val updatedAt: String = "",
+)
+
+data class OrmaProductVariant(
+    val id: String = "",
+    val productId: String = "",
+    val name: String = "",
+    val sku: String? = null,
+    val barcode: String? = null,
+    val sellingPrice: String = "0.00",
+    val costPrice: String = "0.00",
+    val stockQuantity: String = "0",
+    val durationMinutes: Int? = null,
+    val status: String = "active",
+)
+
+data class OrmaProductVariantDraft(
+    val id: String = "",
+    val name: String = "",
+    val sku: String = "",
+    val barcode: String = "",
+    val sellingPrice: String = "",
+    val costPrice: String = "",
+    val stockQuantity: String = "",
+    val durationMinutes: String = "",
+    val status: String = "active",
 )
 
 data class OrmaProductCategory(
@@ -384,6 +410,7 @@ data class OrmaPublicCatalogProduct(
     val bookingRequired: Boolean = false,
     val imageUrl: String? = null,
     val offer: OrmaPublicCatalogOffer? = null,
+    val variants: List<OrmaProductVariant> = emptyList(),
 )
 
 data class OrmaPublicCatalog(
@@ -405,6 +432,7 @@ data class OrmaPublicCatalogOrderDraft(
 
 data class OrmaPublicCatalogOrderItemDraft(
     val productId: String,
+    val variantId: String? = null,
     val quantity: String,
 )
 
@@ -499,6 +527,8 @@ data class OrmaOrderItem(
     val id: String,
     val productId: String?,
     val productName: String?,
+    val variantId: String? = null,
+    val variantName: String? = null,
     val description: String,
     val quantity: String,
     val unitPrice: String,
@@ -559,6 +589,7 @@ data class OrmaProductDraft(
     val expiryDate: String = "",
     val supplierId: String = "",
     val status: String = "active",
+    val variants: List<OrmaProductVariantDraft> = emptyList(),
     val image: OrmaPickedImage? = null,
 )
 
@@ -606,6 +637,7 @@ data class OrmaOrderDraft(
 
 data class OrmaOrderItemDraft(
     val productId: String = "",
+    val variantId: String = "",
     val description: String = "",
     val quantity: String = "1",
     val unitPrice: String = "",
@@ -1808,6 +1840,7 @@ class OrmaBackendClient(
                     .joinToString(prefix = "[", postfix = "]") { item ->
                         buildJsonObject(
                             "productId" to JsonValue.StringValue(item.productId),
+                            "variantId" to JsonValue.StringValue(item.variantId),
                             "quantity" to JsonValue.StringValue(item.quantity.blankToZero(default = "1")),
                         )
                     }
@@ -2286,8 +2319,23 @@ private fun String.toProduct(): OrmaProduct =
         lowStock = jsonBoolean("lowStock") ?: false,
         status = jsonString("status").orEmpty(),
         imageUrl = jsonString("imageUrl"),
+        variants = jsonObjectsInArray("variants").map { it.toProductVariant() },
         createdAt = jsonString("createdAt").orEmpty(),
         updatedAt = jsonString("updatedAt").orEmpty(),
+    )
+
+private fun String.toProductVariant(): OrmaProductVariant =
+    OrmaProductVariant(
+        id = jsonString("id").orEmpty(),
+        productId = jsonString("productId").orEmpty(),
+        name = jsonString("name").orEmpty(),
+        sku = jsonString("sku"),
+        barcode = jsonString("barcode"),
+        sellingPrice = jsonDecimalString("sellingPrice") ?: "0.00",
+        costPrice = jsonDecimalString("costPrice") ?: "0.00",
+        stockQuantity = jsonDecimalString("stockQuantity") ?: "0",
+        durationMinutes = jsonInt("durationMinutes"),
+        status = jsonString("status") ?: "active",
     )
 
 private fun String.toProductCategory(): OrmaProductCategory =
@@ -2394,6 +2442,7 @@ private fun String.toPublicCatalogProduct(): OrmaPublicCatalogProduct =
         bookingRequired = jsonBoolean("bookingRequired") ?: false,
         imageUrl = jsonString("imageUrl"),
         offer = jsonObject("offer")?.toPublicCatalogOffer(),
+        variants = jsonObjectsInArray("variants").map { it.toProductVariant() },
     )
 
 private fun String.toPublicCatalogOrderReceipt(): OrmaPublicCatalogOrderReceipt =
@@ -2484,6 +2533,8 @@ private fun String.toOrderItem(): OrmaOrderItem =
         id = jsonString("id").orEmpty(),
         productId = jsonString("productId"),
         productName = jsonString("productName"),
+        variantId = jsonString("variantId"),
+        variantName = jsonString("variantName"),
         description = jsonString("description").orEmpty(),
         quantity = jsonDecimalString("quantity") ?: "0",
         unitPrice = jsonDecimalString("unitPrice") ?: "0.00",
@@ -2644,8 +2695,23 @@ private fun OrmaSupplierDraft.toSupplierRequestJson(): String =
         "notes" to JsonValue.StringValue(notes.blankToNull()),
     )
 
-private fun OrmaProductDraft.toProductRequestJson(): String =
-    buildJsonObject(
+private fun OrmaProductDraft.toProductRequestJson(): String {
+    val variantsJson = variants
+        .filter { it.name.isNotBlank() }
+        .joinToString(prefix = "[", postfix = "]") { variant ->
+            buildJsonObject(
+                "id" to JsonValue.StringValue(variant.id.blankToNull()),
+                "name" to JsonValue.StringValue(variant.name),
+                "sku" to JsonValue.StringValue(variant.sku.blankToNull()),
+                "barcode" to JsonValue.StringValue(variant.barcode.blankToNull()),
+                "sellingPrice" to JsonValue.StringValue(variant.sellingPrice.blankToNull()),
+                "costPrice" to JsonValue.StringValue(variant.costPrice.blankToNull()),
+                "stockQuantity" to JsonValue.StringValue(variant.stockQuantity.blankToNull()),
+                "durationMinutes" to JsonValue.IntValue(variant.durationMinutes.intValueOrNull()),
+                "status" to JsonValue.StringValue(variant.status.ifBlank { "active" }),
+            )
+        }
+    return buildJsonObject(
         "name" to JsonValue.StringValue(name),
         "itemType" to JsonValue.StringValue(itemType),
         "categoryId" to JsonValue.StringValue(categoryId.blankToNull()),
@@ -2667,7 +2733,9 @@ private fun OrmaProductDraft.toProductRequestJson(): String =
         "expiryDate" to JsonValue.StringValue(expiryDate.blankToNull()),
         "supplierId" to JsonValue.StringValue(supplierId.blankToNull()),
         "status" to JsonValue.StringValue(status.ifBlank { "active" }),
+        "variants" to JsonValue.RawValue(variantsJson),
     )
+}
 
 private fun OrmaPrinterDraft.toPrinterRequestJson(): String =
     buildJsonObject(
@@ -2689,6 +2757,7 @@ private fun OrmaOrderDraft.toOrderRequestJson(): String {
         .joinToString(prefix = "[", postfix = "]") { item ->
             buildJsonObject(
                 "productId" to JsonValue.StringValue(item.productId.blankToNull()),
+                "variantId" to JsonValue.StringValue(item.variantId.blankToNull()),
                 "description" to JsonValue.StringValue(item.description),
                 "quantity" to JsonValue.StringValue(item.quantity.blankToZero(default = "1")),
                 "unitPrice" to JsonValue.StringValue(item.unitPrice.blankToZero()),

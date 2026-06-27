@@ -1895,19 +1895,30 @@ class DashboardRepository(
                     .takeIf { it > BigDecimal.ZERO }
                     ?: BigDecimal.ONE
                 val product = publicOrderProduct(workspaceId, productId) ?: return@mapNotNull null
-                if (product.trackStock && product.stockQuantity.decimalOrZero() <= BigDecimal.ZERO) {
+                val variantId = requestedItem.variantId.cleanUuidOrNull()
+                val variant = variantId?.let { requestedVariantId ->
+                    product.variants.firstOrNull { it.id == requestedVariantId && it.status == "active" }
+                }
+                if (variantId != null && variant == null) {
                     return@mapNotNull null
                 }
-                if (product.trackStock && quantity > product.stockQuantity.decimalOrZero()) {
+                val availableStock = variant?.stockQuantity?.decimalOrZero() ?: product.stockQuantity.decimalOrZero()
+                if (product.trackStock && availableStock <= BigDecimal.ZERO) {
                     return@mapNotNull null
                 }
+                if (product.trackStock && quantity > availableStock) {
+                    return@mapNotNull null
+                }
+                val unitPrice = variant?.sellingPrice ?: product.offer?.finalPrice ?: product.sellingPrice
+                val description = if (variant == null) product.name else "${product.name} - ${variant.name}"
                 PublicCatalogPreparedItem(
                     itemType = product.itemType.cleanItemType(),
                     orderItem = OrderItemRequest(
                         productId = product.id,
-                        description = product.name,
+                        variantId = variant?.id,
+                        description = description,
                         quantity = quantity.decimalString(),
-                        unitPrice = product.offer?.finalPrice ?: product.sellingPrice,
+                        unitPrice = unitPrice,
                         taxRate = product.taxRate,
                     ),
                     discountTotal = (product.offer?.discountAmount ?: "0")
@@ -1996,7 +2007,9 @@ class DashboardRepository(
                 } else {
                     val trackStock = result.getBoolean("track_stock")
                     val stockQuantity = result.getBigDecimal("stock_quantity") ?: BigDecimal.ZERO
-                    result.toPublicCatalogProductResponse(trackStock, stockQuantity)
+                    attachPublicCatalogVariants(
+                        listOf(result.toPublicCatalogProductResponse(trackStock, stockQuantity)),
+                    ).first()
                 }
             }
         }
@@ -3636,7 +3649,9 @@ class DashboardRepository(
         return products.map { product -> product.copy(variants = variantsByProduct[product.id].orEmpty()) }
     }
 
-    private fun Connection.attachPublicCatalogVariants(products: List<PublicCatalogProductResponse>): List<PublicCatalogProductResponse> {
+    private fun Connection.attachPublicCatalogVariants(
+        products: List<PublicCatalogProductResponse>,
+    ): List<PublicCatalogProductResponse> {
         if (products.isEmpty()) return products
         val productIds = products.map { it.id }.distinct()
         val placeholders = productIds.joinToString(", ") { "?::uuid" }
@@ -4211,7 +4226,7 @@ class DashboardRepository(
         preparedItems.forEach { item ->
             insertOrderItem(orderId, item)
             if (inventoryApplied && item.productId != null) {
-                applyOrderStockMovement(access, item.productId, item.quantity.negate(), "Order $orderNumber")
+                applyOrderInventoryMovement(access, item, item.quantity.negate(), "Order $orderNumber")
             }
         }
 
@@ -4284,7 +4299,13 @@ class DashboardRepository(
         if (inventoryWasApplied) {
             oldItems.forEach { item ->
                 item.productId?.let { productId ->
-                    applyOrderStockMovement(access, productId, item.quantity.decimalOrZero(), "Order $orderNumber edited")
+                    applyOrderInventoryMovement(
+                        access = access,
+                        productId = productId,
+                        variantId = item.variantId,
+                        quantityDelta = item.quantity.decimalOrZero(),
+                        note = "Order $orderNumber edited",
+                    )
                 }
             }
         }
@@ -4340,7 +4361,7 @@ class DashboardRepository(
         preparedItems.forEach { item ->
             insertOrderItem(cleanOrderId, item)
             if (inventoryShouldBeApplied && item.productId != null) {
-                applyOrderStockMovement(access, item.productId, item.quantity.negate(), "Order $orderNumber edited")
+                applyOrderInventoryMovement(access, item, item.quantity.negate(), "Order $orderNumber edited")
             }
         }
 
@@ -4410,7 +4431,13 @@ class DashboardRepository(
         if (shouldApplyInventory) {
             listOrderItems(orderId).forEach { item ->
                 item.productId?.let { productId ->
-                    applyOrderStockMovement(access, productId, item.quantity.decimalOrZero().negate(), "Order status: $status")
+                    applyOrderInventoryMovement(
+                        access = access,
+                        productId = productId,
+                        variantId = item.variantId,
+                        quantityDelta = item.quantity.decimalOrZero().negate(),
+                        note = "Order status: $status",
+                    )
                 }
             }
         }
@@ -4420,21 +4447,23 @@ class DashboardRepository(
     private fun Connection.insertOrderItem(orderId: String, item: PreparedOrderItem) {
         val sql = """
             insert into order_items (
-                order_id, product_id, description, quantity, unit_price, tax_rate,
+                order_id, product_id, variant_id, variant_name, description, quantity, unit_price, tax_rate,
                 line_subtotal, line_tax, line_total
             )
-            values (?::uuid, ?::uuid, ?, ?, ?, ?, ?, ?, ?)
+            values (?::uuid, ?::uuid, ?::uuid, ?, ?, ?, ?, ?, ?, ?, ?)
         """.trimIndent()
         prepareStatement(sql).use { statement ->
             statement.setString(1, orderId)
             statement.setNullableUuid(2, item.productId)
-            statement.setString(3, item.description)
-            statement.setBigDecimal(4, item.quantity)
-            statement.setBigDecimal(5, item.unitPrice)
-            statement.setBigDecimal(6, item.taxRate)
-            statement.setBigDecimal(7, item.lineSubtotal)
-            statement.setBigDecimal(8, item.lineTax)
-            statement.setBigDecimal(9, item.lineTotal)
+            statement.setNullableUuid(3, item.variantId)
+            statement.setNullableString(4, item.variantName)
+            statement.setString(5, item.description)
+            statement.setBigDecimal(6, item.quantity)
+            statement.setBigDecimal(7, item.unitPrice)
+            statement.setBigDecimal(8, item.taxRate)
+            statement.setBigDecimal(9, item.lineSubtotal)
+            statement.setBigDecimal(10, item.lineTax)
+            statement.setBigDecimal(11, item.lineTotal)
             statement.executeUpdate()
         }
     }
@@ -4445,6 +4474,8 @@ class DashboardRepository(
                 oi.id::text,
                 oi.product_id::text,
                 p.name as product_name,
+                oi.variant_id::text,
+                coalesce(oi.variant_name, pv.name) as variant_name,
                 oi.description,
                 oi.quantity,
                 oi.unit_price,
@@ -4454,6 +4485,7 @@ class DashboardRepository(
                 oi.line_total
             from order_items oi
             left join products p on p.id = oi.product_id
+            left join product_variants pv on pv.id = oi.variant_id
             where oi.order_id = ?::uuid
             order by oi.id
         """.trimIndent()
@@ -4464,6 +4496,69 @@ class DashboardRepository(
                     while (result.next()) add(result.toOrderItemResponse())
                 }
             }
+        }
+    }
+
+    private fun Connection.applyOrderInventoryMovement(
+        access: DashboardWorkspaceAccess,
+        item: PreparedOrderItem,
+        quantityDelta: BigDecimal,
+        note: String,
+    ) {
+        val productId = item.productId ?: return
+        applyOrderInventoryMovement(
+            access = access,
+            productId = productId,
+            variantId = item.variantId,
+            quantityDelta = quantityDelta,
+            note = note,
+        )
+    }
+
+    private fun Connection.applyOrderInventoryMovement(
+        access: DashboardWorkspaceAccess,
+        productId: String,
+        variantId: String?,
+        quantityDelta: BigDecimal,
+        note: String,
+    ) {
+        applyOrderStockMovement(access, productId, quantityDelta, note)
+        if (variantId != null) {
+            applyVariantStockMovement(access, variantId, quantityDelta)
+        }
+    }
+
+    private fun Connection.applyVariantStockMovement(
+        access: DashboardWorkspaceAccess,
+        variantId: String,
+        quantityDelta: BigDecimal,
+    ) {
+        val current = prepareStatement(
+            """
+            select stock_quantity
+            from product_variants
+            where id = ?::uuid and workspace_id = ?::uuid and status = 'active'
+            for update
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setString(1, variantId)
+            statement.setString(2, access.workspaceId)
+            statement.executeQuery().use { result ->
+                if (result.next()) result.getBigDecimal("stock_quantity") else return
+            }
+        }
+        val next = current.add(quantityDelta).scaled()
+        prepareStatement(
+            """
+            update product_variants
+            set stock_quantity = ?, updated_at = now()
+            where id = ?::uuid and workspace_id = ?::uuid
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setBigDecimal(1, next)
+            statement.setString(2, variantId)
+            statement.setString(3, access.workspaceId)
+            statement.executeUpdate()
         }
     }
 
@@ -4945,6 +5040,8 @@ class DashboardRepository(
             id = getString("id"),
             productId = getString("product_id"),
             productName = getString("product_name"),
+            variantId = getString("variant_id"),
+            variantName = getString("variant_name"),
             description = getString("description"),
             quantity = getBigDecimal("quantity").decimalString(),
             unitPrice = getBigDecimal("unit_price").moneyString(),
@@ -4967,6 +5064,8 @@ class DashboardRepository(
         val lineTax = lineSubtotal.multiply(taxRate).divide(BigDecimal("100"), 2, RoundingMode.HALF_UP).scaled()
         return PreparedOrderItem(
             productId = productId.cleanUuidOrNull(),
+            variantId = variantId.cleanUuidOrNull(),
+            variantName = null,
             description = description.cleanName(),
             quantity = quantity,
             unitPrice = unitPrice,
@@ -5011,6 +5110,39 @@ class DashboardRepository(
                 code = "order_item_catalog_missing",
                 publicMessage = "One or more selected catalog items are no longer available.",
             )
+        }
+        val variantIds = items.mapNotNull { it.variantId }.distinct()
+        if (variantIds.isNotEmpty()) {
+            val variantPlaceholders = variantIds.joinToString(", ") { "?::uuid" }
+            val variants = mutableMapOf<String, Pair<String, String>>()
+            prepareStatement(
+                """
+                select id::text, product_id::text, name
+                from product_variants
+                where workspace_id = ?::uuid and status = 'active' and id in ($variantPlaceholders)
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setString(1, workspaceId)
+                variantIds.forEachIndexed { index, variantId ->
+                    statement.setString(index + 2, variantId)
+                }
+                statement.executeQuery().use { result ->
+                    while (result.next()) {
+                        variants[result.getString("id")] = result.getString("product_id") to result.getString("name")
+                    }
+                }
+            }
+            items.forEach { item ->
+                val variantId = item.variantId ?: return@forEach
+                val variant = variants[variantId]
+                if (variant == null || variant.first != item.productId) {
+                    throw DashboardOrderValidationException(
+                        code = "order_item_variant_missing",
+                        publicMessage = "One or more selected item options are no longer available.",
+                    )
+                }
+                item.variantName = variant.second
+            }
         }
         val wrongType = products.values.firstOrNull { (itemType, _) -> itemType != expectedItemType } ?: return
         throw DashboardOrderValidationException(
@@ -5959,6 +6091,8 @@ class DashboardRepository(
 
     private data class PreparedOrderItem(
         val productId: String?,
+        val variantId: String?,
+        var variantName: String?,
         val description: String,
         val quantity: BigDecimal,
         val unitPrice: BigDecimal,
