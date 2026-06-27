@@ -32904,13 +32904,22 @@ private fun DashboardMobileAccountContent(
         }
 
         DashboardMobileAccountGroup(title = "Operations") {
+            val notificationSupported = dashboardNotificationSupportedOnCurrentPlatform()
             DashboardMobileAccountRow(
                 icon = DashboardNavIconKind.Account,
                 title = "Notifications",
                 body = dashboardNotificationPlatformCopy(state.notificationsEnabled),
-                trailingText = if (state.notificationsEnabled) "Turn off" else "Enable",
+                trailingText = when {
+                    state.notificationsEnabled -> "Turn off"
+                    notificationSupported -> "Enable"
+                    else -> "Not supported"
+                },
                 maxBodyLines = 3,
-                onClick = { actions.onNotificationDecision(!state.notificationsEnabled) },
+                onClick = if (state.notificationsEnabled || notificationSupported) {
+                    { actions.onNotificationDecision(!state.notificationsEnabled) }
+                } else {
+                    null
+                },
             )
             DashboardMobileAccountRow(
                 icon = DashboardNavIconKind.Products,
@@ -33563,10 +33572,19 @@ private fun DashboardAccountNotificationCard(
     actions: OnboardingActions,
 ) {
     val platformName = getPlatform().name
+    val notificationSupported = dashboardNotificationSupportedOnCurrentPlatform()
     DashboardRecordCard {
         OrmaBadge(
-            text = if (state.notificationsEnabled) "ENABLED" else "OFF",
-            tone = if (state.notificationsEnabled) OrmaStatusTone.Success else OrmaStatusTone.Info,
+            text = when {
+                state.notificationsEnabled -> "ENABLED"
+                notificationSupported -> "OFF"
+                else -> "NOT CONNECTED"
+            },
+            tone = when {
+                state.notificationsEnabled -> OrmaStatusTone.Success
+                notificationSupported -> OrmaStatusTone.Info
+                else -> OrmaStatusTone.Warning
+            },
         )
         Text(
             text = "Notifications",
@@ -33586,13 +33604,22 @@ private fun DashboardAccountNotificationCard(
             ),
         )
         DashboardWideActionButton(
-            text = if (state.notificationsEnabled) "Turn off notifications" else "Enable notifications",
+            text = when {
+                state.notificationsEnabled -> "Turn off notifications"
+                notificationSupported -> "Enable notifications"
+                else -> "Use web or Android"
+            },
             onClick = { actions.onNotificationDecision(!state.notificationsEnabled) },
             modifier = Modifier.fillMaxWidth(),
-            primary = !state.notificationsEnabled,
-            enabled = !state.onboardingLoading,
+            primary = !state.notificationsEnabled && notificationSupported,
+            enabled = !state.onboardingLoading && (state.notificationsEnabled || notificationSupported),
         )
     }
+}
+
+private fun dashboardNotificationSupportedOnCurrentPlatform(): Boolean {
+    val platform = getPlatform().name.lowercase()
+    return isOrmaWebDownloadSurface() || platform.contains("android")
 }
 
 private fun dashboardNotificationPlatformCopy(enabled: Boolean): String {

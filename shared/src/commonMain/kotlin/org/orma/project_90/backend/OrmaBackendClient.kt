@@ -948,6 +948,25 @@ class OrmaBackendClient(
         }
     }
 
+    suspend fun unregisterNotificationDevice(
+        idToken: String,
+        deviceToken: String,
+    ): OrmaBackendResult<Unit> =
+        executeBackendRequest(
+            actionTitle = "Disable this device notifications",
+            request = {
+                ormaPostJsonAuthorized(
+                    url = config.url("/onboarding/notifications/device/logout"),
+                    bearerToken = idToken,
+                    body = buildJsonObject(
+                        "enabled" to JsonValue.BooleanValue(false),
+                        "deviceToken" to JsonValue.StringValue(deviceToken),
+                    ),
+                )
+            },
+            parse = {},
+        )
+
     suspend fun uploadBusinessLogo(
         idToken: String,
         image: OrmaPickedImage,

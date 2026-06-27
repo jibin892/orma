@@ -163,6 +163,27 @@ fun Route.onboardingRoutes(
         )
         call.respond(session.toMutationResponse(config))
     }
+
+    post("/onboarding/notifications/device/logout") {
+        val request = call.receive<NotificationPreferenceRequest>()
+        if (request.deviceToken.isNullOrBlank()) {
+            call.respond(
+                HttpStatusCode.BadRequest,
+                ErrorResponse(
+                    code = "notification_token_required",
+                    message = "ORMA could not identify this device notification token.",
+                ),
+            )
+            return@post
+        }
+        val repository = onboardingRepository ?: return@post call.databaseNotConfigured()
+        val firebaseUser = call.verifiedFirebaseUser(config) ?: return@post
+        repository.unregisterNotificationDevice(
+            firebaseUser = firebaseUser,
+            deviceToken = request.deviceToken,
+        )
+        call.respond(HttpStatusCode.NoContent)
+    }
 }
 
 private suspend fun ApplicationCall.databaseNotConfigured() {

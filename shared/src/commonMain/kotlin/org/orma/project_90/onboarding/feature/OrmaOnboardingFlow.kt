@@ -82,9 +82,26 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
     val backendClient = remember { createOrmaBackendClient() }
     val scope = rememberCoroutineScope()
 
+    suspend fun unregisterCurrentNotificationDeviceBeforeLogout(snapshot: OnboardingUiState) {
+        val idToken = when (val refreshed = runCatching { authGateway.refreshSession() }.getOrNull()) {
+            is OrmaAuthResult.Success -> refreshed.session.idToken
+            else -> snapshot.authIdToken
+        }.takeIf { it.isNotBlank() } ?: return
+        val deviceToken = runCatching { currentOrmaNotificationDeviceToken()?.token }
+            .getOrNull()
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?: return
+        backendClient.unregisterNotificationDevice(
+            idToken = idToken,
+            deviceToken = deviceToken,
+        )
+    }
+
     fun restart() {
         if (state.authLoadingKind == AuthLoadingKind.SigningOut) return
-        state = state.copy(
+        val signOutSnapshot = state
+        state = signOutSnapshot.copy(
             authLoadingKind = AuthLoadingKind.SigningOut,
             onboardingLoading = false,
             inviteLoading = false,
@@ -97,6 +114,7 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
         )
         scope.launch {
             try {
+                runCatching { unregisterCurrentNotificationDeviceBeforeLogout(signOutSnapshot) }
                 authGateway.clearStoredSession()
                 state = OnboardingUiState()
             } catch (error: Throwable) {
