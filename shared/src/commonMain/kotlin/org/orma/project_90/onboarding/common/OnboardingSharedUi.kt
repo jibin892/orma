@@ -19927,6 +19927,7 @@ private fun DashboardOrderPipelineCard(
     actions: OnboardingActions,
 ) {
     val orders = filteredDashboardOrders(state)
+    val stageOrders = filteredDashboardOrders(state, ignoreStatus = true)
     val orderType = state.activeDashboardOrderType()
     val selectedOrderType = state.selectedDashboardOrderTypeFilter()
     val selected = state.dashboard.filtersForScope(DashboardFilterScopeOrders).orderStatus
@@ -19958,7 +19959,7 @@ private fun DashboardOrderPipelineCard(
                 )
             }
             OrmaBadge(
-                text = "${orders.size} TOTAL",
+                text = "${stageOrders.size} TOTAL",
                 tone = OrmaStatusTone.Info,
             )
         }
@@ -19969,13 +19970,13 @@ private fun DashboardOrderPipelineCard(
         ) {
             DashboardStatusCountChip(
                 label = "All",
-                count = orders.size,
+                count = stageOrders.size,
                 selected = selected == "all",
                 tone = OrmaStatusTone.Info,
                 onClick = { updateDashboardOrderStatusFilter(actions, DashboardFilterScopeOrders, "all") },
             )
             DashboardOrderStatuses.forEach { status ->
-                val count = orders.count { it.status == status }
+                val count = stageOrders.count { it.status == status }
                 DashboardStatusCountChip(
                     label = status.dashboardStatusLabel(),
                     count = count,
