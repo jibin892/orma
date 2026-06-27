@@ -3,6 +3,8 @@ package com.orma.backend.db
 import com.orma.backend.auth.VerifiedFirebaseUser
 import com.orma.backend.config.AppConfig
 import com.orma.backend.models.MetaCatalogSyncResponse
+import com.orma.backend.models.MetaAccessTokenConnectRequest
+import com.orma.backend.models.MetaAccessTokenConnectResponse
 import com.orma.backend.models.MetaConnectCompleteResponse
 import com.orma.backend.models.MetaConnectStartResponse
 import com.orma.backend.models.MetaConnectionRequest
@@ -181,6 +183,55 @@ class MetaIntegrationRepository(
                 connected = true,
                 status = "connected",
                 message = "Backend Meta credentials are active for this workspace.",
+                connection = connection.metaStatus(access.workspaceId),
+            )
+        }
+    }
+
+    suspend fun connectManualAccessToken(
+        firebaseUser: VerifiedFirebaseUser,
+        request: MetaAccessTokenConnectRequest,
+    ): MetaAccessTokenConnectResponse? = withContext(Dispatchers.IO) {
+        val tokenValue = request.accessToken.trim()
+        dataSource.connection.use { connection ->
+            val access = connection.resolveMetaWorkspaceAccess(firebaseUser) ?: return@withContext null
+            val connectionState = connection.findMetaConnection(access.workspaceId)
+            if (tokenValue.length < 24) {
+                return@withContext MetaAccessTokenConnectResponse(
+                    connected = false,
+                    status = "invalid_token",
+                    message = "Paste a valid Meta access token before saving.",
+                    connection = connection.metaStatus(access.workspaceId),
+                )
+            }
+            if (connectionState == null || !connectionState.hasRequiredWhatsAppIdentifiers) {
+                return@withContext MetaAccessTokenConnectResponse(
+                    connected = false,
+                    status = "setup_required",
+                    message = "Save Meta Business, WABA, and Phone Number IDs before saving a token.",
+                    connection = connection.metaStatus(access.workspaceId),
+                )
+            }
+            if (!config.metaTokenStorageConfigured) {
+                return@withContext MetaAccessTokenConnectResponse(
+                    connected = false,
+                    status = "token_storage_not_configured",
+                    message = "Token encryption is not configured on the backend.",
+                    connection = connection.metaStatus(access.workspaceId),
+                )
+            }
+            connection.storeMetaAccessToken(
+                workspaceId = access.workspaceId,
+                token = MetaAccessToken(
+                    accessToken = tokenValue,
+                    expiresInSeconds = request.expiresInSeconds?.takeIf { it > 0 },
+                ),
+                credentialSource = "manual_token",
+            )
+            MetaAccessTokenConnectResponse(
+                connected = true,
+                status = "connected",
+                message = "Meta token saved encrypted for this ORMA business.",
                 connection = connection.metaStatus(access.workspaceId),
             )
         }
@@ -747,6 +798,7 @@ class MetaIntegrationRepository(
         val expiresAt = token.expiresInSeconds
             ?.takeIf { it > 0 }
             ?.let { Instant.now().plus(it, ChronoUnit.SECONDS).toString() }
+        val connectionMode = if (credentialSource == "manual_token") "manual_setup" else "oauth"
         val sql = """
             insert into meta_connections (
                 workspace_id, status, connection_mode, access_token_status,
@@ -756,7 +808,7 @@ class MetaIntegrationRepository(
             values (
                 ?::uuid,
                 'setup_pending',
-                'oauth',
+                ?,
                 'configured',
                 ?,
                 ?,
@@ -775,7 +827,7 @@ class MetaIntegrationRepository(
                     then 'connected'
                     else 'setup_pending'
                 end,
-                connection_mode = 'oauth',
+                connection_mode = excluded.connection_mode,
                 access_token_status = 'configured',
                 credential_source = excluded.credential_source,
                 access_token_ciphertext = excluded.access_token_ciphertext,
@@ -791,10 +843,11 @@ class MetaIntegrationRepository(
         """.trimIndent()
         prepareStatement(sql).use { statement ->
             statement.setString(1, workspaceId)
-            statement.setString(2, credentialSource)
-            statement.setString(3, encryptedToken)
-            statement.setStringOrNull(4, token.accessToken.takeLast(4))
-            statement.setStringOrNull(5, expiresAt)
+            statement.setString(2, connectionMode)
+            statement.setString(3, credentialSource)
+            statement.setString(4, encryptedToken)
+            statement.setStringOrNull(5, token.accessToken.takeLast(4))
+            statement.setStringOrNull(6, expiresAt)
             statement.executeUpdate()
         }
     }
@@ -1721,6 +1774,11 @@ private data class MetaConnectionRow(
             !catalogId.isNullOrBlank() ||
             !pageId.isNullOrBlank() ||
             !instagramBusinessAccountId.isNullOrBlank()
+
+    val hasRequiredWhatsAppIdentifiers: Boolean
+        get() = !businessId.isNullOrBlank() &&
+            !whatsappBusinessAccountId.isNullOrBlank() &&
+            !phoneNumberId.isNullOrBlank()
 
     val isConnected: Boolean
         get() = status == "connected" &&

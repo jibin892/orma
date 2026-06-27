@@ -2388,12 +2388,29 @@ private fun PublicCatalogProductTile(
                                         overflow = TextOverflow.Ellipsis,
                                     )
                                     Text(
-                                        text = dashboardMoney(product.customerPriceFor(variant), product.currency),
+                                        text = buildString {
+                                            append(product.currency)
+                                            append(" ")
+                                            append(product.customerPriceFor(variant))
+                                            variant.publicCatalogPackageDetail(product.itemType, product.unit)?.let {
+                                                append(" · ")
+                                                append(it)
+                                            }
+                                        },
                                         style = MaterialTheme.typography.labelMedium,
                                         color = OrmaColors.TextSecondary,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
                                     )
+                                    if (variant.addons.isNotEmpty()) {
+                                        Text(
+                                            text = "${variant.addons.size} add-ons available",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = OrmaColors.Success,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
                                 }
                                 QuantityStepper(
                                     quantity = variantQuantity,
@@ -2857,9 +2874,15 @@ private fun PublicCatalogAppliedOffersCard(
 ) {
     val appliedOfferLines = selectedItems.mapNotNull { selection ->
         val offer = selection.product.offer ?: return@mapNotNull null
-        val savings = selection.product.publicCatalogOfferSavings() * selection.quantity
+        val savings = selection.product.discountFor(selection.variant) * selection.quantity
         if (savings <= 0.0) return@mapNotNull null
-        Triple(offer.name.ifBlank { "Offer" }, selection.product.name.ifBlank { "Item" }, savings)
+        Triple(
+            offer.name.ifBlank { "Offer" },
+            listOf(selection.product.name.ifBlank { "Item" }, selection.variant?.name)
+                .filterNotNull()
+                .joinToString(" - "),
+            savings,
+        )
     }
     if (appliedOfferLines.isEmpty()) return
     Surface(
@@ -3285,6 +3308,15 @@ private fun List<PublicCatalogSelection>.catalogOrderFlow(): String =
 private fun List<PublicCatalogSelection>.publicCatalogOfferSavingsTotal(): Double =
     sumOf { selection -> selection.product.discountFor(selection.variant) * selection.quantity }
 
+private fun OrmaProductVariant.publicCatalogPackageDetail(itemType: String, unit: String): String? {
+    val count = includedQuantity.takeIf { it > 1 } ?: return null
+    return when (itemType.publicCatalogNormalizedItemType()) {
+        "appointment" -> "$count sessions"
+        "service" -> "$count service sessions"
+        else -> "$count ${unit.ifBlank { "items" }}"
+    }
+}
+
 private fun String.publicCatalogNormalizedItemType(): String =
     when (trim().lowercase()) {
         "appointment", "appointments", "booking", "bookings" -> "appointment"
@@ -3416,7 +3448,7 @@ private fun OrmaPublicCatalogProduct.customerPriceFor(variant: OrmaProductVarian
     val discount = offer?.discountFor(basePrice.toDoubleOrNull().orZero()).orZero()
     return (basePrice.toDoubleOrNull().orZero() - discount)
         .coerceAtLeast(0.0)
-        .toDashboardMoneyInput()
+        .let(::money)
 }
 
 private fun OrmaPublicCatalogProduct.discountFor(variant: OrmaProductVariant?): Double {

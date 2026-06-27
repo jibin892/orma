@@ -13,6 +13,9 @@ actual fun rememberOrmaOrderDocumentExporter(): OrmaOrderDocumentExporter =
             override fun downloadPdf(fileName: String, pdfBase64: String): Boolean =
                 downloadPdfFromBrowser(fileName = fileName, pdfBase64 = pdfBase64)
 
+            override fun openPdf(fileName: String, pdfBase64: String): Boolean =
+                openPdfFromBrowser(fileName = fileName, pdfBase64 = pdfBase64)
+
             override fun printHtml(title: String, html: String): Boolean =
                 printHtmlFromBrowser(title = title, html = html)
         }
@@ -69,6 +72,49 @@ private fun downloadPdfFromBrowserJs(fileName: String, pdfBase64: String): JsAny
           URL.revokeObjectURL(url);
           if (anchor.parentNode) anchor.parentNode.removeChild(anchor);
         }, isMobile ? 60000 : 0);
+        return true;
+      } catch (error) {
+        return false;
+      }
+    })()
+    """,
+)
+
+private fun openPdfFromBrowser(fileName: String, pdfBase64: String): Boolean =
+    openPdfFromBrowserJs(fileName, pdfBase64).toString() == "true"
+
+private fun openPdfFromBrowserJs(fileName: String, pdfBase64: String): JsAny? = js(
+    """
+    (() => {
+      try {
+        if (
+          typeof Blob === 'undefined' ||
+          typeof URL === 'undefined' ||
+          typeof atob === 'undefined' ||
+          typeof window === 'undefined' ||
+          typeof window.open !== 'function'
+        ) {
+          return false;
+        }
+        const binary = atob(pdfBase64 || '');
+        const bytes = new Uint8Array(binary.length);
+        for (let index = 0; index < binary.length; index += 1) {
+          bytes[index] = binary.charCodeAt(index);
+        }
+        const safeName = (fileName && String(fileName).trim()) || 'orma-invoice.pdf';
+        const blob = new Blob([bytes], { type: 'application/pdf' });
+        const url = URL.createObjectURL(blob);
+        const opened = window.open(url, '_blank', 'noopener,noreferrer');
+        if (!opened) {
+          URL.revokeObjectURL(url);
+          return false;
+        }
+        try {
+          opened.document.title = safeName;
+        } catch (error) {}
+        window.setTimeout(function () {
+          URL.revokeObjectURL(url);
+        }, 60000);
         return true;
       } catch (error) {
         return false;

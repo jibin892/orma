@@ -286,6 +286,16 @@ data class OrmaProductVariant(
     val costPrice: String = "0.00",
     val stockQuantity: String = "0",
     val durationMinutes: Int? = null,
+    val includedQuantity: Int = 1,
+    val addons: List<OrmaProductVariantAddon> = emptyList(),
+    val status: String = "active",
+)
+
+data class OrmaProductVariantAddon(
+    val name: String = "",
+    val sellingPrice: String = "0.00",
+    val costPrice: String = "0.00",
+    val durationMinutes: Int? = null,
     val status: String = "active",
 )
 
@@ -297,6 +307,16 @@ data class OrmaProductVariantDraft(
     val sellingPrice: String = "",
     val costPrice: String = "",
     val stockQuantity: String = "",
+    val durationMinutes: String = "",
+    val includedQuantity: String = "",
+    val addons: List<OrmaProductVariantAddonDraft> = emptyList(),
+    val status: String = "active",
+)
+
+data class OrmaProductVariantAddonDraft(
+    val name: String = "",
+    val sellingPrice: String = "",
+    val costPrice: String = "",
     val durationMinutes: String = "",
     val status: String = "active",
 )
@@ -755,6 +775,18 @@ data class OrmaMetaConnectionDraft(
     val pageId: String = "",
     val instagramBusinessAccountId: String = "",
     val scopes: List<String> = emptyList(),
+)
+
+data class OrmaMetaAccessTokenDraft(
+    val accessToken: String = "",
+    val expiresInSeconds: String = "",
+)
+
+data class OrmaMetaAccessTokenConnectResult(
+    val connected: Boolean,
+    val status: String,
+    val message: String,
+    val connection: OrmaMetaConnectionStatus?,
 )
 
 data class OrmaMetaProductReadiness(
@@ -1744,6 +1776,29 @@ class OrmaBackendClient(
             parse = { it.toMetaConnectionStatus() },
         )
 
+    suspend fun connectMetaAccessToken(
+        idToken: String,
+        draft: OrmaMetaAccessTokenDraft,
+    ): OrmaBackendResult<OrmaMetaAccessTokenConnectResult> =
+        executeBackendRequest(
+            actionTitle = "Save Meta token",
+            request = {
+                val expiresRaw = draft.expiresInSeconds
+                    .trim()
+                    .takeIf { it.isNotBlank() && it.all(Char::isDigit) }
+                    ?: "null"
+                ormaPostJsonAuthorized(
+                    url = config.url("/integrations/meta/connect/token"),
+                    bearerToken = idToken,
+                    body = buildJsonObject(
+                        "accessToken" to JsonValue.StringValue(draft.accessToken.trim()),
+                        "expiresInSeconds" to JsonValue.RawValue(expiresRaw),
+                    ),
+                )
+            },
+            parse = { it.toMetaAccessTokenConnectResult() },
+        )
+
     suspend fun syncMetaCatalog(
         idToken: String,
     ): OrmaBackendResult<OrmaMetaCatalogSyncResult> =
@@ -2336,6 +2391,17 @@ private fun String.toProductVariant(): OrmaProductVariant =
         costPrice = jsonDecimalString("costPrice") ?: "0.00",
         stockQuantity = jsonDecimalString("stockQuantity") ?: "0",
         durationMinutes = jsonInt("durationMinutes"),
+        includedQuantity = (jsonInt("includedQuantity") ?: 1).coerceAtLeast(1),
+        addons = jsonObjectsInArray("addons").map { it.toProductVariantAddon() },
+        status = jsonString("status") ?: "active",
+    )
+
+private fun String.toProductVariantAddon(): OrmaProductVariantAddon =
+    OrmaProductVariantAddon(
+        name = jsonString("name").orEmpty(),
+        sellingPrice = jsonDecimalString("sellingPrice") ?: "0.00",
+        costPrice = jsonDecimalString("costPrice") ?: "0.00",
+        durationMinutes = jsonInt("durationMinutes"),
         status = jsonString("status") ?: "active",
     )
 
@@ -2601,6 +2667,14 @@ private fun String.toMetaCatalogSyncResult(): OrmaMetaCatalogSyncResult =
         message = jsonString("message") ?: "Catalog readiness checked.",
     )
 
+private fun String.toMetaAccessTokenConnectResult(): OrmaMetaAccessTokenConnectResult =
+    OrmaMetaAccessTokenConnectResult(
+        connected = jsonBoolean("connected") ?: false,
+        status = jsonString("status") ?: "unknown",
+        message = jsonString("message") ?: "Meta token save finished.",
+        connection = jsonObject("connection")?.toMetaConnectionStatus(),
+    )
+
 private fun String.toMetaWhatsAppTemplateListResult(): OrmaMetaWhatsAppTemplateListResult =
     OrmaMetaWhatsAppTemplateListResult(
         connected = jsonBoolean("connected") ?: false,
@@ -2701,6 +2775,17 @@ private fun OrmaProductDraft.toProductRequestJson(): String {
     val variantsJson = variants
         .filter { it.name.isNotBlank() }
         .joinToString(prefix = "[", postfix = "]") { variant ->
+            val addonsJson = variant.addons
+                .filter { it.name.isNotBlank() }
+                .joinToString(prefix = "[", postfix = "]") { addon ->
+                    buildJsonObject(
+                        "name" to JsonValue.StringValue(addon.name),
+                        "sellingPrice" to JsonValue.StringValue(addon.sellingPrice.blankToNull()),
+                        "costPrice" to JsonValue.StringValue(addon.costPrice.blankToNull()),
+                        "durationMinutes" to JsonValue.IntValue(addon.durationMinutes.intValueOrNull()),
+                        "status" to JsonValue.StringValue(addon.status.ifBlank { "active" }),
+                    )
+                }
             buildJsonObject(
                 "id" to JsonValue.StringValue(variant.id.blankToNull()),
                 "name" to JsonValue.StringValue(variant.name),
@@ -2710,6 +2795,8 @@ private fun OrmaProductDraft.toProductRequestJson(): String {
                 "costPrice" to JsonValue.StringValue(variant.costPrice.blankToNull()),
                 "stockQuantity" to JsonValue.StringValue(variant.stockQuantity.blankToNull()),
                 "durationMinutes" to JsonValue.IntValue(variant.durationMinutes.intValueOrNull()),
+                "includedQuantity" to JsonValue.IntValue(variant.includedQuantity.intValueOrNull() ?: 1),
+                "addons" to JsonValue.RawValue(addonsJson),
                 "status" to JsonValue.StringValue(variant.status.ifBlank { "active" }),
             )
         }

@@ -27,6 +27,7 @@ import org.orma.project_90.backend.OrmaGstinLookup
 import org.orma.project_90.backend.OrmaBackendSession
 import org.orma.project_90.backend.OrmaCustomerDraft
 import org.orma.project_90.backend.OrmaDashboardFilters
+import org.orma.project_90.backend.OrmaMetaAccessTokenDraft
 import org.orma.project_90.backend.OrmaMetaConnectionDraft
 import org.orma.project_90.backend.OrmaMetaWhatsAppTemplateDraft
 import org.orma.project_90.backend.OrmaOrder
@@ -1934,6 +1935,46 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
         }
     }
 
+    fun connectDashboardMetaAccessToken(draft: OrmaMetaAccessTokenDraft) {
+        val snapshot = state
+        if (snapshot.dashboard.actionLoading || snapshot.dashboard.metaActionLoading) return
+        if (draft.accessToken.trim().length < 24) return
+        state = snapshot.copy(
+            dashboard = snapshot.dashboard.copy(
+                actionLoading = true,
+                metaActionLoading = true,
+                errorTitle = null,
+                errorMessage = null,
+                statusMessage = null,
+            ),
+        )
+        scope.launch {
+            val idToken = freshDashboardTokenOrError(snapshot) ?: return@launch
+            when (val result = backendClient.connectMetaAccessToken(idToken, draft)) {
+                is OrmaBackendResult.Success -> state = state.copy(
+                    dashboard = state.dashboard.copy(
+                        actionLoading = false,
+                        metaActionLoading = false,
+                        errorTitle = null,
+                        errorMessage = null,
+                        statusMessage = result.value.message,
+                        metaConnection = result.value.connection ?: state.dashboard.metaConnection,
+                    ),
+                )
+                is OrmaBackendResult.Failure -> state = state.copy(
+                    dashboard = state.dashboard.copy(
+                        actionLoading = false,
+                        metaActionLoading = false,
+                        errorTitle = result.title,
+                        errorMessage = result.message,
+                        statusMessage = null,
+                    ),
+                    authErrorCode = result.code,
+                )
+            }
+        }
+    }
+
     fun loadDashboardMetaWhatsAppTemplates() {
         val snapshot = state
         if (snapshot.dashboard.actionLoading || snapshot.dashboard.metaActionLoading) return
@@ -2544,6 +2585,7 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
         onSetDefaultPaymentMethod = ::setDefaultDashboardPaymentMethod,
         onDeletePaymentMethod = ::deleteDashboardPaymentMethod,
         onUpdateMetaConnection = ::updateDashboardMetaConnection,
+        onConnectMetaAccessToken = ::connectDashboardMetaAccessToken,
         onSyncMetaCatalog = ::syncDashboardMetaCatalog,
         onLoadMetaWhatsAppTemplates = ::loadDashboardMetaWhatsAppTemplates,
         onCreateMetaWhatsAppTemplate = ::createDashboardMetaWhatsAppTemplate,

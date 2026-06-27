@@ -5,6 +5,7 @@ import org.orma.project_90.backend.OrmaCustomerDraft
 import org.orma.project_90.backend.OrmaDashboardFilters
 import org.orma.project_90.backend.OrmaDashboardSummary
 import org.orma.project_90.backend.OrmaGstinLookup
+import org.orma.project_90.backend.OrmaMetaAccessTokenDraft
 import org.orma.project_90.backend.OrmaMetaConnectionDraft
 import org.orma.project_90.backend.OrmaMetaConnectionStatus
 import org.orma.project_90.backend.OrmaMetaWhatsAppTemplate
@@ -272,6 +273,7 @@ internal data class OnboardingActions(
     val onSetDefaultPaymentMethod: (String) -> Unit,
     val onDeletePaymentMethod: (String) -> Unit,
     val onUpdateMetaConnection: (OrmaMetaConnectionDraft) -> Unit,
+    val onConnectMetaAccessToken: (OrmaMetaAccessTokenDraft) -> Unit,
     val onSyncMetaCatalog: () -> Unit,
     val onLoadMetaWhatsAppTemplates: () -> Unit,
     val onCreateMetaWhatsAppTemplate: (OrmaMetaWhatsAppTemplateDraft) -> Unit,

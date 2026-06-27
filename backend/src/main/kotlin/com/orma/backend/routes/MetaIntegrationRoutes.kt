@@ -4,6 +4,7 @@ import com.orma.backend.config.AppConfig
 import com.orma.backend.db.MetaConnectionValidationException
 import com.orma.backend.db.MetaIntegrationRepository
 import com.orma.backend.models.ErrorResponse
+import com.orma.backend.models.MetaAccessTokenConnectRequest
 import com.orma.backend.models.MetaConnectionRequest
 import com.orma.backend.models.MetaOrderUpdateRequest
 import com.orma.backend.models.MetaWhatsAppTemplateCreateRequest
@@ -77,6 +78,15 @@ fun Route.metaIntegrationRoutes(
         val firebaseUser = call.verifiedFirebaseUser(config) ?: return@post
         val response = repository.connectSystemUser(firebaseUser) ?: return@post call.metaWorkspaceNotFound()
         call.respond(response)
+    }
+
+    post("/integrations/meta/connect/token") {
+        val repository = metaIntegrationRepository ?: return@post call.metaDatabaseNotConfigured()
+        val firebaseUser = call.verifiedFirebaseUser(config) ?: return@post
+        val request = call.receive<MetaAccessTokenConnectRequest>()
+        val response = repository.connectManualAccessToken(firebaseUser, request)
+            ?: return@post call.metaWorkspaceNotFound()
+        call.respond(if (response.connected) HttpStatusCode.OK else HttpStatusCode.Conflict, response)
     }
 
     post("/integrations/meta/catalog/sync") {

@@ -13,6 +13,7 @@ import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbEndpoint
 import android.hardware.usb.UsbInterface
 import android.hardware.usb.UsbManager
+import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.print.PrintAttributes
@@ -39,10 +40,21 @@ actual fun rememberOrmaOrderDocumentExporter(): OrmaOrderDocumentExporter {
         null
     }
     return remember(context, bluetoothPermissionLauncher) {
+        val downloadedPdfs = mutableMapOf<String, Uri>()
         object : OrmaOrderDocumentExporter {
             override fun downloadHtml(fileName: String, html: String): Boolean = false
             override fun downloadPdf(fileName: String, pdfBase64: String): Boolean =
                 savePdfToDownloads(context = context, fileName = fileName, pdfBase64 = pdfBase64)
+                    ?.also { downloadedPdfs[fileName] = it } != null
+
+            override fun openPdf(fileName: String, pdfBase64: String): Boolean {
+                val uri = downloadedPdfs[fileName] ?: savePdfToDownloads(
+                    context = context,
+                    fileName = fileName,
+                    pdfBase64 = pdfBase64,
+                )?.also { downloadedPdfs[fileName] = it } ?: return false
+                return openPdfUri(context = context, uri = uri)
+            }
 
             override fun printHtml(title: String, html: String): Boolean =
                 printHtmlWithAndroidPrintFramework(context = context, title = title, html = html)
@@ -88,9 +100,9 @@ private fun savePdfToDownloads(
     context: Context,
     fileName: String,
     pdfBase64: String,
-): Boolean =
+): Uri? =
     runCatching {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return@runCatching false
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return@runCatching null
         val safeName = safePdfFileName(fileName)
         val bytes = Base64.decode(pdfBase64, Base64.DEFAULT)
         val resolver = context.contentResolver
@@ -101,7 +113,7 @@ private fun savePdfToDownloads(
             put(MediaStore.MediaColumns.IS_PENDING, 1)
         }
         val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-            ?: return@runCatching false
+            ?: return@runCatching null
         val written = runCatching {
             resolver.openOutputStream(uri)?.use { output ->
                 output.write(bytes)
@@ -112,10 +124,24 @@ private fun savePdfToDownloads(
             resolver.delete(uri, null, null)
             false
         }
-        if (!written) return@runCatching false
+        if (!written) return@runCatching null
         values.clear()
         values.put(MediaStore.MediaColumns.IS_PENDING, 0)
         resolver.update(uri, values, null, null)
+        uri
+    }.getOrNull()
+
+private fun openPdfUri(
+    context: Context,
+    uri: Uri,
+): Boolean =
+    runCatching {
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, "application/pdf")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(Intent.createChooser(intent, "Open PDF").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         true
     }.getOrDefault(false)
 

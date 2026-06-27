@@ -530,6 +530,17 @@ data class ProductVariantRequest(
     val costPrice: String? = null,
     val stockQuantity: String? = null,
     val durationMinutes: Int? = null,
+    val includedQuantity: Int = 1,
+    val addons: List<ProductVariantAddonRequest> = emptyList(),
+    val status: String = "active",
+)
+
+@Serializable
+data class ProductVariantAddonRequest(
+    val name: String,
+    val sellingPrice: String? = null,
+    val costPrice: String? = null,
+    val durationMinutes: Int? = null,
     val status: String = "active",
 )
 
@@ -544,7 +555,18 @@ data class ProductVariantResponse(
     val costPrice: String,
     val stockQuantity: String,
     val durationMinutes: Int? = null,
+    val includedQuantity: Int = 1,
+    val addons: List<ProductVariantAddonResponse> = emptyList(),
     val status: String,
+)
+
+@Serializable
+data class ProductVariantAddonResponse(
+    val name: String,
+    val sellingPrice: String = "0.00",
+    val costPrice: String = "0.00",
+    val durationMinutes: Int? = null,
+    val status: String = "active",
 )
 
 @Serializable
@@ -734,6 +756,7 @@ data class OrderRequest(
     val paymentMode: String = "pay_on_spot",
     val source: String = "dashboard",
     val items: List<OrderItemRequest>,
+    val sessions: List<OrderSessionRequest> = emptyList(),
 )
 
 @Serializable
@@ -781,8 +804,22 @@ data class OrderResponse(
     val source: String = "dashboard",
     val itemCount: Int,
     val items: List<OrderItemResponse> = emptyList(),
+    val sessions: List<OrderSessionResponse> = emptyList(),
     val createdAt: String,
     val updatedAt: String,
+)
+
+@Serializable
+data class OrderSessionRequest(
+    val id: String? = null,
+    val orderItemId: String? = null,
+    val sequenceNumber: Int = 1,
+    val title: String? = null,
+    val scheduledAt: String? = null,
+    val status: String = "scheduled",
+    val addonTotal: String = "0",
+    val paidTotal: String = "0",
+    val notes: String? = null,
 )
 
 @Serializable
@@ -872,6 +909,22 @@ data class OrderItemResponse(
     val lineSubtotal: String,
     val lineTax: String,
     val lineTotal: String,
+)
+
+@Serializable
+data class OrderSessionResponse(
+    val id: String,
+    val orderId: String,
+    val orderItemId: String? = null,
+    val sequenceNumber: Int,
+    val title: String,
+    val scheduledAt: String? = null,
+    val status: String,
+    val addonTotal: String,
+    val paidTotal: String,
+    val notes: String? = null,
+    val createdAt: String,
+    val updatedAt: String,
 )
 
 @Serializable
@@ -1067,6 +1120,20 @@ data class MetaConnectCompleteResponse(
 
 @Serializable
 data class MetaSystemUserConnectResponse(
+    val connected: Boolean,
+    val status: String,
+    val message: String,
+    val connection: MetaConnectionStatusResponse? = null,
+)
+
+@Serializable
+data class MetaAccessTokenConnectRequest(
+    val accessToken: String,
+    val expiresInSeconds: Long? = null,
+)
+
+@Serializable
+data class MetaAccessTokenConnectResponse(
     val connected: Boolean,
     val status: String,
     val message: String,

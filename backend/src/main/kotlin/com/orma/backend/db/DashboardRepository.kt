@@ -15,6 +15,8 @@ import com.orma.backend.models.OrderItemRequest
 import com.orma.backend.models.OrderItemResponse
 import com.orma.backend.models.OrderRequest
 import com.orma.backend.models.OrderResponse
+import com.orma.backend.models.OrderSessionRequest
+import com.orma.backend.models.OrderSessionResponse
 import com.orma.backend.models.PaginationResponse
 import com.orma.backend.models.PrinterProfileRequest
 import com.orma.backend.models.PrinterProfileResponse
@@ -38,6 +40,8 @@ import com.orma.backend.models.ProductImportRowRequest
 import com.orma.backend.models.ProductImportTemplateResponse
 import com.orma.backend.models.ProductRequest
 import com.orma.backend.models.ProductResponse
+import com.orma.backend.models.ProductVariantAddonRequest
+import com.orma.backend.models.ProductVariantAddonResponse
 import com.orma.backend.models.ProductVariantResponse
 import com.orma.backend.models.StockAdjustmentRequest
 import com.orma.backend.models.StockMovementResponse
@@ -57,6 +61,14 @@ import java.util.UUID
 import javax.sql.DataSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+
+private val DashboardRepositoryJson = Json {
+    ignoreUnknownKeys = true
+    encodeDefaults = true
+}
 
 data class DashboardWorkspaceAccess(
     val userId: String,
@@ -3598,13 +3610,15 @@ class DashboardRepository(
                 } else {
                     BigDecimal.ZERO
                 }
+                val includedQuantity = variant.includedQuantity.coerceAtLeast(1).coerceAtMost(999)
+                val addonsJson = variant.addons.cleanVariantAddons().let(DashboardRepositoryJson::encodeToString)
                 prepareStatement(
                     """
                     insert into product_variants (
                         workspace_id, product_id, name, sku, barcode, selling_price, cost_price,
-                        stock_quantity, duration_minutes, sort_order, status, updated_at
+                        stock_quantity, duration_minutes, included_quantity, addons_json, sort_order, status, updated_at
                     )
-                    values (?::uuid, ?::uuid, ?, ?, ?, ?, ?, ?, ?, ?, ?, now())
+                    values (?::uuid, ?::uuid, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, now())
                     """.trimIndent(),
                 ).use { statement ->
                     statement.setString(1, access.workspaceId)
@@ -3620,8 +3634,10 @@ class DashboardRepository(
                     } else {
                         statement.setInt(9, variant.durationMinutes.coerceAtMost(1440))
                     }
-                    statement.setInt(10, index)
-                    statement.setString(11, variant.status.cleanCatalogStatus())
+                    statement.setInt(10, includedQuantity)
+                    statement.setString(11, addonsJson)
+                    statement.setInt(12, index)
+                    statement.setString(13, variant.status.cleanCatalogStatus())
                     statement.executeUpdate()
                 }
             }
@@ -3644,6 +3660,8 @@ class DashboardRepository(
                 cost_price,
                 stock_quantity,
                 duration_minutes,
+                included_quantity,
+                addons_json::text as addons_json,
                 status
             from product_variants
             where product_id in ($placeholders) and status <> 'archived'
@@ -3682,6 +3700,8 @@ class DashboardRepository(
                 cost_price,
                 stock_quantity,
                 duration_minutes,
+                included_quantity,
+                addons_json::text as addons_json,
                 status
             from product_variants
             where product_id in ($placeholders) and status = 'active'
@@ -3834,8 +3854,15 @@ class DashboardRepository(
                 val items = buildList {
                     while (result.next()) {
                         if (totalItems == 0) totalItems = result.getInt("total_count")
-                        val order = result.toOrderResponse(emptyList())
-                        add(if (includeItems) order.copy(items = listOrderItems(order.id)) else order)
+                        val order = result.toOrderResponse(emptyList(), emptyList())
+                        add(if (includeItems) {
+                            order.copy(
+                                items = listOrderItems(order.id),
+                                sessions = listOrderSessions(workspaceId, order.id),
+                            )
+                        } else {
+                            order
+                        })
                     }
                 }
                 val resolvedTotalItems = if (items.isEmpty() && filters.offset() > 0) {
@@ -3932,8 +3959,15 @@ class DashboardRepository(
                 val items = buildList {
                     while (result.next()) {
                         if (totalItems == 0) totalItems = result.getInt("total_count")
-                        val order = result.toOrderResponse(emptyList())
-                        add(if (includeItems) order.copy(items = listOrderItems(order.id)) else order)
+                        val order = result.toOrderResponse(emptyList(), emptyList())
+                        add(if (includeItems) {
+                            order.copy(
+                                items = listOrderItems(order.id),
+                                sessions = listOrderSessions(workspaceId, order.id),
+                            )
+                        } else {
+                            order
+                        })
                     }
                 }
                 items.toPagedResult(filters, totalItems)
@@ -3954,8 +3988,15 @@ class DashboardRepository(
                 if (!result.next()) {
                     null
                 } else {
-                    val order = result.toOrderResponse(emptyList())
-                    if (includeItems) order.copy(items = listOrderItems(order.id)) else order
+                    val order = result.toOrderResponse(emptyList(), emptyList())
+                    if (includeItems) {
+                        order.copy(
+                            items = listOrderItems(order.id),
+                            sessions = listOrderSessions(workspaceId, order.id),
+                        )
+                    } else {
+                        order
+                    }
                 }
             }
         }
@@ -4237,12 +4278,21 @@ class DashboardRepository(
             }
         }
 
-        preparedItems.forEach { item ->
-            insertOrderItem(orderId, item)
+        val insertedItems = preparedItems.map { item ->
+            val orderItemId = insertOrderItem(orderId, item)
             if (inventoryApplied && item.productId != null) {
                 applyOrderInventoryMovement(access, item, item.quantity.negate(), "Order $orderNumber")
             }
+            InsertedOrderItem(item = item, orderItemId = orderItemId)
         }
+        replaceOrderSessions(
+            workspaceId = access.workspaceId,
+            orderId = orderId,
+            orderType = orderType,
+            requestedSessions = request.sessions,
+            insertedItems = insertedItems,
+            fallbackScheduledAt = request.scheduledAt,
+        )
 
         return getOrder(access.workspaceId, orderId, includeItems = true) ?: error("Created order was not found.")
     }
@@ -4372,12 +4422,21 @@ class DashboardRepository(
             statement.executeUpdate()
         }
 
-        preparedItems.forEach { item ->
-            insertOrderItem(cleanOrderId, item)
+        val insertedItems = preparedItems.map { item ->
+            val orderItemId = insertOrderItem(cleanOrderId, item)
             if (inventoryShouldBeApplied && item.productId != null) {
                 applyOrderInventoryMovement(access, item, item.quantity.negate(), "Order $orderNumber edited")
             }
+            InsertedOrderItem(item = item, orderItemId = orderItemId)
         }
+        replaceOrderSessions(
+            workspaceId = access.workspaceId,
+            orderId = cleanOrderId,
+            orderType = orderType,
+            requestedSessions = request.sessions,
+            insertedItems = insertedItems,
+            fallbackScheduledAt = request.scheduledAt,
+        )
 
         return getOrder(access.workspaceId, cleanOrderId, includeItems = true)
     }
@@ -4458,15 +4517,16 @@ class DashboardRepository(
         return getOrder(access.workspaceId, orderId, includeItems = true)
     }
 
-    private fun Connection.insertOrderItem(orderId: String, item: PreparedOrderItem) {
+    private fun Connection.insertOrderItem(orderId: String, item: PreparedOrderItem): String {
         val sql = """
             insert into order_items (
                 order_id, product_id, variant_id, variant_name, description, quantity, unit_price, tax_rate,
                 line_subtotal, line_tax, line_total
             )
             values (?::uuid, ?::uuid, ?::uuid, ?, ?, ?, ?, ?, ?, ?, ?)
+            returning id::text
         """.trimIndent()
-        prepareStatement(sql).use { statement ->
+        return prepareStatement(sql).use { statement ->
             statement.setString(1, orderId)
             statement.setNullableUuid(2, item.productId)
             statement.setNullableUuid(3, item.variantId)
@@ -4478,7 +4538,10 @@ class DashboardRepository(
             statement.setBigDecimal(9, item.lineSubtotal)
             statement.setBigDecimal(10, item.lineTax)
             statement.setBigDecimal(11, item.lineTotal)
-            statement.executeUpdate()
+            statement.executeQuery().use { result ->
+                result.next()
+                result.getString("id")
+            }
         }
     }
 
@@ -4510,6 +4573,101 @@ class DashboardRepository(
                     while (result.next()) add(result.toOrderItemResponse())
                 }
             }
+        }
+    }
+
+    private fun Connection.listOrderSessions(workspaceId: String, orderId: String): List<OrderSessionResponse> {
+        val sql = """
+            select
+                id::text,
+                order_id::text,
+                order_item_id::text,
+                sequence_number,
+                title,
+                scheduled_at::text,
+                status,
+                addon_total,
+                paid_total,
+                notes,
+                created_at::text,
+                updated_at::text
+            from order_sessions
+            where workspace_id = ?::uuid and order_id = ?::uuid
+            order by sequence_number, created_at
+        """.trimIndent()
+        return prepareStatement(sql).use { statement ->
+            statement.setString(1, workspaceId)
+            statement.setString(2, orderId)
+            statement.executeQuery().use { result ->
+                buildList {
+                    while (result.next()) add(result.toOrderSessionResponse())
+                }
+            }
+        }
+    }
+
+    private fun Connection.replaceOrderSessions(
+        workspaceId: String,
+        orderId: String,
+        orderType: String,
+        requestedSessions: List<OrderSessionRequest>,
+        insertedItems: List<InsertedOrderItem>,
+        fallbackScheduledAt: String?,
+    ) {
+        prepareStatement("delete from order_sessions where workspace_id = ?::uuid and order_id = ?::uuid").use { statement ->
+            statement.setString(1, workspaceId)
+            statement.setString(2, orderId)
+            statement.executeUpdate()
+        }
+        if (orderType !in setOf("appointment", "service")) return
+        val sessions = requestedSessions
+            .take(200)
+            .mapIndexedNotNull { index, session ->
+                session.toPreparedOrderSession(
+                    index = index,
+                    fallbackScheduledAt = fallbackScheduledAt,
+                    defaultTitle = "${orderType.dashboardLabel()} session ${index + 1}",
+                )
+            }
+            .ifEmpty {
+                insertedItems.generatedOrderSessions(
+                    orderType = orderType,
+                    fallbackScheduledAt = fallbackScheduledAt,
+                )
+            }
+        sessions.forEach { session ->
+            insertOrderSession(
+                workspaceId = workspaceId,
+                orderId = orderId,
+                session = session,
+            )
+        }
+    }
+
+    private fun Connection.insertOrderSession(
+        workspaceId: String,
+        orderId: String,
+        session: PreparedOrderSession,
+    ) {
+        val sql = """
+            insert into order_sessions (
+                workspace_id, order_id, order_item_id, sequence_number, title, scheduled_at,
+                status, addon_total, paid_total, notes, updated_at
+            )
+            values (?::uuid, ?::uuid, ?::uuid, ?, ?, ?::timestamptz, ?, ?, ?, ?, now())
+        """.trimIndent()
+        prepareStatement(sql).use { statement ->
+            statement.setString(1, workspaceId)
+            statement.setString(2, orderId)
+            statement.setNullableUuid(3, session.orderItemId)
+            statement.setInt(4, session.sequenceNumber)
+            statement.setString(5, session.title)
+            statement.setNullableString(6, session.scheduledAt?.cleanOptional())
+            statement.setString(7, session.status)
+            statement.setBigDecimal(8, session.addonTotal)
+            statement.setBigDecimal(9, session.paidTotal)
+            statement.setNullableString(10, session.notes?.cleanOptional())
+            statement.executeUpdate()
         }
     }
 
@@ -4972,8 +5130,32 @@ class DashboardRepository(
             costPrice = getBigDecimal("cost_price").moneyString(),
             stockQuantity = getBigDecimal("stock_quantity").decimalString(),
             durationMinutes = getNullableInt("duration_minutes"),
+            includedQuantity = (getNullableInt("included_quantity") ?: 1).coerceAtLeast(1),
+            addons = getString("addons_json").parseVariantAddons(),
             status = getString("status"),
         )
+
+    private fun List<ProductVariantAddonRequest>.cleanVariantAddons(): List<ProductVariantAddonResponse> =
+        take(20).mapNotNull { addon ->
+            val name = addon.name.cleanOptional()?.take(80) ?: return@mapNotNull null
+            ProductVariantAddonResponse(
+                name = name,
+                sellingPrice = addon.sellingPrice?.cleanOptional()?.moneyOrZero()?.moneyString() ?: "0.00",
+                costPrice = addon.costPrice?.cleanOptional()?.moneyOrZero()?.moneyString() ?: "0.00",
+                durationMinutes = addon.durationMinutes?.takeIf { it > 0 }?.coerceAtMost(1440),
+                status = addon.status.cleanCatalogStatus(),
+            )
+        }
+
+    private fun String?.parseVariantAddons(): List<ProductVariantAddonResponse> =
+        if (isNullOrBlank()) {
+            emptyList()
+        } else {
+            runCatching {
+                DashboardRepositoryJson.decodeFromString<List<ProductVariantAddonResponse>>(this)
+                    .filter { it.name.isNotBlank() && it.status != "archived" }
+            }.getOrDefault(emptyList())
+        }
 
     private fun ResultSet.toStockMovementResponse(): StockMovementResponse =
         StockMovementResponse(
@@ -5009,7 +5191,10 @@ class DashboardRepository(
             updatedAt = getString("updated_at"),
         )
 
-    private fun ResultSet.toOrderResponse(items: List<OrderItemResponse>): OrderResponse {
+    private fun ResultSet.toOrderResponse(
+        items: List<OrderItemResponse>,
+        sessions: List<OrderSessionResponse>,
+    ): OrderResponse {
         val status = getString("status")
         val total = getBigDecimal("total")
         val paidTotal = effectivePaidTotal(
@@ -5045,6 +5230,7 @@ class DashboardRepository(
             source = getString("source") ?: "dashboard",
             itemCount = getInt("item_count"),
             items = items,
+            sessions = sessions,
             createdAt = getString("created_at"),
             updatedAt = getString("updated_at"),
         )
@@ -5064,6 +5250,22 @@ class DashboardRepository(
             lineSubtotal = getBigDecimal("line_subtotal").moneyString(),
             lineTax = getBigDecimal("line_tax").moneyString(),
             lineTotal = getBigDecimal("line_total").moneyString(),
+        )
+
+    private fun ResultSet.toOrderSessionResponse(): OrderSessionResponse =
+        OrderSessionResponse(
+            id = getString("id"),
+            orderId = getString("order_id"),
+            orderItemId = getString("order_item_id"),
+            sequenceNumber = getInt("sequence_number"),
+            title = getString("title"),
+            scheduledAt = getString("scheduled_at"),
+            status = getString("status"),
+            addonTotal = getBigDecimal("addon_total").moneyString(),
+            paidTotal = getBigDecimal("paid_total").moneyString(),
+            notes = getString("notes"),
+            createdAt = getString("created_at"),
+            updatedAt = getString("updated_at"),
         )
 
     private fun ResultSet.getNullableInt(column: String): Int? {
@@ -5129,10 +5331,10 @@ class DashboardRepository(
         val variantIds = items.mapNotNull { it.variantId }.distinct()
         if (variantIds.isNotEmpty()) {
             val variantPlaceholders = variantIds.joinToString(", ") { "?::uuid" }
-            val variants = mutableMapOf<String, Pair<String, String>>()
+            val variants = mutableMapOf<String, CatalogVariant>()
             prepareStatement(
                 """
-                select id::text, product_id::text, name
+                select id::text, product_id::text, name, included_quantity
                 from product_variants
                 where workspace_id = ?::uuid and status = 'active' and id in ($variantPlaceholders)
                 """.trimIndent(),
@@ -5143,20 +5345,25 @@ class DashboardRepository(
                 }
                 statement.executeQuery().use { result ->
                     while (result.next()) {
-                        variants[result.getString("id")] = result.getString("product_id") to result.getString("name")
+                        variants[result.getString("id")] = CatalogVariant(
+                            productId = result.getString("product_id"),
+                            name = result.getString("name"),
+                            includedQuantity = result.getInt("included_quantity").coerceAtLeast(1),
+                        )
                     }
                 }
             }
             items.forEach { item ->
                 val variantId = item.variantId ?: return@forEach
                 val variant = variants[variantId]
-                if (variant == null || variant.first != item.productId) {
+                if (variant == null || variant.productId != item.productId) {
                     throw DashboardOrderValidationException(
                         code = "order_item_variant_missing",
                         publicMessage = "One or more selected item options are no longer available.",
                     )
                 }
-                item.variantName = variant.second
+                item.variantName = variant.name
+                item.includedQuantity = variant.includedQuantity
             }
         }
         val wrongType = products.values.firstOrNull { (itemType, _) -> itemType != expectedItemType } ?: return
@@ -5164,6 +5371,73 @@ class DashboardRepository(
             code = "order_item_type_mismatch",
             publicMessage = orderType.orderCatalogMismatchMessage(wrongType.second),
         )
+    }
+
+    private fun OrderSessionRequest.toPreparedOrderSession(
+        index: Int,
+        fallbackScheduledAt: String?,
+        defaultTitle: String,
+    ): PreparedOrderSession? {
+        val sequence = sequenceNumber.takeIf { it > 0 } ?: (index + 1)
+        val title = title.cleanOptional()
+            ?: defaultTitle.take(120)
+        return PreparedOrderSession(
+            orderItemId = orderItemId.cleanUuidOrNull(),
+            sequenceNumber = sequence,
+            title = title,
+            scheduledAt = scheduledAt?.cleanOptional() ?: fallbackScheduledAt?.cleanOptional()?.takeIf { index == 0 },
+            status = status.cleanOrderSessionStatus(),
+            addonTotal = addonTotal.moneyOrZero(),
+            paidTotal = paidTotal.moneyOrZero(),
+            notes = notes?.cleanOptional(),
+        )
+    }
+
+    private fun List<InsertedOrderItem>.generatedOrderSessions(
+        orderType: String,
+        fallbackScheduledAt: String?,
+    ): List<PreparedOrderSession> {
+        if (isEmpty()) return emptyList()
+        var sequence = 1
+        return buildList {
+            this@generatedOrderSessions.forEach { inserted ->
+                val sessionCount = inserted.item.packageSessionCount().coerceAtLeast(1)
+                val lineTitle = inserted.item.variantName?.cleanOptional()
+                    ?: inserted.item.description.cleanOptional()
+                    ?: orderType.dashboardLabel()
+                repeat(sessionCount) { index ->
+                    val title = if (sessionCount == 1) {
+                        lineTitle
+                    } else {
+                        "$lineTitle session ${index + 1} of $sessionCount"
+                    }.take(120)
+                    add(
+                        PreparedOrderSession(
+                            orderItemId = inserted.orderItemId,
+                            sequenceNumber = sequence,
+                            title = title,
+                            scheduledAt = fallbackScheduledAt?.cleanOptional()?.takeIf { sequence == 1 },
+                            status = "scheduled",
+                            addonTotal = BigDecimal.ZERO,
+                            paidTotal = BigDecimal.ZERO,
+                            notes = if (inserted.item.includedQuantity > 1) {
+                                "${inserted.item.includedQuantity} included sessions"
+                            } else {
+                                null
+                            },
+                        ),
+                    )
+                    sequence += 1
+                }
+            }
+        }
+    }
+
+    private fun PreparedOrderItem.packageSessionCount(): Int {
+        val lineQuantity = runCatching {
+            quantity.setScale(0, RoundingMode.HALF_UP).toInt()
+        }.getOrDefault(1).coerceAtLeast(1)
+        return includedQuantity.coerceAtLeast(1) * lineQuantity
     }
 
     private fun String.expectedCatalogItemType(): String =
@@ -5570,6 +5844,11 @@ class DashboardRepository(
             "appointment", "booking" -> "appointment"
             else -> "sale"
         }
+    }
+
+    private fun String.cleanOrderSessionStatus(): String {
+        val normalized = trim().lowercase().replace("-", "_").filter { it.isLetterOrDigit() || it == '_' }
+        return normalized.takeIf { it in AllowedOrderSessionStatuses } ?: "scheduled"
     }
 
     private fun String.dashboardLabel(): String =
@@ -6108,6 +6387,7 @@ class DashboardRepository(
         val productId: String?,
         val variantId: String?,
         var variantName: String?,
+        var includedQuantity: Int = 1,
         val description: String,
         val quantity: BigDecimal,
         val unitPrice: BigDecimal,
@@ -6115,6 +6395,28 @@ class DashboardRepository(
         val lineSubtotal: BigDecimal,
         val lineTax: BigDecimal,
         val lineTotal: BigDecimal,
+    )
+
+    private data class InsertedOrderItem(
+        val item: PreparedOrderItem,
+        val orderItemId: String,
+    )
+
+    private data class PreparedOrderSession(
+        val orderItemId: String?,
+        val sequenceNumber: Int,
+        val title: String,
+        val scheduledAt: String?,
+        val status: String,
+        val addonTotal: BigDecimal,
+        val paidTotal: BigDecimal,
+        val notes: String?,
+    )
+
+    private data class CatalogVariant(
+        val productId: String,
+        val name: String,
+        val includedQuantity: Int,
     )
 
     private data class CurrentOrderStatus(
@@ -6136,6 +6438,7 @@ class DashboardRepository(
         val FullPaymentStatuses = setOf("paid", "completed")
         val AllowedItemTypes = setOf("product", "service", "appointment")
         val AllowedOrderTypes = setOf("sale", "service", "appointment")
+        val AllowedOrderSessionStatuses = setOf("scheduled", "in_progress", "completed", "cancelled", "no_show")
         val AllowedCatalogStatusInputs = setOf(
             "active",
             "inactive",

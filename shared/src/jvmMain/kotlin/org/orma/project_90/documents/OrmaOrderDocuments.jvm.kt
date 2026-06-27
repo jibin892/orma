@@ -21,6 +21,7 @@ import javax.print.attribute.HashPrintRequestAttributeSet
 @Composable
 actual fun rememberOrmaOrderDocumentExporter(): OrmaOrderDocumentExporter =
     remember {
+        val downloadedPdfs = mutableMapOf<String, Path>()
         object : OrmaOrderDocumentExporter {
             override fun downloadHtml(fileName: String, html: String): Boolean =
                 runCatching {
@@ -29,8 +30,20 @@ actual fun rememberOrmaOrderDocumentExporter(): OrmaOrderDocumentExporter =
 
             override fun downloadPdf(fileName: String, pdfBase64: String): Boolean =
                 runCatching {
-                    writeDownloadPdf(fileName = fileName, pdfBase64 = pdfBase64)
+                    downloadedPdfs[fileName] = writeDownloadPdf(fileName = fileName, pdfBase64 = pdfBase64)
                 }.isSuccess
+
+            override fun openPdf(fileName: String, pdfBase64: String): Boolean =
+                runCatching {
+                    if (!Desktop.isDesktopSupported()) return@runCatching false
+                    val desktop = Desktop.getDesktop()
+                    if (!desktop.isSupported(Desktop.Action.OPEN)) return@runCatching false
+                    val file = downloadedPdfs[fileName] ?: writeDownloadPdf(fileName = fileName, pdfBase64 = pdfBase64).also {
+                        downloadedPdfs[fileName] = it
+                    }
+                    desktop.open(file.toFile())
+                    true
+                }.getOrDefault(false)
 
             override fun printHtml(title: String, html: String): Boolean =
                 runCatching {

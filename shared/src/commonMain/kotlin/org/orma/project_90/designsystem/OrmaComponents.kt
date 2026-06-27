@@ -37,6 +37,7 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -276,6 +277,7 @@ fun OrmaTextField(
     singleLine: Boolean = true,
     minLines: Int = 1,
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
+    visualTransformation: VisualTransformation = VisualTransformation.None,
     placeholder: String = label,
     leading: (@Composable () -> Unit)? = null,
     trailing: (@Composable () -> Unit)? = null,
@@ -318,6 +320,7 @@ fun OrmaTextField(
                     singleLine = singleLine,
                     minLines = minLines,
                     keyboardOptions = keyboardOptions,
+                    visualTransformation = visualTransformation,
                     cursorBrush = SolidColor(OrmaColors.Accent),
                     textStyle = MaterialTheme.typography.bodyLarge.merge(
                         TextStyle(color = if (enabled) OrmaColors.TextPrimary else OrmaColors.TextDisabled),
