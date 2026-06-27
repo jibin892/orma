@@ -615,6 +615,7 @@ data class PublicCatalogOfferResponse(
     val description: String? = null,
     val discountType: String,
     val discountValue: String,
+    val discountCapAmount: String? = null,
     val discountAmount: String,
     val finalPrice: String,
 )

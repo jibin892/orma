@@ -1909,7 +1909,22 @@ class DashboardRepository(
                 if (product.trackStock && quantity > availableStock) {
                     return@mapNotNull null
                 }
-                val unitPrice = variant?.sellingPrice ?: product.offer?.finalPrice ?: product.sellingPrice
+                val variantPrice = variant?.sellingPrice?.moneyOrZero()
+                val variantDiscount = if (variantPrice != null && product.offer != null) {
+                    discountAmount(
+                        price = variantPrice,
+                        discountType = product.offer.discountType,
+                        discountValue = product.offer.discountValue.moneyOrZero(),
+                        discountCapAmount = product.offer.discountCapAmount?.moneyOrZero(),
+                    )
+                } else {
+                    BigDecimal.ZERO
+                }
+                val unitPrice = if (variantPrice != null) {
+                    variantPrice.subtract(variantDiscount).coerceAtLeast(BigDecimal.ZERO).moneyString()
+                } else {
+                    product.offer?.finalPrice ?: product.sellingPrice
+                }
                 val description = if (variant == null) product.name else "${product.name} - ${variant.name}"
                 PublicCatalogPreparedItem(
                     itemType = product.itemType.cleanItemType(),
@@ -1921,8 +1936,7 @@ class DashboardRepository(
                         unitPrice = unitPrice,
                         taxRate = product.taxRate,
                     ),
-                    discountTotal = (product.offer?.discountAmount ?: "0")
-                        .moneyOrZero()
+                    discountTotal = (variantDiscount.takeIf { variant != null } ?: (product.offer?.discountAmount ?: "0").moneyOrZero())
                         .multiply(quantity)
                         .scaled(),
                 )
@@ -4860,6 +4874,7 @@ class DashboardRepository(
                     description = getString("offer_description"),
                     discountType = discountType ?: "percentage",
                     discountValue = discountValue.decimalString(),
+                    discountCapAmount = discountCapAmount?.moneyString(),
                     discountAmount = discount.moneyString(),
                     finalPrice = finalPrice.moneyString(),
                 )

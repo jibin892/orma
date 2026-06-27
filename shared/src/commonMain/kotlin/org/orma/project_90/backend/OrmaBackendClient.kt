@@ -387,6 +387,7 @@ data class OrmaPublicCatalogOffer(
     val description: String?,
     val discountType: String,
     val discountValue: String,
+    val discountCapAmount: String?,
     val discountAmount: String,
     val finalPrice: String,
 )
@@ -2419,6 +2420,7 @@ private fun String.toPublicCatalogOffer(): OrmaPublicCatalogOffer =
         description = jsonString("description"),
         discountType = jsonString("discountType") ?: "percentage",
         discountValue = jsonDecimalString("discountValue") ?: "0",
+        discountCapAmount = jsonDecimalString("discountCapAmount"),
         discountAmount = jsonDecimalString("discountAmount") ?: "0.00",
         finalPrice = jsonDecimalString("finalPrice") ?: "0.00",
     )

@@ -2388,7 +2388,7 @@ private fun PublicCatalogProductTile(
                                         overflow = TextOverflow.Ellipsis,
                                     )
                                     Text(
-                                        text = "${product.currency} ${variant.sellingPrice.ifBlank { product.customerPrice }}",
+                                        text = dashboardMoney(product.customerPriceFor(variant), product.currency),
                                         style = MaterialTheme.typography.labelMedium,
                                         color = OrmaColors.TextSecondary,
                                         maxLines = 1,
@@ -3261,7 +3261,7 @@ private data class PublicCatalogSelection(
     val variant: OrmaProductVariant? = null,
     val quantity: Int,
 ) {
-    val customerPrice: String = variant?.sellingPrice?.takeIf { it.isNotBlank() } ?: product.customerPrice
+    val customerPrice: String = product.customerPriceFor(variant)
     val lineTotal: Double = customerPrice.toDoubleOrNull().orZero() * quantity
 }
 
@@ -3283,10 +3283,7 @@ private fun List<PublicCatalogSelection>.catalogOrderFlow(): String =
     }
 
 private fun List<PublicCatalogSelection>.publicCatalogOfferSavingsTotal(): Double =
-    sumOf { selection ->
-        val parentSavings = selection.product.publicCatalogOfferSavings()
-        if (selection.variant == null) parentSavings * selection.quantity else 0.0
-    }
+    sumOf { selection -> selection.product.discountFor(selection.variant) * selection.quantity }
 
 private fun String.publicCatalogNormalizedItemType(): String =
     when (trim().lowercase()) {
@@ -3413,6 +3410,31 @@ private fun String.publicCatalogUrlQueryEscaped(): String =
 
 private val OrmaPublicCatalogProduct.customerPrice: String
     get() = offer?.finalPrice ?: sellingPrice
+
+private fun OrmaPublicCatalogProduct.customerPriceFor(variant: OrmaProductVariant?): String {
+    val basePrice = variant?.sellingPrice?.takeIf { it.isNotBlank() } ?: sellingPrice
+    val discount = offer?.discountFor(basePrice.toDoubleOrNull().orZero()).orZero()
+    return (basePrice.toDoubleOrNull().orZero() - discount)
+        .coerceAtLeast(0.0)
+        .toDashboardMoneyInput()
+}
+
+private fun OrmaPublicCatalogProduct.discountFor(variant: OrmaProductVariant?): Double {
+    val basePrice = variant?.sellingPrice?.takeIf { it.isNotBlank() } ?: sellingPrice
+    return offer?.discountFor(basePrice.toDoubleOrNull().orZero()).orZero()
+}
+
+private fun org.orma.project_90.backend.OrmaPublicCatalogOffer.discountFor(price: Double): Double {
+    val value = discountValue.toDoubleOrNull().orZero().coerceAtLeast(0.0)
+    val raw = if (discountType.trim().lowercase() == "fixed") {
+        value
+    } else {
+        price * value.coerceAtMost(100.0) / 100.0
+    }
+    val cap = discountCapAmount?.toDoubleOrNull()?.takeIf { it > 0.0 }
+    return (cap?.let { raw.coerceAtMost(it) } ?: raw)
+        .coerceIn(0.0, price)
+}
 
 private fun OrmaBackendResult.Failure.publicCatalogMessage(load: Boolean): String =
     when (code) {
