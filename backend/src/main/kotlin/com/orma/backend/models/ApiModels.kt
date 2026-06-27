@@ -78,6 +78,22 @@ data class WorkspaceResponse(
     val logoUrl: String? = null,
     val coverFileName: String? = null,
     val coverUrl: String? = null,
+    val website: String? = null,
+    val isTaxRegistered: Boolean? = null,
+    val taxNumber: String? = null,
+    val taxLabel: String? = null,
+    val addressLine: String? = null,
+    val city: String? = null,
+    val region: String? = null,
+    val country: String? = null,
+    val postalCode: String? = null,
+    val invoicePrefix: String? = null,
+    val nextInvoiceNumber: String? = null,
+    val paymentTerms: String? = null,
+    val invoiceFooter: String? = null,
+    val currency: String? = null,
+    val taxMode: String? = null,
+    val pricesIncludeTax: Boolean? = null,
 )
 
 @Serializable
@@ -277,10 +293,18 @@ data class DashboardTaskResponse(
 @Serializable
 data class DashboardNotificationPreviewResponse(
     val id: String,
+    val eventType: String = "notification",
+    val orderId: String? = null,
+    val workspaceId: String? = null,
     val title: String,
     val body: String,
     val createdAt: String,
     val tone: String = "info",
+)
+
+@Serializable
+data class DashboardNotificationEventListResponse(
+    val notifications: List<DashboardNotificationPreviewResponse> = emptyList(),
 )
 
 @Serializable
@@ -627,6 +651,7 @@ data class StockAdjustmentRequest(
     val note: String? = null,
     val sellingPrice: String? = null,
     val costPrice: String? = null,
+    val supplierPaidTotal: String? = null,
     val supplierId: String? = null,
     val status: String? = null,
     val expiryDate: String? = null,
@@ -639,6 +664,11 @@ data class StockMovementResponse(
     val movementType: String,
     val quantityDelta: String,
     val balanceAfter: String,
+    val supplierId: String? = null,
+    val unitCost: String = "0.00",
+    val payableAmount: String = "0.00",
+    val paidAmount: String = "0.00",
+    val expiryDate: String? = null,
     val note: String? = null,
     val createdAt: String,
 )

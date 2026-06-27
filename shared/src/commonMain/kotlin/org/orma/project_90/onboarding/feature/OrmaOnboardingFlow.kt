@@ -11,6 +11,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.utf16CodePoint
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.orma.project_90.getPlatform
@@ -26,6 +33,7 @@ import org.orma.project_90.backend.OrmaOrder
 import org.orma.project_90.backend.OrmaOrderDraft
 import org.orma.project_90.backend.OrmaPagedList
 import org.orma.project_90.backend.OrmaPrinterDraft
+import org.orma.project_90.backend.OrmaProduct
 import org.orma.project_90.backend.OrmaProductDraft
 import org.orma.project_90.backend.OrmaProductCategoryDraft
 import org.orma.project_90.backend.OrmaProductOfferDraft
@@ -52,6 +60,7 @@ import org.orma.project_90.onboarding.AuthIdentifierType
 import org.orma.project_90.onboarding.AuthProvider
 import org.orma.project_90.onboarding.BusinessSetupDraft
 import org.orma.project_90.onboarding.BusinessSetupStep
+import org.orma.project_90.onboarding.DashboardBarcodeScanEvent
 import org.orma.project_90.onboarding.DashboardDataState
 import org.orma.project_90.onboarding.DashboardFilterScopeCustomers
 import org.orma.project_90.onboarding.DashboardFilterScopeHome
@@ -161,7 +170,43 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
             inviteErrorMessage = null,
             dashboard = DashboardDataState(),
             draft = authenticatedState.draft.copy(
+                businessName = workspace?.businessName?.takeIf { it.isNotBlank() }
+                    ?: authenticatedState.draft.businessName,
+                legalName = workspace?.legalName?.takeIf { it.isNotBlank() }
+                    ?: authenticatedState.draft.legalName,
+                website = workspace?.website?.takeIf { it.isNotBlank() }
+                    ?: authenticatedState.draft.website,
+                isTaxRegistered = workspace?.isTaxRegistered
+                    ?: authenticatedState.draft.isTaxRegistered,
+                taxNumber = workspace?.taxNumber?.takeIf { it.isNotBlank() }
+                    ?: authenticatedState.draft.taxNumber,
+                taxLabel = workspace?.taxLabel?.takeIf { it.isNotBlank() }
+                    ?: authenticatedState.draft.taxLabel,
+                addressLine = workspace?.addressLine?.takeIf { it.isNotBlank() }
+                    ?: authenticatedState.draft.addressLine,
+                city = workspace?.city?.takeIf { it.isNotBlank() }
+                    ?: authenticatedState.draft.city,
+                region = workspace?.region?.takeIf { it.isNotBlank() }
+                    ?: authenticatedState.draft.region,
+                country = workspace?.country?.takeIf { it.isNotBlank() }
+                    ?: authenticatedState.draft.country,
+                postalCode = workspace?.postalCode?.takeIf { it.isNotBlank() }
+                    ?: authenticatedState.draft.postalCode,
                 logoFileName = authenticatedState.draft.logoFileName.ifBlank { workspace?.logoFileName.orEmpty() },
+                invoicePrefix = workspace?.invoicePrefix?.takeIf { it.isNotBlank() }
+                    ?: authenticatedState.draft.invoicePrefix,
+                nextInvoiceNumber = workspace?.nextInvoiceNumber?.takeIf { it.isNotBlank() }
+                    ?: authenticatedState.draft.nextInvoiceNumber,
+                paymentTerms = workspace?.paymentTerms?.takeIf { it.isNotBlank() }
+                    ?: authenticatedState.draft.paymentTerms,
+                invoiceFooter = workspace?.invoiceFooter?.takeIf { it.isNotBlank() }
+                    ?: authenticatedState.draft.invoiceFooter,
+                currency = workspace?.currency?.takeIf { it.isNotBlank() }
+                    ?: authenticatedState.draft.currency,
+                taxMode = workspace?.taxMode?.takeIf { it.isNotBlank() }
+                    ?: authenticatedState.draft.taxMode,
+                pricesIncludeTax = workspace?.pricesIncludeTax
+                    ?: authenticatedState.draft.pricesIncludeTax,
             ),
         )
         if (backendSession.shouldOpenDashboard()) {
@@ -633,6 +678,40 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
         }
     }
 
+    fun updateDashboardBusinessSetup(draft: BusinessSetupDraft) {
+        val snapshot = state
+        if (snapshot.onboardingLoading) return
+        val idToken = backendTokenOrError(snapshot) ?: return
+        state = snapshot.copy(
+            draft = draft,
+            onboardingLoading = true,
+            inviteStatusMessage = null,
+            inviteErrorMessage = null,
+            authErrorTitle = null,
+            authErrorMessage = null,
+            authErrorCode = null,
+            dashboard = snapshot.dashboard.copy(
+                statusMessage = null,
+                errorTitle = null,
+                errorMessage = null,
+            ),
+        )
+        scope.launch {
+            when (val result = backendClient.completeBusinessSetup(idToken, draft)) {
+                is OrmaBackendResult.Success -> {
+                    state = applyBackendSessionMutation(state, result.value, OnboardingStep.Dashboard).copy(
+                        dashboard = state.dashboard.copy(
+                            statusMessage = "Account settings updated.",
+                            errorTitle = null,
+                            errorMessage = null,
+                        ),
+                    )
+                }
+                is OrmaBackendResult.Failure -> applyBackendFailure(result.title, result.message, result.code)
+            }
+        }
+    }
+
     fun finishTeamAccess() {
         val snapshot = state
         state = snapshot.copy(
@@ -1004,6 +1083,133 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
                 ),
             )
             if (shouldRefreshAgain) refreshDashboard()
+        }
+    }
+
+    suspend fun pollDesktopNotificationBridge() {
+        if (!isOrmaDesktopRuntime() || state.step != OnboardingStep.Dashboard || !state.notificationsEnabled) return
+        val snapshot = state
+        val idToken = when (val refreshed = runCatching { authGateway.refreshSession() }.getOrNull()) {
+            is OrmaAuthResult.Success -> {
+                state = state.copy(
+                    authUserId = refreshed.session.uid,
+                    authIdToken = refreshed.session.idToken,
+                    authProvider = refreshed.session.provider.toOnboardingProvider(),
+                )
+                refreshed.session.idToken
+            }
+            else -> snapshot.authIdToken
+        }.takeIf { it.isNotBlank() } ?: return
+        val knownBefore = desktopKnownNotificationIds
+        when (val result = backendClient.listDashboardNotifications(idToken, limit = 20)) {
+            is OrmaBackendResult.Success -> {
+                val events = result.value
+                val notifyNewEvents = snapshot.dashboard.hasLoaded && knownBefore.isNotEmpty()
+                val newOrderEvent = notifyNewEvents && events.any { notification ->
+                    notification.id.isNotBlank() &&
+                        notification.id !in knownBefore &&
+                        notification.eventType == "order_created" &&
+                        (notification.workspaceId.isNullOrBlank() || notification.workspaceId == snapshot.workspaceId)
+                }
+                handleDesktopNotificationPreview(
+                    notifications = events,
+                    notifyNewEvents = notifyNewEvents,
+                )
+                if (newOrderEvent && !state.dashboard.loading) {
+                    refreshDashboard("New catalog booking received.")
+                }
+            }
+            is OrmaBackendResult.Failure -> Unit
+        }
+    }
+
+    fun applyDashboardBarcodeProduct(barcode: String, product: OrmaProduct) {
+        val nextSequence = (state.dashboard.barcodeScanEvent?.sequence ?: 0) + 1
+        val normalizedItemType = product.itemType.trim().lowercase()
+        val orderType = when (normalizedItemType) {
+            "service" -> "service"
+            "appointment" -> "appointment"
+            else -> "sale"
+        }
+        val mergedProducts = listOf(product) + state.dashboard.products.filterNot { it.id == product.id }
+        state = state.copy(
+            dashboard = state.dashboard.copy(
+                products = mergedProducts,
+                barcodeScanEvent = DashboardBarcodeScanEvent(
+                    sequence = nextSequence,
+                    barcode = barcode,
+                    productId = product.id,
+                    orderType = orderType,
+                ),
+                statusMessage = "Scanned ${product.name}.",
+                errorTitle = null,
+                errorMessage = null,
+            ),
+        )
+    }
+
+    fun clearDashboardBarcodeScan(sequence: Int) {
+        val current = state.dashboard.barcodeScanEvent
+        if (current != null && current.sequence == sequence) {
+            state = state.copy(
+                dashboard = state.dashboard.copy(barcodeScanEvent = null),
+            )
+        }
+    }
+
+    fun handleDashboardBarcodeScan(rawBarcode: String) {
+        val barcode = rawBarcode.normalizedBarcodeScanCode()
+        if (barcode.length < 4 || state.step != OnboardingStep.Dashboard) return
+        val localProduct = (state.dashboard.products + state.dashboard.marketingProducts)
+            .firstOrNull { it.matchesBarcodeScan(barcode) }
+        if (localProduct != null) {
+            applyDashboardBarcodeProduct(barcode, localProduct)
+            return
+        }
+        val snapshot = state
+        state = snapshot.copy(
+            dashboard = snapshot.dashboard.copy(
+                statusMessage = "Scanning barcode $barcode...",
+                errorTitle = null,
+                errorMessage = null,
+            ),
+        )
+        scope.launch {
+            val idToken = freshDashboardTokenOrError(snapshot)
+            if (idToken == null) {
+                state = state.copy(
+                    dashboard = state.dashboard.copy(statusMessage = "Sign in again before scanning barcodes."),
+                )
+                return@launch
+            }
+            val filters = OrmaDashboardFilters(
+                barcode = barcode,
+                itemType = "all",
+                orderType = "all",
+                limit = 1,
+            ).forBusinessMode(snapshot.dashboard.summary.businessMode.ifBlank { snapshot.draft.businessMode })
+            when (val result = backendClient.listProducts(idToken, filters)) {
+                is OrmaBackendResult.Success -> {
+                    val product = result.value.items.firstOrNull { it.matchesBarcodeScan(barcode) }
+                        ?: result.value.items.firstOrNull()
+                    if (product != null) {
+                        applyDashboardBarcodeProduct(barcode, product)
+                    } else {
+                        state = state.copy(
+                            dashboard = state.dashboard.copy(
+                                statusMessage = "No product found for barcode $barcode.",
+                            ),
+                        )
+                    }
+                }
+                is OrmaBackendResult.Failure -> {
+                    state = state.copy(
+                        dashboard = state.dashboard.copy(
+                            statusMessage = result.message.ifBlank { "Could not scan barcode $barcode." },
+                        ),
+                    )
+                }
+            }
         }
     }
 
@@ -2061,14 +2267,14 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
             state.notificationsEnabled &&
             isOrmaDesktopRuntime()
         ) {
+            pollDesktopNotificationBridge()
             while (true) {
-                delay(30_000)
+                delay(10_000)
                 if (
                     state.step == OnboardingStep.Dashboard &&
-                    state.notificationsEnabled &&
-                    !state.dashboard.loading
+                    state.notificationsEnabled
                 ) {
-                    refreshDashboard()
+                    pollDesktopNotificationBridge()
                 }
             }
         }
@@ -2177,6 +2383,7 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
             )
         },
         onGstinLookupRequest = ::lookupGstin,
+        onUpdateBusinessSetup = ::updateDashboardBusinessSetup,
         onLogoUploadRequest = {
             val snapshot = state
             if (snapshot.logoUploadLoading || snapshot.onboardingLoading) return@OnboardingActions
@@ -2222,6 +2429,8 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
                 ),
             )
         },
+        onDashboardBarcodeScan = ::handleDashboardBarcodeScan,
+        onDashboardBarcodeScanConsumed = ::clearDashboardBarcodeScan,
         onDashboardFilterScopeChange = { rawScope ->
             val scope = rawScope.normalizedDashboardFilterScope()
             val filters = state.dashboard.filtersForScope(scope)
@@ -2381,7 +2590,9 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
         onRestart = ::restart,
     )
 
-    OrmaAdaptiveSurface(modifier = modifier) {
+    val barcodeKeyHandler = rememberDashboardBarcodeKeyHandler(actions.onDashboardBarcodeScan)
+
+    OrmaAdaptiveSurface(modifier = modifier.onPreviewKeyEvent(barcodeKeyHandler)) {
         val windowClass = this
         val isOpeningWorkspace = state.step == OnboardingStep.Authentication &&
             (
@@ -2433,6 +2644,35 @@ private fun OrmaAuthProvider.toOnboardingProvider(): AuthProvider = when (this) 
     OrmaAuthProvider.Google -> AuthProvider.Google
 }
 
+@Composable
+private fun rememberDashboardBarcodeKeyHandler(
+    onBarcodeScan: (String) -> Unit,
+): (KeyEvent) -> Boolean {
+    var buffer by remember { mutableStateOf("") }
+    return remember(onBarcodeScan) {
+        { event: KeyEvent ->
+            if (event.type != KeyEventType.KeyUp) {
+                false
+            } else if (event.key == Key.Enter) {
+                val barcode = buffer.normalizedBarcodeScanCode()
+                buffer = ""
+                if (barcode.isLikelyScannerBarcode()) {
+                    onBarcodeScan(barcode)
+                    true
+                } else {
+                    false
+                }
+            } else {
+                val codePoint = event.utf16CodePoint
+                if (codePoint in 33..126) {
+                    buffer = (buffer + codePoint.toChar()).takeLast(96)
+                }
+                false
+            }
+        }
+    }
+}
+
 private fun OrmaBackendSession.resolvedAccessPath(): AccessPath {
     val membershipRole = workspace?.role?.takeIf { it.isNotBlank() } ?: user.role
     return when {
@@ -2464,6 +2704,24 @@ private fun String?.isOrmaTeamRole(): Boolean =
             "delivery",
             "delivery_staff",
         )
+
+private fun String.normalizedBarcodeScanCode(): String =
+    trim().filter { it.code in 33..126 }.take(96)
+
+private fun String.isLikelyScannerBarcode(): Boolean =
+    length >= 4 && any { it.isDigit() || it.isLetter() }
+
+private fun OrmaProduct.matchesBarcodeScan(barcode: String): Boolean {
+    val normalized = barcode.normalizedBarcodeScanCode()
+    if (normalized.isBlank()) return false
+    return this.barcode.normalizedProductCodeEquals(normalized) ||
+        this.sku.normalizedProductCodeEquals(normalized)
+}
+
+private fun String?.normalizedProductCodeEquals(barcode: String): Boolean =
+    this
+        ?.normalizedBarcodeScanCode()
+        ?.equals(barcode, ignoreCase = true) == true
 
 private fun OrmaBackendSession.shouldOpenDashboard(): Boolean {
     val hasWorkspace = workspace?.id?.isNotBlank() == true

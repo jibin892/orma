@@ -623,6 +623,12 @@ private fun teamRoleLabel(role: String): String = when (role.trim().lowercase())
     else -> "Staff"
 }
 
+private data class DashboardTeamAccessFilterOption(
+    val key: String,
+    val label: String,
+    val count: Int,
+)
+
 private data class DashboardTeamPermissionOption(
     val key: String,
     val label: String,
@@ -639,6 +645,8 @@ private const val DashboardTeamPermissionCreateAppointment = "create_appointment
 private const val DashboardTeamPermissionCreateOffer = "create_offer"
 private const val DashboardTeamPermissionManageStock = "manage_stock"
 private const val DashboardTeamPermissionManageCustomers = "manage_customers"
+private const val DashboardTeamPermissionManageAccount = "manage_account"
+private const val DashboardTeamPermissionManageMarketing = "manage_marketing"
 private const val DashboardTeamPermissionDownloadInvoice = "download_invoice"
 
 private val DashboardTeamPermissionOptions = listOf(
@@ -652,6 +660,8 @@ private val DashboardTeamPermissionOptions = listOf(
     DashboardTeamPermissionOption(DashboardTeamPermissionCreateOffer, "Create offer", "Can add and update discounts."),
     DashboardTeamPermissionOption(DashboardTeamPermissionManageStock, "Manage stock", "Can update stock, supplier, purchase and expiry details."),
     DashboardTeamPermissionOption(DashboardTeamPermissionManageCustomers, "Manage customers", "Can add or edit customer records."),
+    DashboardTeamPermissionOption(DashboardTeamPermissionManageAccount, "Manage account", "Can update business, invoice, UPI, media, and printer setup."),
+    DashboardTeamPermissionOption(DashboardTeamPermissionManageMarketing, "Manage marketing", "Can open and update online store and WhatsApp setup."),
     DashboardTeamPermissionOption(DashboardTeamPermissionDownloadInvoice, "Download invoice", "Can download invoices and receipts."),
 )
 
@@ -669,6 +679,8 @@ private fun dashboardTeamDefaultPermissions(role: String): List<String> = when (
         DashboardTeamPermissionCreateOffer,
         DashboardTeamPermissionManageStock,
         DashboardTeamPermissionManageCustomers,
+        DashboardTeamPermissionManageAccount,
+        DashboardTeamPermissionManageMarketing,
         DashboardTeamPermissionDownloadInvoice,
     )
     "cashier" -> listOf(
@@ -1781,7 +1793,7 @@ private fun DashboardStage(
 ) {
     val canManageRestrictedSections = state.accessPath == AccessPath.BusinessOwner
     val canInviteMembers = canManageRestrictedSections
-    val canUseMarketing = canManageRestrictedSections
+    val canUseMarketing = state.hasDashboardPermission(DashboardTeamPermissionManageMarketing)
     var selectedSectionName by rememberSaveable { mutableStateOf(DashboardSection.Dashboard.name) }
     val requestedSection = DashboardSection.entries.firstOrNull { it.name == selectedSectionName }
         ?: DashboardSection.Dashboard
@@ -1801,6 +1813,12 @@ private fun DashboardStage(
     val selectDashboardSection: (DashboardSection) -> Unit = { section ->
         if (canAccessDashboardSection(section, canInviteMembers, canUseMarketing)) {
             selectedSectionName = section.name
+        }
+    }
+    LaunchedEffect(state.dashboard.barcodeScanEvent?.sequence) {
+        val event = state.dashboard.barcodeScanEvent ?: return@LaunchedEffect
+        if (state.dashboard.products.any { it.id == event.productId } && selectedSection != DashboardSection.Products) {
+            selectedSectionName = DashboardSection.OrdersBookings.name
         }
     }
 
@@ -1856,6 +1874,8 @@ private fun DashboardMobileStage(
     var mobileSelectedCustomerId by rememberSaveable { mutableStateOf<String?>(null) }
     var mobileSelectedProductId by rememberSaveable { mutableStateOf<String?>(null) }
     var mobileCreateOrderTypeOverride by rememberSaveable { mutableStateOf<String?>(null) }
+    var mobileScannedProductId by rememberSaveable { mutableStateOf<String?>(null) }
+    var mobileScannedProductSequence by rememberSaveable { mutableStateOf(0) }
     var mobileRootScrollResetKey by rememberSaveable { mutableStateOf(0) }
     val mobileRootSections = remember { DashboardMobileBottomNavItems.map { it.section }.toSet() }
     val selectedRootSection = selectedSection.takeIf { it in mobileRootSections }
@@ -1867,6 +1887,8 @@ private fun DashboardMobileStage(
             mobileSelectedOrderId = null
             showMobileCreateOrderSheet = false
             mobileCreateOrderTypeOverride = null
+            mobileScannedProductId = null
+            mobileScannedProductSequence = 0
         }
         if (selectedSection != DashboardSection.Customers) {
             mobileSelectedCustomerId = null
@@ -1933,6 +1955,17 @@ private fun DashboardMobileStage(
             ?: selectedSection.title(state)
     }
     val showMobileSalesFab = selectedMobileOrder == null && selectedSection == DashboardSection.OrdersBookings
+    LaunchedEffect(state.dashboard.barcodeScanEvent?.sequence, selectedSection) {
+        val event = state.dashboard.barcodeScanEvent ?: return@LaunchedEffect
+        if (selectedSection == DashboardSection.OrdersBookings && state.dashboard.products.any { it.id == event.productId }) {
+            mobileSelectedOrderId = null
+            mobileCreateOrderTypeOverride = event.orderType
+            mobileScannedProductId = event.productId
+            mobileScannedProductSequence = event.sequence
+            showMobileCreateOrderSheet = true
+            actions.onDashboardBarcodeScanConsumed(event.sequence)
+        }
+    }
     OrmaBackHandler(
         enabled = true,
         onBack = navigateBack,
@@ -1974,15 +2007,21 @@ private fun DashboardMobileStage(
                         DashboardOrderBuilderPage(
                             state = state,
                             initialOrderType = mobileCreateOrderTypeOverride ?: mobileSalesFabOrderType,
+                            scannedProductId = mobileScannedProductId,
+                            scannedProductSequence = mobileScannedProductSequence,
                             wide = false,
                             onBack = {
                                 showMobileCreateOrderSheet = false
                                 mobileCreateOrderTypeOverride = null
+                                mobileScannedProductId = null
+                                mobileScannedProductSequence = 0
                             },
                             onSubmit = { draft ->
                                 actions.onCreateOrder(draft)
                                 showMobileCreateOrderSheet = false
                                 mobileCreateOrderTypeOverride = null
+                                mobileScannedProductId = null
+                                mobileScannedProductSequence = 0
                             },
                             onHoldAndNew = { draft ->
                                 actions.onCreateOrder(draft)
@@ -4763,6 +4802,8 @@ private fun DashboardSectionContent(
     onOpenMarketing: (() -> Unit)? = null,
     quickCreateOrderType: String? = null,
     onQuickCreateOrderConsumed: (() -> Unit)? = null,
+    barcodeScanEvent: DashboardBarcodeScanEvent? = state.dashboard.barcodeScanEvent,
+    onBarcodeScanConsumed: (Int) -> Unit = actions.onDashboardBarcodeScanConsumed,
     wide: Boolean,
     mobileSelectedOrderId: String? = null,
     onMobileSelectedOrderChange: ((String?) -> Unit)? = null,
@@ -4787,6 +4828,8 @@ private fun DashboardSectionContent(
             wide = wide,
             quickCreateOrderType = quickCreateOrderType,
             onQuickCreateOrderConsumed = onQuickCreateOrderConsumed,
+            barcodeScanEvent = barcodeScanEvent,
+            onBarcodeScanConsumed = onBarcodeScanConsumed,
             mobileSelectedOrderId = mobileSelectedOrderId,
             onMobileSelectedOrderChange = onMobileSelectedOrderChange,
         )
@@ -4810,6 +4853,8 @@ private fun DashboardSectionContent(
             wide = wide,
             mobileSelectedProductId = mobileSelectedProductId,
             onMobileSelectedProductChange = onMobileSelectedProductChange,
+            barcodeScanEvent = barcodeScanEvent,
+            onBarcodeScanConsumed = onBarcodeScanConsumed,
             onRequestScrollTop = onRequestScrollTop,
         )
         DashboardSection.Marketing -> DashboardMarketingContent(
@@ -7810,11 +7855,15 @@ private fun DashboardOrdersContent(
     wide: Boolean,
     quickCreateOrderType: String? = null,
     onQuickCreateOrderConsumed: (() -> Unit)? = null,
+    barcodeScanEvent: DashboardBarcodeScanEvent? = null,
+    onBarcodeScanConsumed: (Int) -> Unit = {},
     mobileSelectedOrderId: String? = null,
     onMobileSelectedOrderChange: ((String?) -> Unit)? = null,
 ) {
     var showOrderBuilderPage by rememberSaveable { mutableStateOf(false) }
     var createOrderTypeOverride by rememberSaveable { mutableStateOf<String?>(null) }
+    var scannedProductId by rememberSaveable { mutableStateOf<String?>(null) }
+    var scannedProductSequence by rememberSaveable { mutableStateOf(0) }
     var editOrderId by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedOrderId by rememberSaveable { mutableStateOf<String?>(null) }
     var fullDetailsOrderId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -7844,6 +7893,20 @@ private fun DashboardOrdersContent(
             showOrderBuilderPage = true
             onQuickCreateOrderConsumed?.invoke()
         }
+    }
+    LaunchedEffect(barcodeScanEvent?.sequence, wide) {
+        val event = barcodeScanEvent ?: return@LaunchedEffect
+        if (!wide) return@LaunchedEffect
+        if (state.dashboard.products.none { it.id == event.productId }) return@LaunchedEffect
+        selectedOrderId = null
+        fullDetailsOrderId = null
+        editOrderId = null
+        partPaymentOrderId = null
+        createOrderTypeOverride = event.orderType
+        scannedProductId = event.productId
+        scannedProductSequence = event.sequence
+        showOrderBuilderPage = true
+        onBarcodeScanConsumed(event.sequence)
     }
     val requestOrderStatusChange: (OrmaOrder, String) -> Unit = { order, status ->
         if (status == "part_paid") {
@@ -7876,15 +7939,21 @@ private fun DashboardOrdersContent(
         DashboardOrderBuilderPage(
             state = state,
             initialOrderType = createOrderTypeOverride,
+            scannedProductId = scannedProductId,
+            scannedProductSequence = scannedProductSequence,
             wide = wide,
             onBack = {
                 showOrderBuilderPage = false
                 createOrderTypeOverride = null
+                scannedProductId = null
+                scannedProductSequence = 0
             },
             onSubmit = { draft ->
                 actions.onCreateOrder(draft)
                 showOrderBuilderPage = false
                 createOrderTypeOverride = null
+                scannedProductId = null
+                scannedProductSequence = 0
             },
             onHoldAndNew = { draft ->
                 actions.onCreateOrder(draft)
@@ -9522,6 +9591,123 @@ private fun sortedDashboardTeamMembers(
     }
     return if (ascending) sorted else sorted.asReversed()
 }
+
+private fun dashboardTeamAccessFilterOptions(
+    members: List<OrmaTeamMember>,
+    invites: List<OrmaTeamInvite>,
+    canInviteMembers: Boolean,
+    currentMemberId: String?,
+): List<DashboardTeamAccessFilterOption> {
+    val owners = members.count {
+        it.dashboardEffectiveTeamRole(canInviteMembers, currentMemberId) == "business_owner"
+    }
+    val managers = members.count {
+        it.dashboardEffectiveTeamRole(canInviteMembers, currentMemberId) == "manager"
+    }
+    val staff = members.count {
+        it.dashboardEffectiveTeamRole(canInviteMembers, currentMemberId) in setOf(
+            "team_member",
+            "staff",
+            "cashier",
+            "sales_staff",
+            "inventory_manager",
+            "accountant",
+            "read_only",
+        )
+    }
+    val noContact = members.count { it.email.isNullOrBlank() && it.phoneNumber.isNullOrBlank() } +
+        invites.count { it.inviteeEmail.isNullOrBlank() && it.inviteePhoneNumber.isNullOrBlank() }
+    return buildList {
+        add(DashboardTeamAccessFilterOption("all", "All", members.size + invites.size))
+        add(DashboardTeamAccessFilterOption("active", "Active", members.count { it.status.dashboardTeamStatusLabel() == "Active" }))
+        if (canInviteMembers) add(DashboardTeamAccessFilterOption("pending_invites", "Invites", invites.size))
+        add(DashboardTeamAccessFilterOption("owners", "Owners", owners))
+        add(DashboardTeamAccessFilterOption("managers", "Managers", managers))
+        add(DashboardTeamAccessFilterOption("staff", "Staff", staff))
+        add(DashboardTeamAccessFilterOption("no_contact", "No contact", noContact))
+    }
+}
+
+private fun filteredDashboardTeamMembers(
+    members: List<OrmaTeamMember>,
+    query: String,
+    filterKey: String,
+    canInviteMembers: Boolean,
+    currentMemberId: String?,
+): List<OrmaTeamMember> {
+    val tokens = dashboardSearchTokens(query)
+    return members.filter { member ->
+        val effectiveRole = member.dashboardEffectiveTeamRole(canInviteMembers, currentMemberId)
+        val roleMatches = when (filterKey) {
+            "active" -> member.status.dashboardTeamStatusLabel() == "Active"
+            "owners" -> effectiveRole == "business_owner"
+            "managers" -> effectiveRole == "manager"
+            "staff" -> effectiveRole in setOf(
+                "team_member",
+                "staff",
+                "cashier",
+                "sales_staff",
+                "inventory_manager",
+                "accountant",
+                "read_only",
+            )
+            "no_contact" -> member.email.isNullOrBlank() && member.phoneNumber.isNullOrBlank()
+            "pending_invites" -> false
+            else -> true
+        }
+        roleMatches && member.matchesDashboardTeamSearch(tokens, effectiveRole)
+    }
+}
+
+private fun filteredDashboardTeamInvites(
+    invites: List<OrmaTeamInvite>,
+    query: String,
+    filterKey: String,
+): List<OrmaTeamInvite> {
+    val tokens = dashboardSearchTokens(query)
+    return invites.filter { invite ->
+        val filterMatches = when (filterKey) {
+            "all", "pending_invites" -> true
+            "no_contact" -> invite.inviteeEmail.isNullOrBlank() && invite.inviteePhoneNumber.isNullOrBlank()
+            else -> false
+        }
+        filterMatches && invite.matchesDashboardTeamSearch(tokens)
+    }
+}
+
+private fun OrmaTeamMember.matchesDashboardTeamSearch(
+    tokens: List<String>,
+    effectiveRole: String,
+): Boolean =
+    listOf(
+        id,
+        userId,
+        displayName.orEmpty(),
+        email.orEmpty(),
+        phoneNumber.orEmpty(),
+        role,
+        teamRoleLabel(effectiveRole),
+        status.dashboardTeamStatusLabel(),
+        joinedAt,
+        dashboardTeamPermissionSummary(permissions, effectiveRole),
+    ).joinToString(" ").containsAllDashboardTokens(tokens)
+
+private fun OrmaTeamInvite.matchesDashboardTeamSearch(tokens: List<String>): Boolean =
+    listOf(
+        id,
+        inviteeName.orEmpty(),
+        inviteeEmail.orEmpty(),
+        inviteePhoneNumber.orEmpty(),
+        role,
+        teamRoleLabel(role),
+        status.dashboardInviteStatusLabel(),
+        code,
+        createdAt,
+        expiresAt.orEmpty(),
+        createdByDisplayName.orEmpty(),
+        createdByEmail.orEmpty(),
+        dashboardTeamPermissionSummary(permissions, role),
+    ).joinToString(" ").containsAllDashboardTokens(tokens)
 
 private fun dashboardSalesFilterSummary(state: OnboardingUiState): String? {
     val filters = state.dashboard.filtersForScope(DashboardFilterScopeOrders)
@@ -12268,6 +12454,8 @@ private fun DashboardOrderBuilderPage(
     state: OnboardingUiState,
     initialOrderType: String?,
     initialDraft: OrmaOrderDraft? = null,
+    scannedProductId: String? = null,
+    scannedProductSequence: Int = 0,
     wide: Boolean,
     onBack: () -> Unit,
     onSubmit: (OrmaOrderDraft) -> Unit,
@@ -12368,6 +12556,14 @@ private fun DashboardOrderBuilderPage(
                     taxRate = product.taxRate.ifBlank { "0" },
                 ),
             )
+        }
+    }
+    LaunchedEffect(scannedProductSequence, scannedProductId, catalogItemType) {
+        val productId = scannedProductId ?: return@LaunchedEffect
+        if (scannedProductSequence <= 0) return@LaunchedEffect
+        val product = state.dashboard.products.firstOrNull { it.id == productId } ?: return@LaunchedEffect
+        if (product.itemType == catalogItemType) {
+            addOrIncrementProduct(product)
         }
     }
     fun changeItemQuantity(index: Int, delta: Double) {
@@ -16041,6 +16237,8 @@ private fun DashboardProductsContent(
     wide: Boolean,
     mobileSelectedProductId: String? = null,
     onMobileSelectedProductChange: ((String?) -> Unit)? = null,
+    barcodeScanEvent: DashboardBarcodeScanEvent? = null,
+    onBarcodeScanConsumed: (Int) -> Unit = {},
     onRequestScrollTop: () -> Unit = {},
 ) {
     var showProductEditor by rememberSaveable { mutableStateOf(false) }
@@ -16052,6 +16250,7 @@ private fun DashboardProductsContent(
     var editProductId by rememberSaveable { mutableStateOf<String?>(null) }
     var editSupplierId by rememberSaveable { mutableStateOf<String?>(null) }
     var editOfferId by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedWideProductId by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedSupplierId by rememberSaveable { mutableStateOf<String?>(null) }
     var supplierPaymentTargetId by rememberSaveable { mutableStateOf<String?>(null) }
     var supplierPaymentInitialAmount by rememberSaveable { mutableStateOf("") }
@@ -16068,7 +16267,12 @@ private fun DashboardProductsContent(
     val imageProduct = state.dashboard.products.firstOrNull { it.id == imageProductId }
     val visibleProducts = filteredDashboardProducts(state)
     val visibleSuppliers = filteredDashboardSuppliers(state)
-    val selectedProduct = if (wide) null else state.dashboard.products.firstOrNull { it.id == mobileSelectedProductId }
+    val activeSelectedProductId = if (!wide && onMobileSelectedProductChange != null) {
+        mobileSelectedProductId
+    } else {
+        selectedWideProductId
+    }
+    val selectedProduct = state.dashboard.products.firstOrNull { it.id == activeSelectedProductId }
     val itemType = state.activeDashboardItemType()
     val selectedItemType = state.selectedDashboardItemTypeFilter()
     val productEditorActive = showProductEditor || editProduct != null
@@ -16076,11 +16280,19 @@ private fun DashboardProductsContent(
     val canCreateOffer = state.hasDashboardPermission(DashboardTeamPermissionCreateOffer)
     val canManageStock = state.hasDashboardPermission(DashboardTeamPermissionManageStock)
     fun openProduct(product: OrmaProduct) {
-        onMobileSelectedProductChange?.invoke(product.id)
+        if (!wide && onMobileSelectedProductChange != null) {
+            onMobileSelectedProductChange(product.id)
+        } else {
+            selectedWideProductId = product.id
+        }
         onRequestScrollTop()
     }
     fun closeProduct() {
-        onMobileSelectedProductChange?.invoke(null)
+        if (!wide && onMobileSelectedProductChange != null) {
+            onMobileSelectedProductChange(null)
+        } else {
+            selectedWideProductId = null
+        }
         onRequestScrollTop()
     }
     fun editSelectedProduct(product: OrmaProduct) {
@@ -16098,6 +16310,16 @@ private fun DashboardProductsContent(
     fun openSupplierPayment(supplier: OrmaSupplier, initialAmount: String = "") {
         supplierPaymentTargetId = supplier.id
         supplierPaymentInitialAmount = initialAmount
+    }
+    LaunchedEffect(barcodeScanEvent?.sequence) {
+        val event = barcodeScanEvent ?: return@LaunchedEffect
+        val product = state.dashboard.products.firstOrNull { it.id == event.productId } ?: return@LaunchedEffect
+        selectedSupplierId = null
+        showProductEditor = false
+        editProductId = null
+        openProduct(product)
+        actions.onShowDashboardStatusMessage("Opened ${product.name}.")
+        onBarcodeScanConsumed(event.sequence)
     }
 
     if (productEditorActive) {
@@ -26357,7 +26579,18 @@ private fun StockAdjustmentSheet(
     val quantityError = if (draft.quantityDelta.trim().isBlank()) null else signedDecimalAdjustmentError(draft.quantityDelta)
     val sellingPriceError = requiredNonNegativeDecimalError(draft.sellingPrice, "Enter the selling price.")
     val costPriceError = optionalNonNegativeDecimalError(draft.costPrice, "Purchase price must be zero or higher.")
-    val formReady = listOf(quantityError, sellingPriceError, costPriceError).all { it == null }
+    val supplierPaidError = optionalNonNegativeDecimalError(draft.supplierPaidTotal, "Supplier paid amount must be zero or higher.")
+    val quantityValue = draft.quantityDelta.toDoubleOrNull().orZero()
+    val costValue = draft.costPrice.toDoubleOrNull().orZero()
+    val supplierPaidValue = draft.supplierPaidTotal.toDoubleOrNull().orZero()
+    val batchPayable = if (quantityValue > 0.0 && draft.supplierId.isNotBlank()) quantityValue * costValue else 0.0
+    val supplierBatchError = when {
+        quantityValue <= 0.0 -> null
+        draft.supplierId.isBlank() -> "Choose a supplier to create a payable batch."
+        supplierPaidValue > batchPayable -> "Paid amount cannot be above this batch payable."
+        else -> null
+    }
+    val formReady = listOf(quantityError, sellingPriceError, costPriceError, supplierPaidError, supplierBatchError).all { it == null }
     DashboardFormSheet(
         title = "Update stock and pricing",
         body = "${product.name}: update supplier, purchase price, selling price, availability, and stock movement.",
@@ -26400,6 +26633,13 @@ private fun StockAdjustmentSheet(
                 onSelected = { draft = draft.copy(supplierId = it.id) },
             )
         }
+        if (quantityValue > 0.0 && draft.supplierId.isBlank()) {
+            Text(
+                text = "Positive stock additions need a supplier so payable and balance stay correct.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = OrmaColors.Warning,
+            )
+        }
         CatalogAvailabilityPicker(
             itemType = product.itemType,
             selectedStatus = draft.status,
@@ -26433,6 +26673,27 @@ private fun StockAdjustmentSheet(
             )
         }
         if (attemptedSubmit) quantityError?.let { FormValidationText(it) }
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            OrmaTextField(
+                batchPayable.toDashboardMoneyInput(),
+                {},
+                "Supplier payable",
+                modifier = Modifier.weight(1f),
+                enabled = false,
+            )
+            OrmaTextField(
+                draft.supplierPaidTotal,
+                { draft = draft.copy(supplierPaidTotal = it.moneyInput()) },
+                "Paid to supplier",
+                modifier = Modifier.weight(1f),
+                placeholder = "Optional",
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            )
+        }
+        if (attemptedSubmit) {
+            supplierPaidError?.let { FormValidationText(it) }
+            supplierBatchError?.let { FormValidationText(it) }
+        }
         OrmaTextField(draft.note, { draft = draft.copy(note = it) }, "Note", placeholder = "Purchase, correction, damage, availability update", singleLine = false, minLines = 2)
         OrmaActionRow(
             primaryText = "Save update",
@@ -26444,6 +26705,7 @@ private fun StockAdjustmentSheet(
                             quantityDelta = draft.quantityDelta.trim().ifBlank { "0" },
                             sellingPrice = draft.sellingPrice.trim(),
                             costPrice = draft.costPrice.trim(),
+                            supplierPaidTotal = draft.supplierPaidTotal.trim(),
                             supplierId = draft.supplierId.trim(),
                             status = draft.status.normalizedCatalogAvailabilityStatus(),
                             expiryDate = draft.expiryDate.trim(),
@@ -28256,7 +28518,7 @@ private fun OrmaOrderDraft.withOrderStatus(status: String): OrmaOrderDraft {
 
 private fun String.printerConnectionLabel(): String =
     when (this) {
-        "mtp_usb" -> "Android USB / OTG"
+        "mtp_usb" -> "MTP / USB thermal"
         "usb" -> "USB / system"
         "bluetooth" -> "Bluetooth"
         "network" -> "Network IP"
@@ -28282,7 +28544,7 @@ private fun String.printerAddressPlaceholder(): String =
     when (trim().lowercase()) {
         "network" -> "192.168.1.45 or receipt-printer.local"
         "bluetooth" -> "BT-Receipt-80"
-        "mtp_usb" -> "Leave blank for one connected USB printer, or use vendorId:productId"
+        "mtp_usb" -> "Leave blank for the connected MTP/USB printer, or use vendorId:productId"
         "airprint" -> "Office AirPrint receipt"
         "system" -> "Default receipt printer"
         "esc_pos" -> "/dev/usb/lp0 or tcp://192.168.1.45:9100"
@@ -28293,7 +28555,7 @@ private fun String.printerSetupHint(): String =
     when (trim().lowercase()) {
         "network" -> "Works best when every counter device can reach the same LAN printer IP."
         "bluetooth" -> "Android prints to a paired Bluetooth device. Desktop prints through the operating system printer with the same name."
-        "mtp_usb" -> "Direct USB/OTG printing is Android-only. Desktop, iOS, and web need a system printer or network ESC/POS setup."
+        "mtp_usb" -> "Android sends ESC/POS directly to the connected portable thermal printer over USB/OTG."
         "airprint" -> "Use this for iPhone, iPad, or macOS devices with AirPrint-visible printers."
         "system" -> "Uses the operating system print dialog on web, desktop, Android, and iOS."
         "esc_pos" -> "Use tcp://IP:9100 for network thermal printers, or a raw device path on desktop."
@@ -31913,6 +32175,35 @@ private fun DashboardTeamMembersSurface(
     var detailInviteId by rememberSaveable { mutableStateOf<String?>(null) }
     val detailMember = members.firstOrNull { it.id == detailMemberId }
     val detailInvite = invites.firstOrNull { it.id == detailInviteId }
+    var teamQuery by rememberSaveable { mutableStateOf("") }
+    var teamFilter by rememberSaveable { mutableStateOf("all") }
+    val teamFilterOptions = remember(members, invites, canInviteMembers, currentMemberId) {
+        dashboardTeamAccessFilterOptions(
+            members = members,
+            invites = invites,
+            canInviteMembers = canInviteMembers,
+            currentMemberId = currentMemberId,
+        )
+    }
+    val filteredMembers = remember(members, teamQuery, teamFilter, canInviteMembers, currentMemberId) {
+        filteredDashboardTeamMembers(
+            members = members,
+            query = teamQuery,
+            filterKey = teamFilter,
+            canInviteMembers = canInviteMembers,
+            currentMemberId = currentMemberId,
+        )
+    }
+    val filteredInvites = remember(invites, teamQuery, teamFilter) {
+        filteredDashboardTeamInvites(
+            invites = invites,
+            query = teamQuery,
+            filterKey = teamFilter,
+        )
+    }
+    val filtersActive = teamQuery.isNotBlank() || teamFilter != "all"
+    val showMemberTable = teamFilter != "pending_invites"
+    val visibleRecordCount = filteredMembers.size + if (canInviteMembers) filteredInvites.size else 0
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = OrmaShapes.SmallCard,
@@ -31929,12 +32220,14 @@ private fun DashboardTeamMembersSurface(
             DashboardRecordsSurfaceHeader(
                 title = if (canInviteMembers) "Team members" else "Workspace team",
                 body = if (canInviteMembers) {
-                    "Invite staff, review active access, and remove users who should no longer enter the workspace."
+                    "Search staff, inspect permissions, edit access, and manage pending invites."
                 } else {
                     "People currently linked to the same workspace as you."
                 },
                 badgeText = if (state.dashboard.loading && members.isEmpty()) {
                     "SYNCING"
+                } else if (filtersActive) {
+                    "$visibleRecordCount SHOWN"
                 } else if (canInviteMembers) {
                     "${members.size} ACTIVE / ${invites.size} INVITED"
                 } else {
@@ -31942,34 +32235,42 @@ private fun DashboardTeamMembersSurface(
                 },
                 badgeTone = OrmaStatusTone.Success,
             )
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                if (canInviteMembers) {
-                    DashboardWideActionButton(
-                        text = "Add invite",
-                        onClick = { showInviteSheet = true },
-                        enabled = !state.dashboard.actionLoading,
-                        primary = true,
-                    )
-                }
-                DashboardWideActionButton(
-                    text = if (state.dashboard.loading) "Syncing" else "Refresh",
-                    onClick = actions.onDashboardRefresh,
-                    enabled = !state.dashboard.loading,
-                )
-            }
-            if (canInviteMembers) {
+            DashboardTeamSearchControls(
+                query = teamQuery,
+                onQueryChange = { teamQuery = it.take(120) },
+                filterOptions = teamFilterOptions,
+                selectedFilter = teamFilter,
+                onFilterChange = { teamFilter = it },
+                filtersActive = filtersActive,
+                onClearFilters = {
+                    teamQuery = ""
+                    teamFilter = "all"
+                },
+                canInviteMembers = canInviteMembers,
+                actionLoading = state.dashboard.actionLoading,
+                loading = state.dashboard.loading,
+                onAddInvite = { showInviteSheet = true },
+                onRefresh = actions.onDashboardRefresh,
+            )
+            if (canInviteMembers && (teamFilter == "all" || teamFilter == "pending_invites" || filteredInvites.isNotEmpty())) {
                 DashboardTeamInvitesQueue(
-                    invites = invites,
+                    invites = filteredInvites,
                     actionLoading = state.dashboard.actionLoading,
                     onOpenInvite = { detailInviteId = it.id },
                     onRevokeInvite = { actions.onRevokeTeamInvite(it.id) },
                 )
             }
-            if (members.isEmpty()) {
+            if (!showMemberTable && filteredInvites.isEmpty()) {
+                DashboardInlineEmptyRecords(
+                    icon = DashboardNavIconKind.Invite,
+                    title = "No pending invites",
+                    body = if (teamQuery.isBlank()) {
+                        "Add an invite when a staff account needs workspace access."
+                    } else {
+                        "Try another name, email, phone, or invite code."
+                    },
+                )
+            } else if (showMemberTable && members.isEmpty()) {
                 if (state.dashboard.loading) {
                     DashboardRecordRowsSkeleton(rowCount = 4, columns = 4)
                 } else {
@@ -31985,15 +32286,21 @@ private fun DashboardTeamMembersSurface(
                         },
                     )
                 }
-            } else {
+            } else if (showMemberTable && filteredMembers.isEmpty()) {
+                DashboardInlineEmptyRecords(
+                    icon = DashboardNavIconKind.Invite,
+                    title = "No matching team members",
+                    body = "Adjust the search or choose another access filter.",
+                )
+            } else if (showMemberTable) {
                 if (state.dashboard.loading) {
                     DashboardInlineRefreshingSkeleton()
                 }
                 var sortKey by rememberSaveable { mutableStateOf(DashboardTeamSortMember) }
                 var sortAscending by rememberSaveable { mutableStateOf(true) }
-                val sortedMembers = remember(members, sortKey, sortAscending) {
+                val sortedMembers = remember(filteredMembers, sortKey, sortAscending) {
                     sortedDashboardTeamMembers(
-                        members = members,
+                        members = filteredMembers,
                         sortKey = sortKey,
                         ascending = sortAscending,
                     )
@@ -32060,6 +32367,107 @@ private fun DashboardTeamMembersSurface(
                 detailInviteId = null
             },
         )
+    }
+}
+
+@Composable
+private fun DashboardTeamSearchControls(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    filterOptions: List<DashboardTeamAccessFilterOption>,
+    selectedFilter: String,
+    onFilterChange: (String) -> Unit,
+    filtersActive: Boolean,
+    onClearFilters: () -> Unit,
+    canInviteMembers: Boolean,
+    actionLoading: Boolean,
+    loading: Boolean,
+    onAddInvite: () -> Unit,
+    onRefresh: () -> Unit,
+) {
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val compact = maxWidth < 760.dp
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            if (compact) {
+                DashboardCompactSearchField(
+                    value = query,
+                    onValueChange = onQueryChange,
+                    placeholder = "Search member, invite, phone, email, role",
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = OrmaShapes.Field,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (canInviteMembers) {
+                        DashboardWideActionButton(
+                            text = "Add invite",
+                            onClick = onAddInvite,
+                            enabled = !actionLoading,
+                            primary = true,
+                        )
+                    }
+                    DashboardWideActionButton(
+                        text = if (loading) "Syncing" else "Sync",
+                        onClick = onRefresh,
+                        enabled = !loading,
+                    )
+                    if (filtersActive) {
+                        DashboardSalesInlineResetButton(onClick = onClearFilters)
+                    }
+                }
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    DashboardCompactSearchField(
+                        value = query,
+                        onValueChange = onQueryChange,
+                        placeholder = "Search member, invite, phone, email, role",
+                        modifier = Modifier.weight(1f),
+                        shape = OrmaShapes.Field,
+                    )
+                    if (filtersActive) {
+                        DashboardSalesInlineResetButton(onClick = onClearFilters)
+                    }
+                    if (canInviteMembers) {
+                        DashboardWideActionButton(
+                            text = "Add invite",
+                            onClick = onAddInvite,
+                            modifier = Modifier.widthIn(min = 126.dp, max = 150.dp),
+                            enabled = !actionLoading,
+                            primary = true,
+                        )
+                    }
+                    DashboardWideActionButton(
+                        text = if (loading) "Syncing" else "Sync",
+                        onClick = onRefresh,
+                        modifier = Modifier.widthIn(min = 104.dp, max = 124.dp),
+                        enabled = !loading,
+                    )
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                filterOptions.forEach { option ->
+                    DashboardDatePresetChip(
+                        label = "${option.label} ${option.count}",
+                        selected = selectedFilter == option.key,
+                        onClick = { onFilterChange(option.key) },
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -32422,7 +32830,7 @@ private fun DashboardTeamMemberDetailsSheet(
             )
             if (canEditAccess) {
                 OrmaPrimaryButton(
-                    text = "Save access",
+                    text = "Save changes",
                     onClick = {
                         onSave(
                             draft.copy(
@@ -32435,12 +32843,14 @@ private fun DashboardTeamMemberDetailsSheet(
                     enabled = !actionLoading,
                 )
             }
-            OrmaPrimaryButton(
-                text = "Remove",
-                onClick = onRemove,
-                modifier = Modifier.weight(1f),
-                enabled = canRemove && !actionLoading,
-            )
+            if (canRemove) {
+                OrmaPrimaryButton(
+                    text = "Remove access",
+                    onClick = onRemove,
+                    modifier = Modifier.weight(1f),
+                    enabled = !actionLoading,
+                )
+            }
         }
     }
 }
@@ -32481,7 +32891,7 @@ private fun DashboardTeamInviteDetailsSheet(
                 modifier = Modifier.weight(1f),
             )
             OrmaPrimaryButton(
-                text = "Revoke",
+                text = "Revoke invite",
                 onClick = onRevoke,
                 modifier = Modifier.weight(1f),
                 enabled = !actionLoading,
@@ -32872,7 +33282,8 @@ private fun DashboardAccountContent(
     onOpenMarketing: (() -> Unit)?,
     wide: Boolean,
 ) {
-    val canManageAccountSetup = canInviteMembers
+    val canManageAccountSetup = state.hasDashboardPermission(DashboardTeamPermissionManageAccount)
+    val canManageMarketing = state.hasDashboardPermission(DashboardTeamPermissionManageMarketing)
     if (wide) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -32884,6 +33295,11 @@ private fun DashboardAccountContent(
                 verticalArrangement = Arrangement.spacedBy(18.dp),
             ) {
                 DashboardAccountProfileCard(state = state, roleLabel = roleLabel)
+                DashboardAccountBusinessSettingsCard(
+                    state = state,
+                    actions = actions,
+                    canEdit = canManageAccountSetup,
+                )
                 DashboardAccountNotificationCard(state = state, actions = actions)
                 if (canManageAccountSetup) {
                     DashboardAccountLogoCard(state = state, actions = actions)
@@ -32902,6 +33318,9 @@ private fun DashboardAccountContent(
                 if (canManageAccountSetup) {
                     DashboardAccountPrinterCard(state = state, actions = actions)
                 }
+                if (canManageMarketing && onOpenMarketing != null) {
+                    DashboardAccountMarketingCard(onOpenMarketing = onOpenMarketing)
+                }
                 DashboardAccountSessionCard(
                     roleLabel = roleLabel,
                     onLogout = actions.onRestart,
@@ -32917,6 +33336,7 @@ private fun DashboardAccountContent(
             actions = actions,
             roleLabel = roleLabel,
             canInviteMembers = canInviteMembers,
+            canManageAccountSetup = canManageAccountSetup,
             onOpenTeam = onOpenTeam,
             onOpenProducts = onOpenProducts,
             onOpenInvoices = onOpenInvoices,
@@ -32931,12 +33351,13 @@ private fun DashboardMobileAccountContent(
     actions: OnboardingActions,
     roleLabel: String,
     canInviteMembers: Boolean,
+    canManageAccountSetup: Boolean,
     onOpenTeam: (() -> Unit)?,
     onOpenProducts: (() -> Unit)?,
     onOpenInvoices: (() -> Unit)?,
     onOpenMarketing: (() -> Unit)?,
 ) {
-    val canManageAccountSetup = canInviteMembers
+    var showBusinessSettingsSheet by rememberSaveable { mutableStateOf(false) }
     var showPaymentSheet by rememberSaveable { mutableStateOf(false) }
     var editingPaymentMethodId by rememberSaveable { mutableStateOf<String?>(null) }
     var showPrinterSheet by rememberSaveable { mutableStateOf(false) }
@@ -32967,6 +33388,19 @@ private fun DashboardMobileAccountContent(
         )
 
         DashboardMobileAccountGroup(title = "Business") {
+            DashboardMobileAccountRow(
+                icon = DashboardNavIconKind.Account,
+                title = "Business and invoice",
+                body = "${state.draft.invoicePrefix.ifBlank { "ORMA" }}-${state.draft.nextInvoiceNumber.ifBlank { "0001" }} / ${state.draft.currency.ifBlank { "INR" }}",
+                trailingText = if (canManageAccountSetup) "Edit" else null,
+                badgeText = if (canManageAccountSetup) null else "VIEW",
+                badgeTone = OrmaStatusTone.Info,
+                onClick = if (canManageAccountSetup) {
+                    { showBusinessSettingsSheet = true }
+                } else {
+                    null
+                },
+            )
             if (canManageAccountSetup) {
                 DashboardMobileAccountRow(
                     icon = DashboardNavIconKind.Account,
@@ -32986,7 +33420,7 @@ private fun DashboardMobileAccountContent(
                 DashboardMobileAccountRow(
                     icon = DashboardNavIconKind.Account,
                     title = "Owner-managed settings",
-                    body = "Logo, cover photo, payment setup, and printers are managed by the business owner.",
+                    body = "Logo, cover photo, invoice setup, payment setup, and printers need account permission.",
                     badgeText = "OWNER",
                     badgeTone = OrmaStatusTone.Info,
                     maxBodyLines = 3,
@@ -33183,7 +33617,7 @@ private fun DashboardMobileAccountContent(
                 DashboardMobileAccountRow(
                     icon = DashboardNavIconKind.Invite,
                     title = "Hidden owner actions",
-                    body = "Business media, UPI changes, printer setup, team access, and online store settings are hidden for this role.",
+                    body = "Business media, invoice setup, UPI changes, printer setup, and team access are hidden unless this role has account permission.",
                     badgeText = "READ ONLY",
                     badgeTone = OrmaStatusTone.Info,
                     maxBodyLines = 3,
@@ -33204,6 +33638,17 @@ private fun DashboardMobileAccountContent(
         if (isOrmaWebDownloadSurface()) {
             OrmaDesktopDownloadPanel(wide = false)
         }
+    }
+
+    if (canManageAccountSetup && showBusinessSettingsSheet) {
+        DashboardAccountBusinessSettingsSheet(
+            state = state,
+            onDismiss = { showBusinessSettingsSheet = false },
+            onSubmit = {
+                actions.onUpdateBusinessSetup(it)
+                showBusinessSettingsSheet = false
+            },
+        )
     }
 
     if (canManageAccountSetup && showPaymentSheet) {
@@ -33668,6 +34113,297 @@ private fun DashboardAccountProfileCard(
 }
 
 @Composable
+private fun DashboardAccountBusinessSettingsCard(
+    state: OnboardingUiState,
+    actions: OnboardingActions,
+    canEdit: Boolean,
+) {
+    var showSettingsSheet by rememberSaveable { mutableStateOf(false) }
+    val draft = state.draft
+    DashboardRecordCard {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.Top,
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OrmaBadge(
+                    text = if (canEdit) "EDITABLE" else "VIEW ONLY",
+                    tone = if (canEdit) OrmaStatusTone.Success else OrmaStatusTone.Info,
+                )
+                Text(
+                    text = "Business and invoice setup",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = OrmaColors.TextPrimary,
+                )
+                Text(
+                    text = "Used across invoices, quotations, receipts, catalog checkout, tax details, and customer documents.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = OrmaColors.TextSecondary,
+                )
+            }
+            if (canEdit) {
+                OrmaTextButton(
+                    text = "Edit",
+                    onClick = { showSettingsSheet = true },
+                    enabled = !state.onboardingLoading,
+                )
+            }
+        }
+        OrmaKeyValueList(
+            rows = listOf(
+                "Business name" to draft.businessName.ifBlank { state.workspaceName.ifBlank { "Not added" } },
+                "Legal name" to draft.legalName.ifBlank { state.workspaceLegalName.ifBlank { "Not added" } },
+                "Invoice prefix" to draft.invoicePrefix.ifBlank { "ORMA" },
+                "Next invoice no." to draft.nextInvoiceNumber.ifBlank { "0001" },
+                "Currency" to draft.currency.ifBlank { "INR" },
+                "Tax" to if (draft.isTaxRegistered) {
+                    "${draft.taxLabel.ifBlank { "GST/VAT" }} ${draft.taxNumber.ifBlank { "not added" }}"
+                } else {
+                    "Not registered"
+                },
+                "Payment terms" to draft.paymentTerms.ifBlank { "Due on receipt" },
+            ),
+        )
+        if (!canEdit) {
+            DashboardChecklistRow(text = "Ask the owner or a manager with account permission to update invoice numbering, tax, and business profile.")
+        }
+    }
+
+    if (canEdit && showSettingsSheet) {
+        DashboardAccountBusinessSettingsSheet(
+            state = state,
+            onDismiss = { showSettingsSheet = false },
+            onSubmit = {
+                actions.onUpdateBusinessSetup(it)
+                showSettingsSheet = false
+            },
+        )
+    }
+}
+
+@Composable
+private fun DashboardAccountBusinessSettingsSheet(
+    state: OnboardingUiState,
+    onDismiss: () -> Unit,
+    onSubmit: (BusinessSetupDraft) -> Unit,
+) {
+    var draft by remember(state.workspaceId) { mutableStateOf(state.draft) }
+    DashboardFormSheet(
+        title = "Edit account details",
+        body = "Update business profile, invoice numbering, tax defaults, and customer document text.",
+        onDismiss = onDismiss,
+        wide = true,
+    ) {
+        OrmaTextField(
+            value = draft.businessName,
+            onValueChange = { draft = draft.copy(businessName = it.take(140)) },
+            label = "Business name",
+            placeholder = state.workspaceName.ifBlank { "Business name" },
+        )
+        OrmaTextField(
+            value = draft.legalName,
+            onValueChange = { draft = draft.copy(legalName = it.take(180)) },
+            label = "Legal name",
+            placeholder = state.workspaceLegalName.ifBlank { "Registered legal name" },
+        )
+        OrmaTextField(
+            value = draft.website,
+            onValueChange = { draft = draft.copy(website = it.take(180)) },
+            label = "Website",
+            placeholder = "Optional",
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            OrmaTextField(
+                value = draft.invoicePrefix,
+                onValueChange = { draft = draft.copy(invoicePrefix = it.uppercase().filter { char -> char.isLetterOrDigit() }.take(8)) },
+                label = "Invoice prefix",
+                placeholder = "ORMA",
+                modifier = Modifier.weight(1f),
+            )
+            OrmaTextField(
+                value = draft.nextInvoiceNumber,
+                onValueChange = { draft = draft.copy(nextInvoiceNumber = it.filter(Char::isDigit).take(8)) },
+                label = "Next invoice number",
+                placeholder = "0001",
+                modifier = Modifier.weight(1f),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            OrmaTextField(
+                value = draft.currency,
+                onValueChange = { draft = draft.copy(currency = it.uppercase().filter(Char::isLetter).take(3)) },
+                label = "Currency",
+                placeholder = "INR",
+                modifier = Modifier.weight(1f),
+            )
+            OrmaTextField(
+                value = draft.paymentTerms,
+                onValueChange = { draft = draft.copy(paymentTerms = it.take(100)) },
+                label = "Payment terms",
+                placeholder = "Due on receipt",
+                modifier = Modifier.weight(1f),
+            )
+        }
+        OrmaSwitchRow(
+            title = "Tax registered",
+            body = "Show GST/VAT fields on invoices and quotations.",
+            checked = draft.isTaxRegistered,
+            onCheckedChange = { draft = draft.copy(isTaxRegistered = it) },
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            OrmaTextField(
+                value = draft.taxLabel,
+                onValueChange = { draft = draft.copy(taxLabel = it.uppercase().take(16)) },
+                label = "Tax label",
+                placeholder = "GST/VAT",
+                modifier = Modifier.weight(1f),
+                enabled = draft.isTaxRegistered,
+            )
+            OrmaTextField(
+                value = draft.taxNumber,
+                onValueChange = { draft = draft.copy(taxNumber = it.uppercase().take(24)) },
+                label = "Tax number",
+                placeholder = "Optional",
+                modifier = Modifier.weight(1f),
+                enabled = draft.isTaxRegistered,
+            )
+        }
+        OrmaSwitchRow(
+            title = "Prices include tax",
+            body = "Treat selling prices as tax-inclusive when building documents.",
+            checked = draft.pricesIncludeTax,
+            onCheckedChange = { draft = draft.copy(pricesIncludeTax = it) },
+        )
+        OrmaTextField(
+            value = draft.addressLine,
+            onValueChange = { draft = draft.copy(addressLine = it.take(180)) },
+            label = "Business address",
+            placeholder = "Building, street, area",
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            OrmaTextField(
+                value = draft.city,
+                onValueChange = { draft = draft.copy(city = it.take(80)) },
+                label = "City",
+                modifier = Modifier.weight(1f),
+            )
+            OrmaTextField(
+                value = draft.region,
+                onValueChange = { draft = draft.copy(region = it.take(80)) },
+                label = "State",
+                modifier = Modifier.weight(1f),
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            OrmaTextField(
+                value = draft.country,
+                onValueChange = { draft = draft.copy(country = it.take(80)) },
+                label = "Country",
+                modifier = Modifier.weight(1f),
+            )
+            OrmaTextField(
+                value = draft.postalCode,
+                onValueChange = { draft = draft.copy(postalCode = it.take(24)) },
+                label = "Postal code",
+                modifier = Modifier.weight(1f),
+            )
+        }
+        OrmaTextField(
+            value = draft.invoiceFooter,
+            onValueChange = { draft = draft.copy(invoiceFooter = it.take(240)) },
+            label = "Invoice footer",
+            placeholder = "Thank you for your business.",
+            singleLine = false,
+            minLines = 3,
+        )
+        OrmaActionRow(
+            primaryText = "Save account",
+            onPrimary = {
+                onSubmit(
+                    draft.copy(
+                        businessName = draft.businessName.trim(),
+                        legalName = draft.legalName.trim(),
+                        website = draft.website.trim(),
+                        invoicePrefix = draft.invoicePrefix.trim().uppercase().ifBlank { "ORMA" },
+                        nextInvoiceNumber = draft.nextInvoiceNumber.trim().ifBlank { "0001" },
+                        currency = draft.currency.trim().uppercase().ifBlank { "INR" },
+                        taxLabel = draft.taxLabel.trim().uppercase().ifBlank { "GST/VAT" },
+                        taxNumber = draft.taxNumber.trim().uppercase(),
+                        addressLine = draft.addressLine.trim(),
+                        city = draft.city.trim(),
+                        region = draft.region.trim(),
+                        country = draft.country.trim().ifBlank { "India" },
+                        postalCode = draft.postalCode.trim(),
+                        paymentTerms = draft.paymentTerms.trim().ifBlank { "Due on receipt" },
+                        invoiceFooter = draft.invoiceFooter.trim().ifBlank { "Thank you for your business." },
+                    ),
+                )
+            },
+            primaryEnabled = !state.onboardingLoading &&
+                draft.businessName.trim().isNotBlank() &&
+                draft.legalName.trim().isNotBlank() &&
+                draft.invoicePrefix.trim().isNotBlank() &&
+                draft.nextInvoiceNumber.trim().isNotBlank(),
+            secondaryText = "Cancel",
+            onSecondary = LocalSmoothSheetDismiss.current ?: onDismiss,
+        )
+    }
+}
+
+@Composable
+private fun DashboardAccountMarketingCard(
+    onOpenMarketing: () -> Unit,
+) {
+    DashboardRecordCard {
+        OrmaBadge(
+            text = "MARKETING",
+            tone = OrmaStatusTone.Success,
+        )
+        Text(
+            text = "Online store and WhatsApp",
+            style = MaterialTheme.typography.titleMedium,
+            color = OrmaColors.TextPrimary,
+        )
+        Text(
+            text = "Manage public catalog link, QR ordering, Meta connection, templates, and customer-facing checkout setup.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = OrmaColors.TextSecondary,
+        )
+        DashboardWideActionButton(
+            text = "Open marketing",
+            onClick = onOpenMarketing,
+            modifier = Modifier.fillMaxWidth(),
+            primary = false,
+        )
+    }
+}
+
+@Composable
 private fun DashboardAccountNotificationCard(
     state: OnboardingUiState,
     actions: OnboardingActions,
@@ -33798,15 +34534,15 @@ private fun DashboardAccountOwnerManagedCard(
             color = OrmaColors.TextPrimary,
         )
         Text(
-            text = "Business media, UPI payment setup, printer setup, team access, and online store settings are managed by the business owner.",
+            text = "Business profile, invoice numbering, media, UPI payment setup, printer setup, and team access require account permission.",
             style = MaterialTheme.typography.bodyMedium,
             color = OrmaColors.TextSecondary,
         )
         OrmaKeyValueList(
             rows = listOf(
                 "Your role" to roleLabel,
-                "Hidden actions" to "Logo, cover, UPI, printers, team, store",
-                "Available here" to "Workspace details, invoices, public ordering, sign out",
+                "Hidden actions" to "Business details, logo, cover, UPI, printers, team",
+                "Available here" to "Workspace details, permitted sections, sign out",
             ),
         )
     }
@@ -34309,8 +35045,8 @@ private fun DashboardPrinterDeviceCoveragePanel() {
             )
             OrmaKeyValueList(
                 rows = listOf(
-                    "Web and desktop" to "System print dialog",
-                    "Android" to "USB, Bluetooth, network, or system print services",
+                    "Web and desktop" to "System printer, raw device path, or tcp://IP:9100 thermal",
+                    "Android" to "MTP/USB OTG, Bluetooth SPP, network ESC/POS, or system print",
                     "iPhone and iPad" to "AirPrint or installed print services",
                 ),
             )

@@ -94,6 +94,22 @@ fun com.orma.backend.db.WorkspaceRecord.toResponse(): WorkspaceResponse =
         onboardingComplete = onboardingComplete,
         logoFileName = logoFileName,
         coverFileName = coverFileName,
+        website = website,
+        isTaxRegistered = isTaxRegistered,
+        taxNumber = taxNumber,
+        taxLabel = taxLabel,
+        addressLine = addressLine,
+        city = city,
+        region = region,
+        country = country,
+        postalCode = postalCode,
+        invoicePrefix = invoicePrefix,
+        nextInvoiceNumber = nextInvoiceNumber,
+        paymentTerms = paymentTerms,
+        invoiceFooter = invoiceFooter,
+        currency = currency,
+        taxMode = taxMode,
+        pricesIncludeTax = pricesIncludeTax,
     )
 
 fun com.orma.backend.db.WorkspaceRecord.toResponse(config: AppConfig): WorkspaceResponse =

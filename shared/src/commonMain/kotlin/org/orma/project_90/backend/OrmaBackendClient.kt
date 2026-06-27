@@ -30,6 +30,22 @@ data class OrmaBackendWorkspace(
     val logoUrl: String?,
     val coverFileName: String?,
     val coverUrl: String?,
+    val website: String? = null,
+    val isTaxRegistered: Boolean? = null,
+    val taxNumber: String? = null,
+    val taxLabel: String? = null,
+    val addressLine: String? = null,
+    val city: String? = null,
+    val region: String? = null,
+    val country: String? = null,
+    val postalCode: String? = null,
+    val invoicePrefix: String? = null,
+    val nextInvoiceNumber: String? = null,
+    val paymentTerms: String? = null,
+    val invoiceFooter: String? = null,
+    val currency: String? = null,
+    val taxMode: String? = null,
+    val pricesIncludeTax: Boolean? = null,
 )
 
 data class OrmaBackendSession(
@@ -182,6 +198,9 @@ data class OrmaDashboardTask(
 
 data class OrmaDashboardNotificationPreview(
     val id: String,
+    val eventType: String = "notification",
+    val orderId: String? = null,
+    val workspaceId: String? = null,
     val title: String,
     val body: String,
     val createdAt: String,
@@ -598,6 +617,7 @@ data class OrmaStockAdjustmentDraft(
     val note: String = "",
     val sellingPrice: String = "",
     val costPrice: String = "",
+    val supplierPaidTotal: String = "",
     val supplierId: String = "",
     val status: String = "active",
     val expiryDate: String = "",
@@ -1064,6 +1084,21 @@ class OrmaBackendClient(
             parse = { it.toDashboardSummary() },
         )
 
+    suspend fun listDashboardNotifications(
+        idToken: String,
+        limit: Int = 20,
+    ): OrmaBackendResult<List<OrmaDashboardNotificationPreview>> =
+        executeBackendRequest(
+            actionTitle = "Load notifications",
+            request = {
+                ormaGetAuthorized(
+                    url = config.url("/dashboard/notifications?limit=${limit.coerceIn(1, 50)}"),
+                    bearerToken = idToken,
+                )
+            },
+            parse = { it.jsonObjectsInArray("notifications").map(String::toDashboardNotificationPreview) },
+        )
+
     suspend fun listCustomers(
         idToken: String,
         filters: OrmaDashboardFilters = OrmaDashboardFilters(),
@@ -1380,6 +1415,7 @@ class OrmaBackendClient(
                         "note" to JsonValue.StringValue(draft.note.blankToNull()),
                         "sellingPrice" to JsonValue.StringValue(draft.sellingPrice.blankToNull()),
                         "costPrice" to JsonValue.StringValue(draft.costPrice.blankToNull()),
+                        "supplierPaidTotal" to JsonValue.StringValue(draft.supplierPaidTotal.blankToNull()),
                         "supplierId" to JsonValue.StringValue(draft.supplierId.blankToNull()),
                         "status" to JsonValue.StringValue(draft.status.blankToNull()),
                         "expiryDate" to JsonValue.StringValue(draft.expiryDate.blankToNull()),
@@ -1939,6 +1975,22 @@ private fun String.toBackendSession(): OrmaBackendSession {
                 logoUrl = it.jsonString("logoUrl"),
                 coverFileName = it.jsonString("coverFileName"),
                 coverUrl = it.jsonString("coverUrl"),
+                website = it.jsonString("website"),
+                isTaxRegistered = it.jsonBoolean("isTaxRegistered"),
+                taxNumber = it.jsonString("taxNumber"),
+                taxLabel = it.jsonString("taxLabel"),
+                addressLine = it.jsonString("addressLine"),
+                city = it.jsonString("city"),
+                region = it.jsonString("region"),
+                country = it.jsonString("country"),
+                postalCode = it.jsonString("postalCode"),
+                invoicePrefix = it.jsonString("invoicePrefix"),
+                nextInvoiceNumber = it.jsonString("nextInvoiceNumber"),
+                paymentTerms = it.jsonString("paymentTerms"),
+                invoiceFooter = it.jsonString("invoiceFooter"),
+                currency = it.jsonString("currency"),
+                taxMode = it.jsonString("taxMode"),
+                pricesIncludeTax = it.jsonBoolean("pricesIncludeTax"),
             )
         },
         onboardingStatus = jsonString("onboardingStatus").orEmpty(),
@@ -1958,6 +2010,22 @@ private fun String.toBackendWorkspace(): OrmaBackendWorkspace =
         logoUrl = jsonString("logoUrl"),
         coverFileName = jsonString("coverFileName"),
         coverUrl = jsonString("coverUrl"),
+        website = jsonString("website"),
+        isTaxRegistered = jsonBoolean("isTaxRegistered"),
+        taxNumber = jsonString("taxNumber"),
+        taxLabel = jsonString("taxLabel"),
+        addressLine = jsonString("addressLine"),
+        city = jsonString("city"),
+        region = jsonString("region"),
+        country = jsonString("country"),
+        postalCode = jsonString("postalCode"),
+        invoicePrefix = jsonString("invoicePrefix"),
+        nextInvoiceNumber = jsonString("nextInvoiceNumber"),
+        paymentTerms = jsonString("paymentTerms"),
+        invoiceFooter = jsonString("invoiceFooter"),
+        currency = jsonString("currency"),
+        taxMode = jsonString("taxMode"),
+        pricesIncludeTax = jsonBoolean("pricesIncludeTax"),
     )
 
 private fun String.toMediaUpload(): OrmaMediaUpload =
@@ -2103,6 +2171,9 @@ private fun String.toDashboardTask(): OrmaDashboardTask =
 private fun String.toDashboardNotificationPreview(): OrmaDashboardNotificationPreview =
     OrmaDashboardNotificationPreview(
         id = jsonString("id").orEmpty(),
+        eventType = jsonString("eventType") ?: "notification",
+        orderId = jsonString("orderId"),
+        workspaceId = jsonString("workspaceId"),
         title = jsonString("title").orEmpty(),
         body = jsonString("body").orEmpty(),
         createdAt = jsonString("createdAt").orEmpty(),

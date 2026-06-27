@@ -32,8 +32,12 @@ fun Route.onboardingRoutes(
         val request = call.receive<BusinessSetupRequest>()
         val firebaseUser = call.verifiedFirebaseUser(config) ?: return@post
 
-        val session = repository.completeBusinessSetup(firebaseUser, request)
-        call.respond(session.toMutationResponse(config))
+        try {
+            val session = repository.completeBusinessSetup(firebaseUser, request)
+            call.respond(session.toMutationResponse(config))
+        } catch (error: TeamAccessException) {
+            call.respondTeamAccessError(error)
+        }
     }
 
     get("/onboarding/team") {
@@ -254,7 +258,7 @@ private suspend fun ApplicationCall.respondTeamWorkspaceNotFound() {
 
 private suspend fun ApplicationCall.respondTeamAccessError(error: TeamAccessException) {
     val status = when (error.code) {
-        "team_owner_required" -> HttpStatusCode.Forbidden
+        "team_owner_required", "team_permission_denied" -> HttpStatusCode.Forbidden
         "workspace_not_found", "team_member_not_found" -> HttpStatusCode.NotFound
         else -> HttpStatusCode.BadRequest
     }

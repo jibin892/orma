@@ -186,9 +186,17 @@ internal data class DashboardDataState(
     val invoiceGstinLookupStatusMessage: String? = null,
     val invoiceGstinLookupErrorMessage: String? = null,
     val invoiceGstinLookup: OrmaGstinLookup? = null,
+    val barcodeScanEvent: DashboardBarcodeScanEvent? = null,
     val filterScope: String = DashboardFilterScopeHome,
     val scopedFilters: Map<String, OrmaDashboardFilters> = emptyMap(),
     val filters: OrmaDashboardFilters = OrmaDashboardFilters(),
+)
+
+internal data class DashboardBarcodeScanEvent(
+    val sequence: Int,
+    val barcode: String,
+    val productId: String,
+    val orderType: String,
 )
 
 internal fun DashboardDataState.filtersForScope(scope: String): OrmaDashboardFilters =
@@ -209,6 +217,7 @@ internal data class OnboardingActions(
     val onClearAuthAlert: () -> Unit,
     val onDraftChange: (BusinessSetupDraft) -> Unit,
     val onGstinLookupRequest: (String) -> Unit,
+    val onUpdateBusinessSetup: (BusinessSetupDraft) -> Unit,
     val onLogoUploadRequest: () -> Unit,
     val onCoverUploadRequest: () -> Unit,
     val onSetupStepChange: (BusinessSetupStep) -> Unit,
@@ -218,6 +227,8 @@ internal data class OnboardingActions(
     val onClearDashboardMessage: () -> Unit,
     val onClearDashboardStatusMessage: () -> Unit,
     val onShowDashboardStatusMessage: (String) -> Unit,
+    val onDashboardBarcodeScan: (String) -> Unit,
+    val onDashboardBarcodeScanConsumed: (Int) -> Unit,
     val onDashboardFilterScopeChange: (String) -> Unit,
     val onDashboardSearchChange: (String) -> Unit,
     val onOrderStatusFilterChange: (String) -> Unit,

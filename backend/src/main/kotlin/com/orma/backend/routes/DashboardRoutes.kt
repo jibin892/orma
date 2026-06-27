@@ -8,6 +8,7 @@ import com.orma.backend.db.DashboardRepository
 import com.orma.backend.db.PublicCatalogOrderSubmitResult
 import com.orma.backend.models.CustomerListResponse
 import com.orma.backend.models.CustomerRequest
+import com.orma.backend.models.DashboardNotificationEventListResponse
 import com.orma.backend.models.ErrorResponse
 import com.orma.backend.models.OrderListResponse
 import com.orma.backend.models.OrderRequest
@@ -108,6 +109,14 @@ fun Route.dashboardRoutes(
         val repository = dashboardRepository ?: return@get call.dashboardDatabaseNotConfigured()
         val firebaseUser = call.verifiedFirebaseUser(config) ?: return@get
         call.respondWorkspaceResult(repository.summary(firebaseUser, call.dashboardFilters()))
+    }
+
+    get("/dashboard/notifications") {
+        val repository = dashboardRepository ?: return@get call.dashboardDatabaseNotConfigured()
+        val firebaseUser = call.verifiedFirebaseUser(config) ?: return@get
+        val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 50) ?: 20
+        val notifications = repository.notificationEvents(firebaseUser, limit) ?: return@get call.workspaceNotFound()
+        call.respond(DashboardNotificationEventListResponse(notifications))
     }
 
     get("/customers") {

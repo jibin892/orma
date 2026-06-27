@@ -544,6 +544,19 @@ class DashboardRepository(
         }
     }
 
+    suspend fun notificationEvents(
+        firebaseUser: VerifiedFirebaseUser,
+        limit: Int = 20,
+    ): List<DashboardNotificationPreviewResponse>? = withContext(Dispatchers.IO) {
+        dataSource.connection.use { connection ->
+            val access = connection.resolveWorkspaceAccess(firebaseUser) ?: return@withContext null
+            connection.listDashboardNotificationPreview(
+                workspaceId = access.workspaceId,
+                limit = limit.coerceIn(1, 50),
+            )
+        }
+    }
+
     suspend fun customers(
         firebaseUser: VerifiedFirebaseUser,
         filters: DashboardQueryFilters = DashboardQueryFilters(),
@@ -2471,16 +2484,26 @@ class DashboardRepository(
 
     private fun Connection.listDashboardNotificationPreview(
         workspaceId: String,
+        limit: Int = 5,
     ): List<DashboardNotificationPreviewResponse> {
         val sql = """
-            select id::text, title, body, status, created_at::text
+            select
+                id::text,
+                workspace_id::text,
+                order_id::text,
+                event_type,
+                title,
+                body,
+                status,
+                created_at::text
             from notification_events
             where workspace_id = ?::uuid
             order by created_at desc
-            limit 5
+            limit ?
         """.trimIndent()
         return prepareStatement(sql).use { statement ->
             statement.setString(1, workspaceId)
+            statement.setInt(2, limit)
             statement.executeQuery().use { result ->
                 buildList {
                     while (result.next()) {
@@ -2488,6 +2511,9 @@ class DashboardRepository(
                         add(
                             DashboardNotificationPreviewResponse(
                                 id = result.getString("id"),
+                                eventType = result.getString("event_type") ?: "notification",
+                                orderId = result.getString("order_id"),
+                                workspaceId = result.getString("workspace_id"),
                                 title = result.getString("title"),
                                 body = result.getString("body"),
                                 createdAt = result.getString("created_at"),
@@ -2635,30 +2661,59 @@ class DashboardRepository(
         val sql = buildString {
             append(
                 """
-                select *, count(*) over()::int as total_count
-                from suppliers
-                where workspace_id = ?::uuid and status = 'active'
+                select
+                    s.id,
+                    s.workspace_id,
+                    s.name,
+                    s.phone_number,
+                    s.email,
+                    s.tax_number,
+                    s.address_line,
+                    s.payment_terms,
+                    s.payment_mode,
+                    s.payment_reference,
+                    (coalesce(s.payable_total, 0) + coalesce(batch_totals.payable_total, 0)) as payable_total,
+                    (coalesce(s.paid_total, 0) + coalesce(batch_totals.paid_total, 0)) as paid_total,
+                    s.currency,
+                    s.last_payment_at,
+                    s.notes,
+                    s.status,
+                    s.created_at,
+                    s.updated_at,
+                    count(*) over()::int as total_count
+                from suppliers s
+                left join (
+                    select
+                        supplier_id,
+                        sum(coalesce(payable_amount, 0)) as payable_total,
+                        sum(coalesce(paid_amount, 0)) as paid_total
+                    from stock_movements
+                    where workspace_id = ?::uuid and supplier_id is not null
+                    group by supplier_id
+                ) batch_totals on batch_totals.supplier_id = s.id
+                where s.workspace_id = ?::uuid and s.status = 'active'
                 """.trimIndent(),
             )
+            params.add(workspaceId)
             if (search != null) {
                 append(
                     """
                      and (
-                        name ilike ?
-                        or coalesce(phone_number, '') ilike ?
-                        or coalesce(email, '') ilike ?
-                        or coalesce(tax_number, '') ilike ?
-                        or coalesce(payment_terms, '') ilike ?
-                        or coalesce(payment_mode, '') ilike ?
-                        or coalesce(payment_reference, '') ilike ?
-                        or coalesce(notes, '') ilike ?
+                        s.name ilike ?
+                        or coalesce(s.phone_number, '') ilike ?
+                        or coalesce(s.email, '') ilike ?
+                        or coalesce(s.tax_number, '') ilike ?
+                        or coalesce(s.payment_terms, '') ilike ?
+                        or coalesce(s.payment_mode, '') ilike ?
+                        or coalesce(s.payment_reference, '') ilike ?
+                        or coalesce(s.notes, '') ilike ?
                     )
                     """.trimIndent(),
                 )
                 repeat(8) { params.add(search.ilikePattern()) }
             }
-            appendCreatedDateWhere(filters, params, "created_at")
-            append(" order by created_at desc")
+            appendCreatedDateWhere(filters, params, "s.created_at")
+            append(" order by s.created_at desc")
             append(" limit ${filters.limit.sanitizedLimit()}")
             append(" offset ${filters.offset()}")
         }
@@ -3269,6 +3324,7 @@ class DashboardRepository(
         request: ProductRequest,
     ): ProductResponse {
         val categoryId = resolveProductCategoryId(access, request)
+        val supplierId = resolveSupplierId(access, request.supplierId)
         val sql = """
             insert into products (
                 workspace_id, supplier_id, category_id, name, item_type, sku, barcode, description, unit,
@@ -3280,7 +3336,7 @@ class DashboardRepository(
         """.trimIndent()
         return prepareStatement(sql).use { statement ->
             statement.setString(1, access.workspaceId)
-            statement.bindProductRequest(access, request, categoryId, startIndex = 2)
+            statement.bindProductRequest(access, request, supplierId, categoryId, startIndex = 2)
             statement.executeQuery().use { result ->
                 result.next()
                 result.toProductResponse()
@@ -3341,6 +3397,26 @@ class DashboardRepository(
             workspaceId = workspaceId,
             request = SupplierRequest(name = supplierName),
         ).id
+    }
+
+    private fun Connection.resolveSupplierId(
+        access: DashboardWorkspaceAccess,
+        supplierId: String?,
+    ): String? {
+        val cleanSupplierId = supplierId.cleanUuidOrNull() ?: return null
+        val sql = """
+            select id::text
+            from suppliers
+            where id = ?::uuid and workspace_id = ?::uuid and status = 'active'
+            limit 1
+        """.trimIndent()
+        return prepareStatement(sql).use { statement ->
+            statement.setString(1, cleanSupplierId)
+            statement.setString(2, access.workspaceId)
+            statement.executeQuery().use { result ->
+                if (result.next()) result.getString("id") else null
+            }
+        }
     }
 
     private fun Connection.resolveProductCategoryId(
@@ -3427,6 +3503,7 @@ class DashboardRepository(
         request: ProductRequest,
     ): ProductResponse? {
         val categoryId = resolveProductCategoryId(access, request)
+        val supplierId = resolveSupplierId(access, request.supplierId)
         val sql = """
             update products
             set supplier_id = ?::uuid, category_id = ?::uuid, name = ?, item_type = ?, sku = ?, barcode = ?, description = ?,
@@ -3437,7 +3514,7 @@ class DashboardRepository(
             returning *, null::text as supplier_name, null::text as category_name, null::text as image_storage_path
         """.trimIndent()
         return prepareStatement(sql).use { statement ->
-            statement.bindProductRequest(access, request, categoryId, startIndex = 1)
+            statement.bindProductRequest(access, request, supplierId, categoryId, startIndex = 1)
             statement.setString(21, productId)
             statement.setString(22, access.workspaceId)
             statement.executeQuery().use { result ->
@@ -3478,9 +3555,16 @@ class DashboardRepository(
             }
         }
         val next = current.add(quantityDelta).scaled()
-        val nextSupplierId = request.supplierId.cleanUuidOrNull() ?: currentSupplierId
+        val nextSupplierId = resolveSupplierId(access, request.supplierId) ?: currentSupplierId
         val nextSellingPrice = request.sellingPrice?.cleanOptional()?.moneyOrZero() ?: currentSellingPrice
         val nextCostPrice = request.costPrice?.cleanOptional()?.moneyOrZero() ?: currentCostPrice
+        val supplierPaidTotal = request.supplierPaidTotal?.cleanOptional()?.moneyOrZero() ?: BigDecimal.ZERO
+        val payableAmount = if (quantityDelta > BigDecimal.ZERO && nextSupplierId != null) {
+            nextCostPrice.multiply(quantityDelta).scaled()
+        } else {
+            BigDecimal.ZERO
+        }
+        val batchPaidAmount = supplierPaidTotal.coerceAtMost(payableAmount).coerceAtLeast(BigDecimal.ZERO)
         val nextStatus = request.status?.cleanCatalogStatus() ?: currentStatus.cleanCatalogStatus()
         val nextExpiryDate = request.expiryDate?.cleanIsoDateOrNull() ?: currentExpiryDate
         val updated = prepareStatement(
@@ -3522,6 +3606,11 @@ class DashboardRepository(
                 quantityDelta = quantityDelta,
                 balanceAfter = next,
                 note = request.note?.cleanOptional(),
+                supplierId = nextSupplierId,
+                unitCost = nextCostPrice,
+                payableAmount = payableAmount,
+                paidAmount = batchPaidAmount,
+                expiryDate = nextExpiryDate,
             )
         }
         return updated
@@ -4262,7 +4351,14 @@ class DashboardRepository(
             statement.setString(3, access.workspaceId)
             statement.executeUpdate()
         }
-        insertStockMovement(access, productId, "order", quantityDelta, next, note)
+        insertStockMovement(
+            access = access,
+            productId = productId,
+            movementType = "order",
+            quantityDelta = quantityDelta,
+            balanceAfter = next,
+            note = note,
+        )
     }
 
     private fun Connection.insertStockMovement(
@@ -4272,13 +4368,19 @@ class DashboardRepository(
         quantityDelta: BigDecimal,
         balanceAfter: BigDecimal,
         note: String?,
+        supplierId: String? = null,
+        unitCost: BigDecimal = BigDecimal.ZERO,
+        payableAmount: BigDecimal = BigDecimal.ZERO,
+        paidAmount: BigDecimal = BigDecimal.ZERO,
+        expiryDate: String? = null,
     ): StockMovementResponse {
         val sql = """
             insert into stock_movements (
                 workspace_id, product_id, movement_type, quantity_delta,
-                balance_after, note, created_by_user_id
+                balance_after, note, created_by_user_id, supplier_id,
+                unit_cost, payable_amount, paid_amount, expiry_date
             )
-            values (?::uuid, ?::uuid, ?, ?, ?, ?, ?::uuid)
+            values (?::uuid, ?::uuid, ?, ?, ?, ?, ?::uuid, ?::uuid, ?, ?, ?, ?::date)
             returning *
         """.trimIndent()
         return prepareStatement(sql).use { statement ->
@@ -4289,6 +4391,11 @@ class DashboardRepository(
             statement.setBigDecimal(5, balanceAfter.scaled())
             statement.setNullableString(6, note)
             statement.setString(7, access.userId)
+            statement.setNullableUuid(8, supplierId)
+            statement.setBigDecimal(9, unitCost.scaled())
+            statement.setBigDecimal(10, payableAmount.scaled())
+            statement.setBigDecimal(11, paidAmount.scaled())
+            statement.setNullableString(12, expiryDate)
             statement.executeQuery().use { result ->
                 result.next()
                 result.toStockMovementResponse()
@@ -4365,6 +4472,7 @@ class DashboardRepository(
     private fun PreparedStatement.bindProductRequest(
         access: DashboardWorkspaceAccess,
         request: ProductRequest,
+        supplierId: String?,
         categoryId: String?,
         startIndex: Int,
     ) {
@@ -4373,7 +4481,7 @@ class DashboardRepository(
         val stockQuantity = if (trackStock) request.stockQuantity.decimalOrZero() else BigDecimal.ZERO
         val reorderLevel = if (trackStock) request.reorderLevel.decimalOrZero() else BigDecimal.ZERO
         val duration = request.durationMinutes?.takeIf { it > 0 }?.coerceAtMost(1440)
-        setNullableUuid(startIndex, request.supplierId)
+        setNullableUuid(startIndex, supplierId)
         setNullableUuid(startIndex + 1, categoryId)
         setString(startIndex + 2, request.name.cleanName())
         setString(startIndex + 3, itemType)
@@ -4601,6 +4709,11 @@ class DashboardRepository(
             movementType = getString("movement_type"),
             quantityDelta = getBigDecimal("quantity_delta").decimalString(),
             balanceAfter = getBigDecimal("balance_after").decimalString(),
+            supplierId = getString("supplier_id"),
+            unitCost = getBigDecimal("unit_cost").moneyString(),
+            payableAmount = getBigDecimal("payable_amount").moneyString(),
+            paidAmount = getBigDecimal("paid_amount").moneyString(),
+            expiryDate = getString("expiry_date"),
             note = getString("note"),
             createdAt = getString("created_at"),
         )

@@ -30,6 +30,22 @@ data class WorkspaceRecord(
     val onboardingComplete: Boolean,
     val logoFileName: String?,
     val coverFileName: String?,
+    val website: String? = null,
+    val isTaxRegistered: Boolean? = null,
+    val taxNumber: String? = null,
+    val taxLabel: String? = null,
+    val addressLine: String? = null,
+    val city: String? = null,
+    val region: String? = null,
+    val country: String? = null,
+    val postalCode: String? = null,
+    val invoicePrefix: String? = null,
+    val nextInvoiceNumber: String? = null,
+    val paymentTerms: String? = null,
+    val invoiceFooter: String? = null,
+    val currency: String? = null,
+    val taxMode: String? = null,
+    val pricesIncludeTax: Boolean? = null,
 )
 
 data class OnboardingSessionRecord(
@@ -133,9 +149,15 @@ class OnboardingRepository(
                     phoneNumberFallback = null,
                     displayNameFallback = request.ownerName,
             )
-            val workspace = connection.upsertOwnerWorkspace(user.id, request)
-            connection.ensureOwnerMembership(workspace.id, user.id)
-                val updatedUser = connection.markUserOwnerComplete(user.id, request.ownerName)
+            val workspace = connection.upsertWorkspaceForBusinessSetup(user.id, request)
+            if (workspace.role == RoleBusinessOwner) {
+                connection.ensureOwnerMembership(workspace.id, user.id)
+            }
+                val updatedUser = connection.markUserOwnerComplete(
+                    userId = user.id,
+                    displayName = request.ownerName.ifBlank { user.displayName.orEmpty() },
+                    promoteToOwner = workspace.role == RoleBusinessOwner,
+                )
                 connection.commit()
                 updatedUser.toSession(workspace)
             } catch (error: Throwable) {
@@ -515,7 +537,23 @@ class OnboardingRepository(
                 end as role,
                 bw.onboarding_completed_at is not null as onboarding_complete,
                 bw.logo_file_name,
-                bw.cover_file_name
+                bw.cover_file_name,
+                bw.website,
+                bw.is_tax_registered,
+                bw.tax_number,
+                bw.tax_label,
+                bw.address_line,
+                bw.city,
+                bw.region,
+                bw.country,
+                bw.postal_code,
+                bw.invoice_prefix,
+                bw.next_invoice_number,
+                bw.payment_terms,
+                bw.invoice_footer,
+                bw.currency,
+                bw.tax_mode,
+                bw.prices_include_tax
             from workspace_members wm
             join business_workspaces bw on bw.id = wm.workspace_id
             where wm.user_id = ?::uuid
@@ -537,9 +575,54 @@ class OnboardingRepository(
         request: BusinessSetupRequest,
     ): WorkspaceRecord {
         findOwnerWorkspaceId(userId)?.let { workspaceId ->
-            return updateOwnerWorkspace(workspaceId, request)
+            return updateWorkspaceSettings(workspaceId, RoleBusinessOwner, request)
         }
         return insertOwnerWorkspace(userId, request)
+    }
+
+    private fun Connection.upsertWorkspaceForBusinessSetup(
+        userId: String,
+        request: BusinessSetupRequest,
+    ): WorkspaceRecord {
+        val workspace = findPrimaryWorkspace(userId)
+        if (workspace != null && workspace.role != RoleBusinessOwner) {
+            if (!hasWorkspacePermission(workspace.id, userId, PermissionManageAccount)) {
+                throw TeamAccessException(
+                    code = "team_permission_denied",
+                    message = "This staff role cannot update account settings.",
+                )
+            }
+            return updateWorkspaceSettings(workspace.id, workspace.role, request)
+        }
+        return upsertOwnerWorkspace(userId, request)
+    }
+
+    private fun Connection.hasWorkspacePermission(
+        workspaceId: String,
+        userId: String,
+        permission: String,
+    ): Boolean {
+        val sql = """
+            select role, permissions
+            from workspace_members
+            where workspace_id = ?::uuid
+              and user_id = ?::uuid
+              and status = 'active'
+            limit 1
+        """.trimIndent()
+        return prepareStatement(sql).use { statement ->
+            statement.setString(1, workspaceId)
+            statement.setString(2, userId)
+            statement.executeQuery().use { result ->
+                if (!result.next()) return@use false
+                val role = result.getString("role").normalizedTeamRole()
+                if (role == RoleBusinessOwner) return@use true
+                val permissions = result.getStringArray("permissions")
+                    .map { it.normalizedPermissionKey() }
+                    .toSet()
+                PermissionReadOnly !in permissions && permission in permissions
+            }
+        }
     }
 
     private fun Connection.findOwnerWorkspaceId(userId: String): String? {
@@ -600,6 +683,22 @@ class OnboardingRepository(
                 onboarding_completed_at is not null as onboarding_complete,
                 logo_file_name,
                 cover_file_name,
+                website,
+                is_tax_registered,
+                tax_number,
+                tax_label,
+                address_line,
+                city,
+                region,
+                country,
+                postal_code,
+                invoice_prefix,
+                next_invoice_number,
+                payment_terms,
+                invoice_footer,
+                currency,
+                tax_mode,
+                prices_include_tax,
                 null::text as invite_code
         """.trimIndent()
 
@@ -612,8 +711,9 @@ class OnboardingRepository(
         }
     }
 
-    private fun Connection.updateOwnerWorkspace(
+    private fun Connection.updateWorkspaceSettings(
         workspaceId: String,
+        role: String,
         request: BusinessSetupRequest,
     ): WorkspaceRecord {
         val sql = """
@@ -647,15 +747,32 @@ class OnboardingRepository(
                 id::text,
                 business_name,
                 legal_name,
-                'business_owner' as role,
+                ? as role,
                 onboarding_completed_at is not null as onboarding_complete,
                 logo_file_name,
                 cover_file_name,
+                website,
+                is_tax_registered,
+                tax_number,
+                tax_label,
+                address_line,
+                city,
+                region,
+                country,
+                postal_code,
+                invoice_prefix,
+                next_invoice_number,
+                payment_terms,
+                invoice_footer,
+                currency,
+                tax_mode,
+                prices_include_tax,
                 null::text as invite_code
         """.trimIndent()
 
         return prepareStatement(sql).use { statement ->
             statement.bindBusinessSetupUpdate(workspaceId, request)
+            statement.setString(23, role.normalizedTeamRole())
             statement.executeQuery().use { result ->
                 result.next()
                 result.toWorkspaceRecord()
@@ -1022,11 +1139,12 @@ class OnboardingRepository(
     private fun Connection.markUserOwnerComplete(
         userId: String,
         displayName: String,
+        promoteToOwner: Boolean,
     ): AppUserRecord {
         val sql = """
             update app_users
             set
-                role = 'business_owner',
+                role = case when ? then 'business_owner' else role end,
                 display_name = ?,
                 onboarding_status = 'complete',
                 updated_at = now()
@@ -1041,8 +1159,9 @@ class OnboardingRepository(
                 notifications_enabled
         """.trimIndent()
         return prepareStatement(sql).use { statement ->
-            statement.setString(1, displayName)
-            statement.setString(2, userId)
+            statement.setBoolean(1, promoteToOwner)
+            statement.setString(2, displayName)
+            statement.setString(3, userId)
             statement.executeQuery().use { result ->
                 result.next()
                 result.toUserRecord()
@@ -1428,6 +1547,22 @@ class OnboardingRepository(
             onboardingComplete = getBoolean("onboarding_complete"),
             logoFileName = getString("logo_file_name"),
             coverFileName = runCatching { getString("cover_file_name") }.getOrNull(),
+            website = runCatching { getString("website") }.getOrNull(),
+            isTaxRegistered = runCatching { getBoolean("is_tax_registered") }.getOrNull(),
+            taxNumber = runCatching { getString("tax_number") }.getOrNull(),
+            taxLabel = runCatching { getString("tax_label") }.getOrNull(),
+            addressLine = runCatching { getString("address_line") }.getOrNull(),
+            city = runCatching { getString("city") }.getOrNull(),
+            region = runCatching { getString("region") }.getOrNull(),
+            country = runCatching { getString("country") }.getOrNull(),
+            postalCode = runCatching { getString("postal_code") }.getOrNull(),
+            invoicePrefix = runCatching { getString("invoice_prefix") }.getOrNull(),
+            nextInvoiceNumber = runCatching { getString("next_invoice_number") }.getOrNull(),
+            paymentTerms = runCatching { getString("payment_terms") }.getOrNull(),
+            invoiceFooter = runCatching { getString("invoice_footer") }.getOrNull(),
+            currency = runCatching { getString("currency") }.getOrNull(),
+            taxMode = runCatching { getString("tax_mode") }.getOrNull(),
+            pricesIncludeTax = runCatching { getBoolean("prices_include_tax") }.getOrNull(),
         )
 
     private fun ResultSet.toTeamMemberRecord(): TeamMemberRecord =
@@ -1589,6 +1724,8 @@ class OnboardingRepository(
             PermissionCreateOffer,
             PermissionManageStock,
             PermissionManageCustomers,
+            PermissionManageAccount,
+            PermissionManageMarketing,
             PermissionDownloadInvoice,
         )
         "cashier" -> listOf(
@@ -1645,6 +1782,8 @@ class OnboardingRepository(
         const val PermissionCreateOffer = "create_offer"
         const val PermissionManageStock = "manage_stock"
         const val PermissionManageCustomers = "manage_customers"
+        const val PermissionManageAccount = "manage_account"
+        const val PermissionManageMarketing = "manage_marketing"
         const val PermissionDownloadInvoice = "download_invoice"
         val AllowedTeamRoles = setOf(
             RoleBusinessOwner,
@@ -1666,6 +1805,8 @@ class OnboardingRepository(
             PermissionCreateOffer,
             PermissionManageStock,
             PermissionManageCustomers,
+            PermissionManageAccount,
+            PermissionManageMarketing,
             PermissionDownloadInvoice,
             PermissionReadOnly,
         )
