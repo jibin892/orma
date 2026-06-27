@@ -84,6 +84,15 @@
                         import("https://www.gstatic.com/firebasejs/11.10.0/firebase-app.js"),
                         import("https://www.gstatic.com/firebasejs/11.10.0/firebase-messaging.js")
                     ]).then(async ([appModule, messagingModule]) => {
+                        if (typeof messagingModule.isSupported === "function") {
+                            const supported = await messagingModule.isSupported();
+                            if (!supported) {
+                                throw {
+                                    code: "WEB_MESSAGING_UNSUPPORTED",
+                                    message: "This browser cannot create Firebase web push tokens."
+                                };
+                            }
+                        }
                         const app = appModule.getApps().length
                             ? appModule.getApps()[0]
                             : appModule.initializeApp(firebaseConfig);
@@ -137,6 +146,42 @@
                         data: payload && payload.data ? payload.data : {}
                     });
                 });
+            }
+
+            function webMessagingTokenError(error) {
+                const code = error && error.code ? error.code : "FIREBASE_WEB_MESSAGING_TOKEN_FAILED";
+                const message = error && error.message ? error.message : "";
+                if (
+                    code === "messaging/token-subscribe-failed" ||
+                    code === "messaging/token-update-failed" ||
+                    message.indexOf("missing required authentication credential") >= 0 ||
+                    message.indexOf("Expected OAuth 2 access token") >= 0
+                ) {
+                    return {
+                        errorTitle: "Web push setup needs Firebase access",
+                        errorMessage: "Firebase rejected the browser push-token registration. Check Firebase Console: Web Push certificate key pair, Firebase Installations API, Firebase Cloud Messaging API, and API key domain restrictions for this web app.",
+                        errorCode: code
+                    };
+                }
+                if (code === "messaging/permission-blocked") {
+                    return {
+                        errorTitle: "Notifications are blocked",
+                        errorMessage: "Allow notifications for this site in browser settings to receive ORMA workspace alerts.",
+                        errorCode: code
+                    };
+                }
+                if (code === "WEB_MESSAGING_UNSUPPORTED" || code === "messaging/unsupported-browser") {
+                    return {
+                        errorTitle: "Web notifications are not supported",
+                        errorMessage: message || "This browser does not support Firebase web push notifications.",
+                        errorCode: code
+                    };
+                }
+                return {
+                    errorTitle: "Web notifications are not connected",
+                    errorMessage: message || "ORMA could not create a browser notification token.",
+                    errorCode: code
+                };
             }
 
             function currentUserWhenReady(auth, authModule, timeoutMs) {
@@ -412,7 +457,11 @@
                         const { messagingModule, messaging } = await messagingBundle();
                         let serviceWorkerRegistration = null;
                         if ("serviceWorker" in navigator) {
-                            serviceWorkerRegistration = await navigator.serviceWorker.register("/firebase-messaging-sw.js");
+                            serviceWorkerRegistration = await navigator.serviceWorker.register("/firebase-messaging-sw.js", { scope: "/" });
+                            if (serviceWorkerRegistration.update) {
+                                serviceWorkerRegistration.update().catch(() => undefined);
+                            }
+                            serviceWorkerRegistration = await navigator.serviceWorker.ready;
                         } else {
                             return {
                                 token: "",
@@ -453,12 +502,13 @@
                             deviceName: navigator.userAgent || "Web browser"
                         };
                     } catch (error) {
+                        const mapped = webMessagingTokenError(error);
                         return {
                             token: "",
                             deviceName: "",
-                            errorTitle: "Web notifications are not connected",
-                            errorMessage: error && error.message ? error.message : "ORMA could not create a browser notification token.",
-                            errorCode: error && error.code ? error.code : "FIREBASE_WEB_MESSAGING_TOKEN_FAILED"
+                            errorTitle: mapped.errorTitle,
+                            errorMessage: mapped.errorMessage,
+                            errorCode: mapped.errorCode
                         };
                     }
                 },
