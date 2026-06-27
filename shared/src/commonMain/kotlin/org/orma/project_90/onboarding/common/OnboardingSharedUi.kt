@@ -12267,6 +12267,7 @@ private fun DashboardInvoiceBuilderPage(
 private fun DashboardOrderBuilderPage(
     state: OnboardingUiState,
     initialOrderType: String?,
+    initialDraft: OrmaOrderDraft? = null,
     wide: Boolean,
     onBack: () -> Unit,
     onSubmit: (OrmaOrderDraft) -> Unit,
@@ -12275,7 +12276,10 @@ private fun DashboardOrderBuilderPage(
     var attemptedSubmit by rememberSaveable { mutableStateOf(false) }
     val allowedOrderTypes = (
         state.allowedDashboardOrderTypes() +
-            listOfNotNull(initialOrderType?.takeIf { it in DashboardCounterCreateOrderTypes })
+            listOfNotNull(
+                initialOrderType?.takeIf { it in DashboardCounterCreateOrderTypes },
+                initialDraft?.orderType?.takeIf { it in DashboardCounterCreateOrderTypes },
+            )
         ).distinct()
     fun blankOrderDraft(orderType: String): OrmaOrderDraft =
         OrmaOrderDraft(
@@ -12285,13 +12289,22 @@ private fun DashboardOrderBuilderPage(
             currency = state.dashboard.summary.currency.ifBlank { state.draft.currency.ifBlank { "INR" } },
             items = emptyList(),
         )
-    var draft by remember(initialOrderType, allowedOrderTypes.joinToString("|")) {
+    var draft by remember(initialOrderType, initialDraft, allowedOrderTypes.joinToString("|")) {
         val defaultOrderType = initialOrderType
             ?.takeIf { it in allowedOrderTypes }
+            ?: initialDraft?.orderType?.takeIf { it in allowedOrderTypes }
             ?: state.activeDashboardOrderType()
                 .takeIf { it in allowedOrderTypes }
             ?: allowedOrderTypes.first()
-        mutableStateOf(blankOrderDraft(defaultOrderType))
+        val defaultDraft = blankOrderDraft(defaultOrderType)
+        val seedDraft = initialDraft
+            ?.takeIf { it.orderType in allowedOrderTypes }
+            ?.copy(
+                currency = initialDraft.currency.ifBlank { defaultDraft.currency },
+                fulfillmentType = initialDraft.fulfillmentType.ifBlank { defaultDraft.fulfillmentType },
+                status = initialDraft.status.ifBlank { defaultDraft.status },
+            )
+        mutableStateOf(seedDraft ?: defaultDraft)
     }
     var itemSearch by rememberSaveable(draft.orderType) { mutableStateOf("") }
     var selectedCategoryId by rememberSaveable(draft.orderType) { mutableStateOf(DashboardInvoiceCategoryAll) }
@@ -15239,13 +15252,23 @@ private fun DashboardCustomersContent(
 ) {
     var showCustomerSheet by rememberSaveable { mutableStateOf(false) }
     var wideSelectedCustomerId by rememberSaveable { mutableStateOf<String?>(null) }
+    var createSaleCustomerId by rememberSaveable { mutableStateOf<String?>(null) }
     val visibleCustomers = filteredDashboardCustomers(state)
     val selectedCustomerId = if (wide) wideSelectedCustomerId else mobileSelectedCustomerId
     val selectedCustomer = state.dashboard.customers.firstOrNull { it.id == selectedCustomerId }
+    val createSaleCustomer = state.dashboard.customers.firstOrNull { it.id == createSaleCustomerId }
     val selectedCustomerOrders = selectedCustomer?.let { state.customerOrders(it) }.orEmpty()
     val selectedCustomerHistoryLoading = selectedCustomerId != null &&
         selectedCustomerId in state.dashboard.customerOrderHistoryLoading
     val selectedCustomerHistoryError = selectedCustomerId?.let { state.dashboard.customerOrderHistoryErrors[it] }
+    fun openCreateSale(customer: OrmaCustomer) {
+        createSaleCustomerId = customer.id
+        onRequestScrollTop()
+    }
+    fun closeCreateSale() {
+        createSaleCustomerId = null
+        onRequestScrollTop()
+    }
     fun openCustomer(customer: OrmaCustomer) {
         if (wide) {
             wideSelectedCustomerId = customer.id
@@ -15271,7 +15294,32 @@ private fun DashboardCustomersContent(
             actions.onLoadCustomerOrders(customerId)
         }
     }
-    if (selectedCustomer != null && wide) {
+    if (createSaleCustomer != null) {
+        OrmaBackHandler(
+            enabled = !wide,
+            onBack = ::closeCreateSale,
+        )
+        DashboardOrderBuilderPage(
+            state = state,
+            initialOrderType = "sale",
+            initialDraft = OrmaOrderDraft(
+                orderType = "sale",
+                status = "confirmed",
+                fulfillmentType = "standard",
+                currency = state.dashboard.summary.currency.ifBlank { state.draft.currency.ifBlank { "INR" } },
+                items = emptyList(),
+            ).withOrderCustomer(createSaleCustomer),
+            wide = wide,
+            onBack = ::closeCreateSale,
+            onSubmit = { draft ->
+                actions.onCreateOrder(draft)
+                closeCreateSale()
+            },
+            onHoldAndNew = { draft ->
+                actions.onCreateOrder(draft)
+            },
+        )
+    } else if (selectedCustomer != null && wide) {
         CustomerDetailsScreen(
             state = state,
             customer = selectedCustomer,
@@ -15280,6 +15328,11 @@ private fun DashboardCustomersContent(
             historyError = selectedCustomerHistoryError,
             wide = wide,
             onBack = ::closeCustomer,
+            onCreateSale = if (state.hasDashboardPermission(DashboardTeamPermissionCreateSale)) {
+                { openCreateSale(selectedCustomer) }
+            } else {
+                null
+            },
         )
     } else if (selectedCustomer != null) {
         OrmaBackHandler(
@@ -15294,6 +15347,11 @@ private fun DashboardCustomersContent(
             historyError = selectedCustomerHistoryError,
             showCloseAction = false,
             onClose = ::closeCustomer,
+            onCreateSale = if (state.hasDashboardPermission(DashboardTeamPermissionCreateSale)) {
+                { openCreateSale(selectedCustomer) }
+            } else {
+                null
+            },
         )
     } else if (wide) {
         DashboardCustomersWorkspace(
@@ -23020,6 +23078,7 @@ private fun CustomerDetailsScreen(
     historyError: String?,
     wide: Boolean,
     onBack: () -> Unit,
+    onCreateSale: (() -> Unit)?,
 ) {
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -23054,6 +23113,14 @@ private fun CustomerDetailsScreen(
                             )
                         }
                         CustomerDetailsHeaderCopy(customer = customer)
+                        if (onCreateSale != null) {
+                            DashboardWideActionButton(
+                                text = "Create sale",
+                                onClick = onCreateSale,
+                                modifier = Modifier.fillMaxWidth(),
+                                primary = true,
+                            )
+                        }
                     }
                 } else {
                     Row(
@@ -23066,6 +23133,14 @@ private fun CustomerDetailsScreen(
                             customer = customer,
                             modifier = Modifier.weight(1f),
                         )
+                        if (onCreateSale != null) {
+                            DashboardWideActionButton(
+                                text = "Create sale",
+                                onClick = onCreateSale,
+                                modifier = Modifier.widthIn(min = 160.dp),
+                                primary = true,
+                            )
+                        }
                         OrmaBadge(
                             text = customer.status.dashboardTeamStatusLabel().uppercase(),
                             tone = if (customer.status.lowercase() == "active") OrmaStatusTone.Success else OrmaStatusTone.Info,
@@ -23082,6 +23157,7 @@ private fun CustomerDetailsScreen(
             historyError = historyError,
             showCloseAction = false,
             onClose = onBack,
+            onCreateSale = onCreateSale,
         )
     }
 }
@@ -23154,6 +23230,7 @@ private fun DashboardCustomerDetailsPanel(
         historyError = historyError,
         showCloseAction = true,
         onClose = onClose,
+        onCreateSale = null,
     )
 }
 
@@ -23166,6 +23243,7 @@ private fun CustomerDetailsContent(
     historyError: String?,
     showCloseAction: Boolean,
     onClose: () -> Unit,
+    onCreateSale: (() -> Unit)?,
 ) {
     val currency = orders.firstOrNull()?.currency ?: "INR"
     val totalBilled = orders.sumOf { it.total.toDoubleOrNull() ?: 0.0 }.toDashboardMoneyInput()
@@ -23200,6 +23278,14 @@ private fun CustomerDetailsContent(
             OrmaBadge(
                 text = customer.status.dashboardTeamStatusLabel().uppercase(),
                 tone = if (customer.status.lowercase() == "active") OrmaStatusTone.Success else OrmaStatusTone.Info,
+            )
+        }
+        if (onCreateSale != null) {
+            DashboardWideActionButton(
+                text = "Create sale for this customer",
+                onClick = onCreateSale,
+                modifier = Modifier.fillMaxWidth(),
+                primary = true,
             )
         }
         Row(
@@ -28809,6 +28895,20 @@ private fun OrmaOrderDraft.withInvoiceCustomer(customer: OrmaCustomer): OrmaOrde
     copy(
         customerId = customer.id,
         customerName = "",
+        customerPhoneNumber = customer.phoneNumber.orEmpty(),
+        customerEmail = customer.email.orEmpty(),
+        customerTaxNumber = customer.taxNumber.orEmpty(),
+        customerAddressLine = customer.addressLine.orEmpty(),
+        customerCity = customer.city.orEmpty(),
+        customerRegion = customer.region.orEmpty(),
+        customerCountry = customer.country.orEmpty(),
+        customerPostalCode = customer.postalCode.orEmpty(),
+    )
+
+private fun OrmaOrderDraft.withOrderCustomer(customer: OrmaCustomer): OrmaOrderDraft =
+    copy(
+        customerId = customer.id,
+        customerName = customer.name,
         customerPhoneNumber = customer.phoneNumber.orEmpty(),
         customerEmail = customer.email.orEmpty(),
         customerTaxNumber = customer.taxNumber.orEmpty(),
