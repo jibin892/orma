@@ -838,6 +838,10 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
                     return@launch
                 }
             }
+            handleDesktopNotificationPreview(
+                notifications = summary.notificationPreview,
+                notifyNewEvents = snapshot.dashboard.hasLoaded,
+            )
             val businessMode = summary.businessMode.ifBlank { snapshot.draft.businessMode }
             val homeFilters = rawHomeFilters.forBusinessMode(businessMode)
             val customerFilters = snapshot.dashboard.filtersForScope(DashboardFilterScopeCustomers)
@@ -2050,6 +2054,26 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
         }
     }
 
+    LaunchedEffect(state.step, state.workspaceId, state.notificationsEnabled) {
+        if (
+            state.step == OnboardingStep.Dashboard &&
+            state.workspaceId.isNotBlank() &&
+            state.notificationsEnabled &&
+            isOrmaDesktopRuntime()
+        ) {
+            while (true) {
+                delay(30_000)
+                if (
+                    state.step == OnboardingStep.Dashboard &&
+                    state.notificationsEnabled &&
+                    !state.dashboard.loading
+                ) {
+                    refreshDashboard()
+                }
+            }
+        }
+    }
+
     val actions = OnboardingActions(
         onIdentifierTypeChange = {
             state = state.copy(
@@ -2558,6 +2582,11 @@ private fun String.allowedDashboardItemTypes(): List<String> =
         "mixed" -> listOf("product", "service", "appointment")
         else -> listOf("product")
     }
+
+private fun isOrmaDesktopRuntime(): Boolean {
+    val platform = getPlatform().name.lowercase()
+    return platform.contains("desktop") || platform.contains("jvm")
+}
 
 private fun String.sellableItemTypeLabel(): String =
     when (this) {

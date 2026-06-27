@@ -159,7 +159,7 @@
                 ) {
                     return {
                         errorTitle: "Web push setup needs Firebase access",
-                        errorMessage: "Firebase rejected the browser push-token registration. Check Firebase Console: Web Push certificate key pair, Firebase Installations API, Firebase Cloud Messaging API, and API key domain restrictions for this web app.",
+                        errorMessage: "Firebase rejected this browser push registration. In Firebase/Google Cloud, verify the Web Push key, Firebase Installations API, Firebase Cloud Messaging API, and API key domain restrictions for localhost and the deployed ORMA domain.",
                         errorCode: code
                     };
                 }

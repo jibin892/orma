@@ -33720,7 +33720,10 @@ private fun DashboardAccountNotificationCard(
 
 private fun dashboardNotificationSupportedOnCurrentPlatform(): Boolean {
     val platform = getPlatform().name.lowercase()
-    return isOrmaWebDownloadSurface() || platform.contains("android")
+    return isOrmaWebDownloadSurface() ||
+        platform.contains("android") ||
+        platform.contains("desktop") ||
+        platform.contains("jvm")
 }
 
 private fun dashboardNotificationPlatformCopy(enabled: Boolean): String {
@@ -33729,7 +33732,7 @@ private fun dashboardNotificationPlatformCopy(enabled: Boolean): String {
         enabled -> "This device is registered for workspace alerts."
         isOrmaWebDownloadSurface() -> "Enable browser notifications to receive catalog orders and refresh the open sales queue."
         platform.contains("android") -> "Enable Android notifications to receive catalog orders on this device."
-        platform.contains("desktop") || platform.contains("jvm") -> "Desktop push is not connected yet. Use web or Android notifications for live alerts on this workspace."
+        platform.contains("desktop") || platform.contains("jvm") -> "Enable desktop alerts for catalog orders while this app is open."
         platform.contains("ios") -> "iOS push is not connected yet. Use web or Android notifications for live alerts on this workspace."
         else -> "Enable notifications to receive catalog orders and workspace alerts on supported devices."
     }
@@ -33740,7 +33743,7 @@ private fun dashboardNotificationDeliveryLabel(): String {
     return when {
         isOrmaWebDownloadSurface() -> "Web push"
         platform.contains("android") -> "Firebase Android"
-        platform.contains("desktop") || platform.contains("jvm") -> "Not connected"
+        platform.contains("desktop") || platform.contains("jvm") -> "Desktop app"
         platform.contains("ios") -> "Not connected"
         else -> "Supported devices"
     }
