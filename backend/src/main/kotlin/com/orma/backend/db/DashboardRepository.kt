@@ -5971,6 +5971,15 @@ class DashboardRepository(
         }
     }
 
+    private fun String.cleanSessionStatus(): String {
+        val normalized = trim().lowercase().replace("-", "_").filter { it.isLetterOrDigit() || it == '_' }
+        return if (normalized in setOf("scheduled", "confirmed", "completed", "cancelled", "missed")) {
+            normalized
+        } else {
+            "scheduled"
+        }
+    }
+
     private fun validateCreditPaymentStatus(paymentMode: String, status: String) {
         if (paymentMode == "credit" && status.impliesFullPayment()) {
             throw DashboardOrderValidationException(

@@ -540,6 +540,22 @@ data class OrmaOrder(
     val source: String = "dashboard",
     val itemCount: Int,
     val items: List<OrmaOrderItem> = emptyList(),
+    val sessions: List<OrmaOrderSession> = emptyList(),
+    val createdAt: String = "",
+    val updatedAt: String = "",
+)
+
+data class OrmaOrderSession(
+    val id: String,
+    val orderId: String,
+    val orderItemId: String? = null,
+    val sequenceNumber: Int = 1,
+    val title: String,
+    val scheduledAt: String? = null,
+    val status: String = "scheduled",
+    val addonTotal: String = "0.00",
+    val paidTotal: String = "0.00",
+    val notes: String? = null,
     val createdAt: String = "",
     val updatedAt: String = "",
 )
@@ -654,6 +670,19 @@ data class OrmaOrderDraft(
     val fulfillmentType: String = "standard",
     val paymentMode: String = "pay_on_spot",
     val items: List<OrmaOrderItemDraft> = listOf(OrmaOrderItemDraft()),
+    val sessions: List<OrmaOrderSessionDraft> = emptyList(),
+)
+
+data class OrmaOrderSessionDraft(
+    val id: String = "",
+    val orderItemId: String = "",
+    val sequenceNumber: Int = 1,
+    val title: String = "",
+    val scheduledAt: String = "",
+    val status: String = "scheduled",
+    val addonTotal: String = "0",
+    val paidTotal: String = "0",
+    val notes: String = "",
 )
 
 data class OrmaOrderItemDraft(
@@ -2579,6 +2608,23 @@ private fun String.toOrder(): OrmaOrder =
         source = jsonString("source") ?: "dashboard",
         itemCount = jsonInt("itemCount") ?: 0,
         items = jsonObjectsInArray("items").map { it.toOrderItem() },
+        sessions = jsonObjectsInArray("sessions").map { it.toOrderSession() },
+        createdAt = jsonString("createdAt").orEmpty(),
+        updatedAt = jsonString("updatedAt").orEmpty(),
+    )
+
+private fun String.toOrderSession(): OrmaOrderSession =
+    OrmaOrderSession(
+        id = jsonString("id").orEmpty(),
+        orderId = jsonString("orderId").orEmpty(),
+        orderItemId = jsonString("orderItemId"),
+        sequenceNumber = jsonInt("sequenceNumber") ?: 1,
+        title = jsonString("title").orEmpty(),
+        scheduledAt = jsonString("scheduledAt"),
+        status = jsonString("status") ?: "scheduled",
+        addonTotal = jsonDecimalString("addonTotal") ?: "0.00",
+        paidTotal = jsonDecimalString("paidTotal") ?: "0.00",
+        notes = jsonString("notes"),
         createdAt = jsonString("createdAt").orEmpty(),
         updatedAt = jsonString("updatedAt").orEmpty(),
     )
@@ -2853,6 +2899,21 @@ private fun OrmaOrderDraft.toOrderRequestJson(): String {
                 "taxRate" to JsonValue.StringValue(item.taxRate.blankToZero()),
             )
         }
+    val sessionsJson = sessions
+        .filter { it.title.isNotBlank() || it.status.isNotBlank() || it.scheduledAt.isNotBlank() }
+        .joinToString(prefix = "[", postfix = "]") { session ->
+            buildJsonObject(
+                "id" to JsonValue.StringValue(session.id.blankToNull()),
+                "orderItemId" to JsonValue.StringValue(session.orderItemId.blankToNull()),
+                "sequenceNumber" to JsonValue.RawValue(session.sequenceNumber.coerceAtLeast(1).toString()),
+                "title" to JsonValue.StringValue(session.title),
+                "scheduledAt" to JsonValue.StringValue(session.scheduledAt.blankToNull()),
+                "status" to JsonValue.StringValue(session.status.ifBlank { "scheduled" }),
+                "addonTotal" to JsonValue.StringValue(session.addonTotal.blankToZero()),
+                "paidTotal" to JsonValue.StringValue(session.paidTotal.blankToZero()),
+                "notes" to JsonValue.StringValue(session.notes.blankToNull()),
+            )
+        }
     return buildJsonObject(
         "customerId" to JsonValue.StringValue(customerId.blankToNull()),
         "customerName" to JsonValue.StringValue(customerName.blankToNull()),
@@ -2874,6 +2935,7 @@ private fun OrmaOrderDraft.toOrderRequestJson(): String {
         "fulfillmentType" to JsonValue.StringValue(fulfillmentType),
         "paymentMode" to JsonValue.StringValue(paymentMode),
         "items" to JsonValue.RawValue(itemsJson),
+        "sessions" to JsonValue.RawValue(sessionsJson),
     )
 }
 

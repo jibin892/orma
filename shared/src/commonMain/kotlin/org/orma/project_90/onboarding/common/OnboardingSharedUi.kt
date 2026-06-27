@@ -124,6 +124,8 @@ import org.orma.project_90.backend.OrmaOrder
 import org.orma.project_90.backend.OrmaOrderDraft
 import org.orma.project_90.backend.OrmaOrderItem
 import org.orma.project_90.backend.OrmaOrderItemDraft
+import org.orma.project_90.backend.OrmaOrderSession
+import org.orma.project_90.backend.OrmaOrderSessionDraft
 import org.orma.project_90.backend.OrmaPagination
 import org.orma.project_90.backend.OrmaPrinterDraft
 import org.orma.project_90.backend.OrmaPrinterProfile
@@ -21720,8 +21722,22 @@ private fun DashboardBookingDetailsContent(
 ) {
     var showDeliverySheet by rememberSaveable(order.id) { mutableStateOf(false) }
     var showDispatchSheet by rememberSaveable(order.id) { mutableStateOf(false) }
+    var addonSessionId by rememberSaveable(order.id) { mutableStateOf<String?>(null) }
     val canEditSale = state.hasDashboardPermission(DashboardTeamPermissionEditSale)
     val canChangeStatus = state.hasDashboardPermission(DashboardTeamPermissionChangeBookingStatus)
+    fun updateSession(
+        sessionId: String,
+        transform: (OrmaOrderSessionDraft) -> OrmaOrderSessionDraft,
+    ) {
+        val draft = order.toOrderDraft()
+        onUpdateOrder(
+            draft.copy(
+                sessions = draft.sessions.map { session ->
+                    if (session.id == sessionId) transform(session) else session
+                },
+            ),
+        )
+    }
     if (wide) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -21739,6 +21755,18 @@ private fun DashboardBookingDetailsContent(
                 onDownloadStatus = onDownloadStatus,
             )
             BookingDetailsLineItemsCard(order = order)
+            BookingDetailsPackageSessionsCard(
+                order = order,
+                canEditSessions = canEditSale,
+                canCompleteSessions = canChangeStatus,
+                actionLoading = actionLoading,
+                onCompleteSession = { session ->
+                    updateSession(session.id) { it.copy(status = "completed") }
+                },
+                onAddAddon = { session ->
+                    addonSessionId = session.id
+                },
+            )
         }
             Column(
                 modifier = Modifier.weight(0.92f),
@@ -21776,6 +21804,7 @@ private fun DashboardBookingDetailsContent(
             state = state,
             order = order,
             onStatusChange = onStatusChange,
+            onUpdateOrder = onUpdateOrder,
             canEditSale = canEditSale,
             canChangeStatus = canChangeStatus,
             onScheduleDispatch = { showDispatchSheet = true },
@@ -21783,6 +21812,34 @@ private fun DashboardBookingDetailsContent(
             onMarkCompleted = { onStatusChange("completed") },
             onDownloadStatus = onDownloadStatus,
             actionLoading = actionLoading,
+        )
+    }
+    val addonSession = addonSessionId?.let { id -> order.sessions.firstOrNull { it.id == id } }
+    if (addonSession != null) {
+        BookingSessionAddonSheet(
+            order = order,
+            session = addonSession,
+            wide = wide,
+            actionLoading = actionLoading,
+            onDismiss = { addonSessionId = null },
+            onSubmit = { addonAmount, paidAmount, note ->
+                updateSession(addonSession.id) { session ->
+                    val nextAddon = session.addonTotal.toDoubleOrNull().orZero() + addonAmount
+                    val nextPaid = session.paidTotal.toDoubleOrNull().orZero() + paidAmount
+                    session.copy(
+                        addonTotal = nextAddon.toDashboardMoneyInput(),
+                        paidTotal = nextPaid.toDashboardMoneyInput(),
+                        notes = appendSessionNote(
+                            existing = session.notes,
+                            amount = addonAmount,
+                            paid = paidAmount,
+                            currency = order.currency,
+                            note = note,
+                        ),
+                    )
+                }
+                addonSessionId = null
+            },
         )
     }
     if (showDeliverySheet) {
@@ -21816,6 +21873,7 @@ private fun DashboardMobileBookingDetailsContent(
     state: OnboardingUiState,
     order: OrmaOrder,
     onStatusChange: (String) -> Unit,
+    onUpdateOrder: (OrmaOrderDraft) -> Unit,
     canEditSale: Boolean,
     canChangeStatus: Boolean,
     onScheduleDispatch: () -> Unit,
@@ -21825,7 +21883,21 @@ private fun DashboardMobileBookingDetailsContent(
     actionLoading: Boolean,
 ) {
     var showItemsSheet by rememberSaveable(order.id) { mutableStateOf(false) }
+    var addonSessionId by rememberSaveable(order.id) { mutableStateOf<String?>(null) }
     val upiMethod = state.dashboard.defaultUpiPaymentMethod()
+    fun updateSession(
+        sessionId: String,
+        transform: (OrmaOrderSessionDraft) -> OrmaOrderSessionDraft,
+    ) {
+        val draft = order.toOrderDraft()
+        onUpdateOrder(
+            draft.copy(
+                sessions = draft.sessions.map { session ->
+                    if (session.id == sessionId) transform(session) else session
+                },
+            ),
+        )
+    }
     BookingDetailsMobileValueCard(order = order)
     if (order.balanceDueValue() > 0.0) {
         if (upiMethod != null) {
@@ -21859,6 +21931,18 @@ private fun DashboardMobileBookingDetailsContent(
         onEditDelivery = if (canEditSale) onEditDelivery else null,
         actionLoading = actionLoading,
     )
+    BookingDetailsPackageSessionsCard(
+        order = order,
+        canEditSessions = canEditSale,
+        canCompleteSessions = canChangeStatus,
+        actionLoading = actionLoading,
+        onCompleteSession = { session ->
+            updateSession(session.id) { it.copy(status = "completed") }
+        },
+        onAddAddon = { session ->
+            addonSessionId = session.id
+        },
+    )
     BookingDetailsDocumentsCard(
         state = state,
         order = order,
@@ -21873,6 +21957,34 @@ private fun DashboardMobileBookingDetailsContent(
         ) {
             BookingDetailsLineItemsCard(order = order)
         }
+    }
+    val addonSession = addonSessionId?.let { id -> order.sessions.firstOrNull { it.id == id } }
+    if (addonSession != null) {
+        BookingSessionAddonSheet(
+            order = order,
+            session = addonSession,
+            wide = false,
+            actionLoading = actionLoading,
+            onDismiss = { addonSessionId = null },
+            onSubmit = { addonAmount, paidAmount, note ->
+                updateSession(addonSession.id) { session ->
+                    val nextAddon = session.addonTotal.toDoubleOrNull().orZero() + addonAmount
+                    val nextPaid = session.paidTotal.toDoubleOrNull().orZero() + paidAmount
+                    session.copy(
+                        addonTotal = nextAddon.toDashboardMoneyInput(),
+                        paidTotal = nextPaid.toDashboardMoneyInput(),
+                        notes = appendSessionNote(
+                            existing = session.notes,
+                            amount = addonAmount,
+                            paid = paidAmount,
+                            currency = order.currency,
+                            note = note,
+                        ),
+                    )
+                }
+                addonSessionId = null
+            },
+        )
     }
 }
 
@@ -22643,6 +22755,249 @@ private fun BookingLineItemRow(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
+    }
+}
+
+@Composable
+private fun BookingDetailsPackageSessionsCard(
+    order: OrmaOrder,
+    canEditSessions: Boolean,
+    canCompleteSessions: Boolean,
+    actionLoading: Boolean,
+    onCompleteSession: (OrmaOrderSession) -> Unit,
+    onAddAddon: (OrmaOrderSession) -> Unit,
+) {
+    val sessionBackedOrder = order.orderType in setOf("appointment", "service") || order.sessions.isNotEmpty()
+    if (!sessionBackedOrder) return
+    val sessions = order.sessions.sortedBy { it.sequenceNumber }
+    val completedCount = sessions.count { it.status.trim().lowercase() == "completed" }
+    DashboardRecordCard {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.Top,
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(3.dp),
+            ) {
+                Text(
+                    text = when (order.orderType) {
+                        "appointment" -> "Appointment sessions"
+                        "service" -> "Service sessions"
+                        else -> "Package sessions"
+                    },
+                    style = MaterialTheme.typography.titleSmall,
+                    color = OrmaColors.TextPrimary,
+                )
+                Text(
+                    text = if (sessions.isEmpty()) {
+                        "Save this record once to generate the package session schedule."
+                    } else {
+                        "$completedCount of ${sessions.size} completed"
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = OrmaColors.TextSecondary,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            OrmaBadge(
+                text = if (sessions.isEmpty()) "PENDING" else "$completedCount/${sessions.size}",
+                tone = if (sessions.isNotEmpty() && completedCount == sessions.size) {
+                    OrmaStatusTone.Success
+                } else {
+                    OrmaStatusTone.Info
+                },
+            )
+        }
+        if (sessions.isEmpty()) {
+            DashboardChecklistRow(text = "Select a package option during ${order.orderType.orderTypeLabel().lowercase()} creation to create multiple sessions.")
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                sessions.forEach { session ->
+                    BookingSessionRow(
+                        order = order,
+                        session = session,
+                        canEditSessions = canEditSessions,
+                        canCompleteSessions = canCompleteSessions,
+                        actionLoading = actionLoading,
+                        onCompleteSession = onCompleteSession,
+                        onAddAddon = onAddAddon,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BookingSessionRow(
+    order: OrmaOrder,
+    session: OrmaOrderSession,
+    canEditSessions: Boolean,
+    canCompleteSessions: Boolean,
+    actionLoading: Boolean,
+    onCompleteSession: (OrmaOrderSession) -> Unit,
+    onAddAddon: (OrmaOrderSession) -> Unit,
+) {
+    val completed = session.status.trim().lowercase() == "completed"
+    val sessionTotal = session.addonTotal.toDoubleOrNull().orZero()
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = OrmaShapes.SmallCard,
+        color = OrmaColors.ScreenBackground,
+        contentColor = OrmaColors.TextPrimary,
+        border = BorderStroke(0.8.dp, OrmaColors.Hairline),
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top,
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(3.dp),
+                ) {
+                    Text(
+                        text = session.title.ifBlank { "Session ${session.sequenceNumber}" },
+                        style = MaterialTheme.typography.labelLarge,
+                        color = OrmaColors.TextPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = buildList {
+                            add("Session ${session.sequenceNumber}")
+                            session.scheduledAt?.takeIf { it.isNotBlank() }?.let { add(it.dashboardDateLabel()) }
+                            if (sessionTotal > 0.0) add("${dashboardMoney(session.addonTotal, order.currency)} add-ons")
+                        }.joinToString(" · "),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = OrmaColors.TextSecondary,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                OrmaBadge(
+                    text = session.status.dashboardStatusLabel().uppercase(),
+                    tone = session.status.sessionStatusTone(),
+                )
+            }
+            session.notes?.takeIf { it.isNotBlank() }?.let { notes ->
+                Text(
+                    text = notes,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = OrmaColors.TextSecondary,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (canEditSessions || (canCompleteSessions && !completed)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    if (canEditSessions) {
+                        DashboardWideActionButton(
+                            text = "Add add-on / payment",
+                            onClick = { onAddAddon(session) },
+                            modifier = Modifier.weight(1f),
+                            enabled = !actionLoading,
+                        )
+                    }
+                    if (canCompleteSessions && !completed) {
+                        DashboardWideActionButton(
+                            text = "Complete session",
+                            onClick = { onCompleteSession(session) },
+                            modifier = Modifier.weight(1f),
+                            primary = true,
+                            enabled = !actionLoading,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BookingSessionAddonSheet(
+    order: OrmaOrder,
+    session: OrmaOrderSession,
+    wide: Boolean,
+    actionLoading: Boolean,
+    onDismiss: () -> Unit,
+    onSubmit: (addonAmount: Double, paidAmount: Double, note: String) -> Unit,
+) {
+    var addonAmount by rememberSaveable(session.id) { mutableStateOf("") }
+    var paidAmount by rememberSaveable(session.id) { mutableStateOf("") }
+    var note by rememberSaveable(session.id) { mutableStateOf("") }
+    var attemptedSubmit by rememberSaveable(session.id) { mutableStateOf(false) }
+    val addonError = optionalNonNegativeDecimalError(addonAmount, "Add-on amount must be zero or higher.")
+    val paidError = optionalNonNegativeDecimalError(paidAmount, "Paid amount must be zero or higher.")
+    val addonValue = addonAmount.toDoubleOrNull().orZero()
+    val paidValue = paidAmount.toDoubleOrNull().orZero()
+    val formReady = addonError == null && paidError == null && (addonValue > 0.0 || paidValue > 0.0 || note.isNotBlank())
+    DashboardFormSheet(
+        title = "Session add-on",
+        body = "${session.title.ifBlank { "Session ${session.sequenceNumber}" }} · ${order.orderNumber}",
+        onDismiss = onDismiss,
+        wide = wide,
+    ) {
+        DashboardRecordCard {
+            Text(
+                text = "Attach to current session",
+                style = MaterialTheme.typography.titleSmall,
+                color = OrmaColors.TextPrimary,
+            )
+            OrmaTextField(
+                value = addonAmount,
+                onValueChange = { addonAmount = it.moneyInput() },
+                label = "Add-on amount",
+                placeholder = "${order.currency} 0.00",
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            )
+            OrmaTextField(
+                value = paidAmount,
+                onValueChange = { paidAmount = it.moneyInput() },
+                label = "Payment collected",
+                placeholder = "${order.currency} 0.00",
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            )
+            OrmaTextField(
+                value = note,
+                onValueChange = { note = it.take(240) },
+                label = "Add-on or payment note",
+                placeholder = "Extra item, extension, upgrade, or payment reference",
+                singleLine = false,
+                minLines = 2,
+            )
+            if (attemptedSubmit) {
+                addonError?.let { FormValidationText(it) }
+                paidError?.let { FormValidationText(it) }
+                if (!formReady && addonError == null && paidError == null) {
+                    FormValidationText("Enter an add-on amount, payment amount, or note.")
+                }
+            }
+            OrmaActionRow(
+                primaryText = "Attach to session",
+                onPrimary = {
+                    attemptedSubmit = true
+                    if (formReady) {
+                        onSubmit(addonValue, paidValue, note.trim())
+                    }
+                },
+                primaryEnabled = !actionLoading,
+                secondaryText = "Cancel",
+                onSecondary = onDismiss,
+            )
+        }
     }
 }
 
@@ -32200,6 +32555,32 @@ private fun supplierPaymentNote(
         .take(2000)
 }
 
+private fun appendSessionNote(
+    existing: String,
+    amount: Double,
+    paid: Double,
+    currency: String,
+    note: String,
+): String {
+    val line = buildList {
+        if (amount > 0.0) add("Add-on ${dashboardMoney(amount.toDashboardMoneyInput(), currency)}")
+        if (paid > 0.0) add("Paid ${dashboardMoney(paid.toDashboardMoneyInput(), currency)}")
+        note.trim().takeIf { it.isNotBlank() }?.let { add(it) }
+    }.joinToString(" · ")
+    return listOf(existing.trim(), line)
+        .filter { it.isNotBlank() }
+        .joinToString("\n")
+        .take(1200)
+}
+
+private fun String.sessionStatusTone(): OrmaStatusTone =
+    when (trim().lowercase()) {
+        "completed" -> OrmaStatusTone.Success
+        "cancelled", "missed" -> OrmaStatusTone.Danger
+        "confirmed" -> OrmaStatusTone.Info
+        else -> OrmaStatusTone.Warning
+    }
+
 private fun OrmaOrder.toOrderDraft(): OrmaOrderDraft =
     OrmaOrderDraft(
         customerId = customerId.orEmpty(),
@@ -32222,6 +32603,20 @@ private fun OrmaOrder.toOrderDraft(): OrmaOrderDraft =
         fulfillmentType = fulfillmentType.ifBlank { if (orderType == "appointment") "booking" else "standard" },
         paymentMode = paymentMode.ifBlank { "pay_on_spot" },
         items = items.map { it.toOrderItemDraft() },
+        sessions = sessions.map { it.toOrderSessionDraft() },
+    )
+
+private fun OrmaOrderSession.toOrderSessionDraft(): OrmaOrderSessionDraft =
+    OrmaOrderSessionDraft(
+        id = id,
+        orderItemId = orderItemId.orEmpty(),
+        sequenceNumber = sequenceNumber.coerceAtLeast(1),
+        title = title,
+        scheduledAt = scheduledAt.orEmpty(),
+        status = status.ifBlank { "scheduled" },
+        addonTotal = addonTotal.ifBlank { "0" },
+        paidTotal = paidTotal.ifBlank { "0" },
+        notes = notes.orEmpty(),
     )
 
 private fun OrmaOrderItem.toOrderItemDraft(): OrmaOrderItemDraft =

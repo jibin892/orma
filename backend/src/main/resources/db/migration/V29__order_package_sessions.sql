@@ -1,6 +1,6 @@
 create table if not exists order_sessions (
     id uuid primary key default gen_random_uuid(),
-    workspace_id uuid not null references workspaces(id) on delete cascade,
+    workspace_id uuid not null references business_workspaces(id) on delete cascade,
     order_id uuid not null references orders(id) on delete cascade,
     order_item_id uuid references order_items(id) on delete set null,
     sequence_number integer not null default 1,
