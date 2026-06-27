@@ -517,6 +517,34 @@ data class ProductRequest(
     val expiryDate: String? = null,
     val supplierId: String? = null,
     val status: String = "active",
+    val variants: List<ProductVariantRequest> = emptyList(),
+)
+
+@Serializable
+data class ProductVariantRequest(
+    val id: String? = null,
+    val name: String,
+    val sku: String? = null,
+    val barcode: String? = null,
+    val sellingPrice: String? = null,
+    val costPrice: String? = null,
+    val stockQuantity: String? = null,
+    val durationMinutes: Int? = null,
+    val status: String = "active",
+)
+
+@Serializable
+data class ProductVariantResponse(
+    val id: String,
+    val productId: String,
+    val name: String,
+    val sku: String? = null,
+    val barcode: String? = null,
+    val sellingPrice: String,
+    val costPrice: String,
+    val stockQuantity: String,
+    val durationMinutes: Int? = null,
+    val status: String,
 )
 
 @Serializable
@@ -546,6 +574,7 @@ data class ProductResponse(
     val lowStock: Boolean,
     val status: String,
     val imageUrl: String? = null,
+    val variants: List<ProductVariantResponse> = emptyList(),
     val createdAt: String,
     val updatedAt: String,
 )
@@ -610,6 +639,7 @@ data class PublicCatalogProductResponse(
     val bookingRequired: Boolean = false,
     val imageUrl: String? = null,
     val offer: PublicCatalogOfferResponse? = null,
+    val variants: List<ProductVariantResponse> = emptyList(),
 )
 
 @Serializable
@@ -634,6 +664,7 @@ data class PublicCatalogOrderRequest(
 @Serializable
 data class PublicCatalogOrderItemRequest(
     val productId: String,
+    val variantId: String? = null,
     val quantity: String = "1",
 )
 
@@ -707,6 +738,7 @@ data class OrderRequest(
 @Serializable
 data class OrderItemRequest(
     val productId: String? = null,
+    val variantId: String? = null,
     val description: String,
     val quantity: String,
     val unitPrice: String,
@@ -830,6 +862,8 @@ data class OrderItemResponse(
     val id: String,
     val productId: String? = null,
     val productName: String? = null,
+    val variantId: String? = null,
+    val variantName: String? = null,
     val description: String,
     val quantity: String,
     val unitPrice: String,

@@ -38,6 +38,7 @@ import com.orma.backend.models.ProductImportRowRequest
 import com.orma.backend.models.ProductImportTemplateResponse
 import com.orma.backend.models.ProductRequest
 import com.orma.backend.models.ProductResponse
+import com.orma.backend.models.ProductVariantResponse
 import com.orma.backend.models.StockAdjustmentRequest
 import com.orma.backend.models.StockMovementResponse
 import com.orma.backend.models.SupplierRequest
@@ -1770,14 +1771,24 @@ class DashboardRepository(
             where products.workspace_id = ?::uuid
               and products.status = 'active'
               and (products.expiry_date is null or products.expiry_date >= current_date)
-              and (products.track_stock = false or products.stock_quantity > 0)
+              and (
+                products.track_stock = false
+                or products.stock_quantity > 0
+                or exists (
+                    select 1
+                    from product_variants pv
+                    where pv.product_id = products.id
+                      and pv.status = 'active'
+                      and pv.stock_quantity > 0
+                )
+              )
             order by coalesce(pc.sort_order, 999), coalesce(pc.name, ''), products.name asc
             limit 200
         """.trimIndent()
         return prepareStatement(sql).use { statement ->
             statement.setString(1, workspaceId)
             statement.executeQuery().use { result ->
-                buildList {
+                val baseItems = buildList {
                     while (result.next()) {
                         val trackStock = result.getBoolean("track_stock")
                         val stockQuantity = result.getBigDecimal("stock_quantity") ?: BigDecimal.ZERO
@@ -1786,6 +1797,7 @@ class DashboardRepository(
                         )
                     }
                 }
+                attachPublicCatalogVariants(baseItems)
             }
         }
     }
@@ -3308,12 +3320,13 @@ class DashboardRepository(
             statement.bindStringParams(params)
             statement.executeQuery().use { result ->
                 var totalItems = 0
-                val items = buildList {
+                val baseItems = buildList {
                     while (result.next()) {
                         if (totalItems == 0) totalItems = result.getInt("total_count")
                         add(result.toProductResponse())
                     }
                 }
+                val items = attachProductVariants(baseItems)
                 items.toPagedResult(filters, totalItems)
             }
         }
@@ -3339,7 +3352,9 @@ class DashboardRepository(
             statement.bindProductRequest(access, request, supplierId, categoryId, startIndex = 2)
             statement.executeQuery().use { result ->
                 result.next()
-                result.toProductResponse()
+                val product = result.toProductResponse()
+                replaceProductVariants(access, product.id, request)
+                attachProductVariants(listOf(product)).first()
             }
         }
     }
@@ -3518,9 +3533,143 @@ class DashboardRepository(
             statement.setString(21, productId)
             statement.setString(22, access.workspaceId)
             statement.executeQuery().use { result ->
-                if (result.next()) result.toProductResponse() else null
+                if (result.next()) {
+                    val product = result.toProductResponse()
+                    replaceProductVariants(access, product.id, request)
+                    attachProductVariants(listOf(product)).first()
+                } else {
+                    null
+                }
             }
         }
+    }
+
+    private fun Connection.replaceProductVariants(
+        access: DashboardWorkspaceAccess,
+        productId: String,
+        request: ProductRequest,
+    ) {
+        prepareStatement(
+            """
+            update product_variants
+            set status = 'archived', updated_at = now()
+            where workspace_id = ?::uuid and product_id = ?::uuid
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setString(1, access.workspaceId)
+            statement.setString(2, productId)
+            statement.executeUpdate()
+        }
+        request.variants
+            .filter { it.name.cleanOptional() != null }
+            .take(40)
+            .forEachIndexed { index, variant ->
+                val sellingPrice = variant.sellingPrice?.cleanOptional()?.moneyOrZero() ?: request.sellingPrice.moneyOrZero()
+                val costPrice = variant.costPrice?.cleanOptional()?.moneyOrZero() ?: request.costPrice.moneyOrZero()
+                val stockQuantity = if (request.itemType.cleanItemType() == "product") {
+                    variant.stockQuantity?.cleanOptional()?.decimalOrZero() ?: BigDecimal.ZERO
+                } else {
+                    BigDecimal.ZERO
+                }
+                prepareStatement(
+                    """
+                    insert into product_variants (
+                        workspace_id, product_id, name, sku, barcode, selling_price, cost_price,
+                        stock_quantity, duration_minutes, sort_order, status, updated_at
+                    )
+                    values (?::uuid, ?::uuid, ?, ?, ?, ?, ?, ?, ?, ?, ?, now())
+                    """.trimIndent(),
+                ).use { statement ->
+                    statement.setString(1, access.workspaceId)
+                    statement.setString(2, productId)
+                    statement.setString(3, variant.name.cleanName())
+                    statement.setNullableString(4, variant.sku?.cleanOptionalUpper())
+                    statement.setNullableString(5, variant.barcode?.cleanOptional())
+                    statement.setBigDecimal(6, sellingPrice.scaled())
+                    statement.setBigDecimal(7, costPrice.scaled())
+                    statement.setBigDecimal(8, stockQuantity.scaled())
+                    if (variant.durationMinutes == null || variant.durationMinutes <= 0) {
+                        statement.setNull(9, Types.INTEGER)
+                    } else {
+                        statement.setInt(9, variant.durationMinutes.coerceAtMost(1440))
+                    }
+                    statement.setInt(10, index)
+                    statement.setString(11, variant.status.cleanCatalogStatus())
+                    statement.executeUpdate()
+                }
+            }
+    }
+
+    private fun Connection.attachProductVariants(products: List<ProductResponse>): List<ProductResponse> {
+        if (products.isEmpty()) return products
+        val productIds = products.map { it.id }.distinct()
+        val placeholders = productIds.joinToString(", ") { "?::uuid" }
+        val variantsByProduct = mutableMapOf<String, MutableList<ProductVariantResponse>>()
+        prepareStatement(
+            """
+            select
+                id::text,
+                product_id::text,
+                name,
+                sku,
+                barcode,
+                selling_price,
+                cost_price,
+                stock_quantity,
+                duration_minutes,
+                status
+            from product_variants
+            where product_id in ($placeholders) and status <> 'archived'
+            order by product_id, sort_order asc, name asc
+            """.trimIndent(),
+        ).use { statement ->
+            productIds.forEachIndexed { index, productId ->
+                statement.setString(index + 1, productId)
+            }
+            statement.executeQuery().use { result ->
+                while (result.next()) {
+                    val variant = result.toProductVariantResponse()
+                    variantsByProduct.getOrPut(variant.productId) { mutableListOf() }.add(variant)
+                }
+            }
+        }
+        return products.map { product -> product.copy(variants = variantsByProduct[product.id].orEmpty()) }
+    }
+
+    private fun Connection.attachPublicCatalogVariants(products: List<PublicCatalogProductResponse>): List<PublicCatalogProductResponse> {
+        if (products.isEmpty()) return products
+        val productIds = products.map { it.id }.distinct()
+        val placeholders = productIds.joinToString(", ") { "?::uuid" }
+        val variantsByProduct = mutableMapOf<String, MutableList<ProductVariantResponse>>()
+        prepareStatement(
+            """
+            select
+                id::text,
+                product_id::text,
+                name,
+                sku,
+                barcode,
+                selling_price,
+                cost_price,
+                stock_quantity,
+                duration_minutes,
+                status
+            from product_variants
+            where product_id in ($placeholders) and status = 'active'
+            order by product_id, sort_order asc, name asc
+            """.trimIndent(),
+        ).use { statement ->
+            productIds.forEachIndexed { index, productId ->
+                statement.setString(index + 1, productId)
+            }
+            statement.executeQuery().use { result ->
+                while (result.next()) {
+                    val variant = result.toProductVariantResponse()
+                    variantsByProduct.getOrPut(variant.productId) { mutableListOf() }.add(variant)
+                }
+            }
+        }
+        return products.map { product -> product.copy(variants = variantsByProduct[product.id].orEmpty()) }
     }
 
     private fun Connection.adjustProductStock(
@@ -3595,7 +3744,7 @@ class DashboardRepository(
             statement.setString(8, access.workspaceId)
             statement.executeQuery().use { result ->
                 result.next()
-                result.toProductResponse()
+                attachProductVariants(listOf(result.toProductResponse())).first()
             }
         }
         if (quantityDelta != BigDecimal.ZERO) {
@@ -4701,6 +4850,20 @@ class DashboardRepository(
             updatedAt = getString("updated_at"),
         )
     }
+
+    private fun ResultSet.toProductVariantResponse(): ProductVariantResponse =
+        ProductVariantResponse(
+            id = getString("id"),
+            productId = getString("product_id"),
+            name = getString("name"),
+            sku = getString("sku"),
+            barcode = getString("barcode"),
+            sellingPrice = getBigDecimal("selling_price").moneyString(),
+            costPrice = getBigDecimal("cost_price").moneyString(),
+            stockQuantity = getBigDecimal("stock_quantity").decimalString(),
+            durationMinutes = getNullableInt("duration_minutes"),
+            status = getString("status"),
+        )
 
     private fun ResultSet.toStockMovementResponse(): StockMovementResponse =
         StockMovementResponse(
