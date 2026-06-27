@@ -346,7 +346,7 @@ class DashboardRepository(
                     request = OrderRequest(
                         customerId = customer.id,
                         orderType = orderType,
-                        status = "draft",
+                        status = "new",
                         scheduledAt = request.scheduledAt?.cleanOptional(),
                         paidTotal = "0",
                         currency = access.currency,
@@ -5158,7 +5158,7 @@ class DashboardRepository(
     private fun String.dashboardTone(): String =
         when (trim().lowercase()) {
             "cancelled", "failed", "send_failed" -> "danger"
-            "draft", "queued", "part_paid" -> "warning"
+            "new", "draft", "queued", "part_paid" -> "warning"
             "paid", "completed", "sent", "ready", "synced" -> "success"
             else -> "info"
         }
@@ -5706,7 +5706,7 @@ class DashboardRepository(
     )
 
     private companion object {
-        val AllowedOrderStatuses = setOf("draft", "confirmed", "paid", "part_paid", "completed", "cancelled")
+        val AllowedOrderStatuses = setOf("new", "draft", "confirmed", "paid", "part_paid", "completed", "cancelled")
         val InventoryApplyingStatuses = setOf("confirmed", "paid", "part_paid", "completed")
         val FullPaymentStatuses = setOf("paid", "completed")
         val AllowedItemTypes = setOf("product", "service", "appointment")

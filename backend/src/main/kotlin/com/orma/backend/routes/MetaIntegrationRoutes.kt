@@ -1,6 +1,7 @@
 package com.orma.backend.routes
 
 import com.orma.backend.config.AppConfig
+import com.orma.backend.db.MetaConnectionValidationException
 import com.orma.backend.db.MetaIntegrationRepository
 import com.orma.backend.models.ErrorResponse
 import com.orma.backend.models.MetaConnectionRequest
@@ -31,7 +32,18 @@ fun Route.metaIntegrationRoutes(
         val repository = metaIntegrationRepository ?: return@post call.metaDatabaseNotConfigured()
         val firebaseUser = call.verifiedFirebaseUser(config) ?: return@post
         val request = call.receive<MetaConnectionRequest>()
-        val status = repository.upsertConnection(firebaseUser, request) ?: return@post call.metaWorkspaceNotFound()
+        val status = try {
+            repository.upsertConnection(firebaseUser, request)
+        } catch (error: MetaConnectionValidationException) {
+            call.respond(
+                HttpStatusCode.Conflict,
+                ErrorResponse(
+                    code = error.code,
+                    message = error.message ?: "Meta connection details are already used.",
+                ),
+            )
+            return@post
+        } ?: return@post call.metaWorkspaceNotFound()
         call.respond(status)
     }
 

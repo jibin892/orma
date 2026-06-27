@@ -12,19 +12,34 @@ firebase.initializeApp({
 
 const messaging = firebase.messaging();
 
+function postOrmaMessageToWindows(payload) {
+  return clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {
+    clientList.forEach((client) => {
+      client.postMessage({
+        type: "orma:fcm-message",
+        payload: payload || {}
+      });
+    });
+  });
+}
+
 messaging.onBackgroundMessage((payload) => {
   const title = payload.notification?.title || "ORMA";
   const options = {
     body: payload.notification?.body || "New workspace update",
     data: payload.data || {}
   };
+  postOrmaMessageToWindows(payload);
   self.registration.showNotification(title, options);
 });
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
+  const payload = {
+    data: event.notification.data || {}
+  };
   event.waitUntil(
-    clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {
+    postOrmaMessageToWindows(payload).then(() => clients.matchAll({ type: "window", includeUncontrolled: true })).then((clientList) => {
       for (const client of clientList) {
         if (client.url.includes(self.location.origin) && "focus" in client) {
           return client.focus();

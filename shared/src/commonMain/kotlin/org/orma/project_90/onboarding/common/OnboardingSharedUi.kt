@@ -166,6 +166,7 @@ import org.orma.project_90.clipboard.rememberOrmaClipboard
 import org.orma.project_90.downloads.isOrmaWebDownloadSurface
 import org.orma.project_90.files.OrmaCsvFilePickerResult
 import org.orma.project_90.files.rememberOrmaCsvFilePicker
+import org.orma.project_90.getPlatform
 import org.orma.project_90.media.OrmaLogoPickerResult
 import org.orma.project_90.media.OrmaLogoPreviewImage
 import org.orma.project_90.media.OrmaPickedImage
@@ -18284,8 +18285,10 @@ private fun DashboardMarketingSetupWorkspace(
         messagingReady = messagingReady,
         catalogChecked = catalogChecked,
     )
+    val completedSteps = setupSteps.count { it.complete }
     val currentIndex = setupSteps.indexOfFirst { !it.complete }.takeIf { it >= 0 } ?: setupSteps.lastIndex
     val currentStep = setupSteps[currentIndex]
+    val businessName = state.workspaceName.ifBlank { "Current business" }
     val clipboard = rememberOrmaClipboard()
     val uriHandler = LocalUriHandler.current
 
@@ -18322,17 +18325,27 @@ private fun DashboardMarketingSetupWorkspace(
                     modifier = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    OrmaBadge(
-                        text = "STEP ${currentIndex + 1} OF ${setupSteps.size}",
-                        tone = OrmaStatusTone.Warning,
-                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OrmaBadge(
+                            text = "STEP ${currentIndex + 1} OF ${setupSteps.size}",
+                            tone = OrmaStatusTone.Warning,
+                        )
+                        OrmaBadge(
+                            text = "$completedSteps DONE",
+                            tone = if (completedSteps == setupSteps.size) OrmaStatusTone.Success else OrmaStatusTone.Info,
+                        )
+                        OrmaBadge(
+                            text = "PER BUSINESS",
+                            tone = OrmaStatusTone.Info,
+                        )
+                    }
                     Text(
-                        text = currentStep.title,
+                        text = "Set up WhatsApp for $businessName",
                         style = MaterialTheme.typography.titleLarge,
                         color = OrmaColors.TextPrimary,
                     )
                     Text(
-                        text = currentStep.body,
+                        text = "These Meta and WhatsApp details are saved only for this ORMA business. Each business must use its own WABA, Phone Number ID, and credential connection.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = OrmaColors.TextSecondary,
                     )
@@ -18345,6 +18358,29 @@ private fun DashboardMarketingSetupWorkspace(
                     )
                 }
             }
+            OrmaKeyValueList(
+                rows = listOf(
+                    "Current ORMA business" to businessName,
+                    "WhatsApp number rule" to "One Phone Number ID can connect to one ORMA business",
+                    "Credential storage" to metaConnection.dashboardMetaCredentialStorageLabel(),
+                ),
+            )
+            HorizontalDivider(color = OrmaColors.Divider)
+            Text(
+                text = "Current step",
+                style = MaterialTheme.typography.titleSmall,
+                color = OrmaColors.TextPrimary,
+            )
+            Text(
+                text = currentStep.title,
+                style = MaterialTheme.typography.titleMedium,
+                color = OrmaColors.TextPrimary,
+            )
+            Text(
+                text = currentStep.body,
+                style = MaterialTheme.typography.bodyMedium,
+                color = OrmaColors.TextSecondary,
+            )
             OrmaKeyValueList(
                 rows = dashboardMetaCurrentStepRows(
                     stepKey = currentStep.key,
@@ -18497,29 +18533,34 @@ private fun dashboardMetaCurrentStepRows(
 ): List<Pair<String, String>> = when (stepKey) {
     "ids" -> listOf(
         "Business display name" to (metaConnection?.businessDisplayName ?: state.workspaceName.ifBlank { "Not set" }),
+        "ORMA business scope" to "Saved only for ${state.workspaceName.ifBlank { "this workspace" }}",
         "Meta Business ID" to (metaConnection?.businessId ?: "Paste from Meta"),
         "WABA ID" to (metaConnection?.whatsappBusinessAccountId ?: "Paste from WhatsApp setup"),
         "Phone Number ID" to (metaConnection?.phoneNumberId ?: "Paste from Cloud API"),
     )
     "backend" -> listOf(
         "Credentials" to (metaConnection?.accessTokenStatus?.dashboardTitleCase() ?: "Not configured"),
-        "Token storage" to "Backend only, encrypted per workspace",
-        "Required env" to "META_APP_ID, META_APP_SECRET, META_TOKEN_ENCRYPTION_SECRET",
-        "Pilot token" to "META_SYSTEM_USER_ACCESS_TOKEN stays in Render",
+        "Credential storage" to metaConnection.dashboardMetaCredentialStorageDetail(),
+        "Production path" to "Connect this business through Meta OAuth or embedded signup",
+        "Pilot fallback" to "Render system-user token for testing/admin only",
+        "Required env" to "App ID, app secret, token encryption, webhook verify",
     )
     "webhook" -> listOf(
         "Callback URL" to DashboardMetaWebhookCallbackUrl,
         "Verify token" to "Render env: META_WEBHOOK_VERIFY_TOKEN",
+        "Webhook routing" to "Incoming messages route by this business's unique Phone Number ID",
         "Webhook status" to (metaConnection?.webhookSubscribedAt ?: "Not verified yet"),
     )
     "templates" -> listOf(
         "Messaging" to (metaConnection?.messagingStatus?.dashboardTitleCase() ?: "Not configured"),
+        "Template owner" to (metaConnection?.businessDisplayName ?: state.workspaceName.ifBlank { "Current business" }),
         "Loaded templates" to state.dashboard.metaWhatsAppTemplates.size.toString(),
         "Last template result" to (state.dashboard.metaTemplateSyncItems.firstOrNull()?.status?.dashboardTitleCase() ?: "Not submitted yet"),
     )
     else -> listOf(
         "Ready products" to (metaConnection?.productsReady ?: state.dashboard.products.count { dashboardMarketingReadinessIssues(it).isEmpty() }).toString(),
         "Blocked products" to (metaConnection?.productsBlocked ?: state.dashboard.products.count { dashboardMarketingReadinessIssues(it).isNotEmpty() }).toString(),
+        "Catalog scope" to "Only this business's online store items",
         "Last check" to (metaConnection?.lastSyncAt ?: "Not checked yet"),
         "Public link" to shopLink.ifBlank { "Created after workspace setup" },
     )
@@ -18556,7 +18597,7 @@ private fun DashboardMetaCurrentStepActions(
                 "Open Meta setup" to onOpenMeta,
             )
             "templates" -> listOf(
-                "Create ORMA defaults" to onCreateTemplates,
+                "Create templates" to onCreateTemplates,
                 "Refresh templates" to onRefreshTemplates,
                 "Open WhatsApp" to onOpenWhatsApp,
             )
@@ -18601,12 +18642,30 @@ private fun DashboardMetaCurrentStepActions(
 private fun DashboardMetaSetupProgressCard(
     steps: List<DashboardMetaSetupStepSpec>,
 ) {
+    val completed = steps.count { it.complete }
     DashboardRecordCard {
-        Text(
-            text = "Setup progress",
-            style = MaterialTheme.typography.titleMedium,
-            color = OrmaColors.TextPrimary,
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(
+                    text = "Setup progress",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = OrmaColors.TextPrimary,
+                )
+                Text(
+                    text = "Do the first open step. Completed steps stay locked to this business.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = OrmaColors.TextSecondary,
+                )
+            }
+            OrmaBadge(
+                text = "$completed/${steps.size}",
+                tone = if (completed == steps.size) OrmaStatusTone.Success else OrmaStatusTone.Info,
+            )
+        }
         steps.forEachIndexed { index, step ->
             DashboardMetaSetupCompactRow(
                 number = index + 1,
@@ -18656,17 +18715,24 @@ private fun DashboardMetaSetupAccountCard(
 ) {
     DashboardRecordCard {
         Text(
-            text = "Saved setup details",
+            text = "Business connection details",
             style = MaterialTheme.typography.titleMedium,
             color = OrmaColors.TextPrimary,
+        )
+        Text(
+            text = "These values are loaded from the current workspace. They are not shared with other ORMA businesses.",
+            style = MaterialTheme.typography.bodySmall,
+            color = OrmaColors.TextSecondary,
         )
         OrmaKeyValueList(
             rows = listOf(
                 "Workspace" to state.workspaceName.ifBlank { "Current workspace" },
                 "WhatsApp account" to (metaConnection?.businessDisplayName ?: "Not set"),
                 "WhatsApp number" to (metaConnection?.whatsappDisplayNumber ?: "Not set"),
+                "Phone Number ID" to (metaConnection?.phoneNumberId ?: "Not set"),
                 "Setup status" to (metaConnection?.status?.dashboardTitleCase() ?: "Not connected"),
                 "Credentials" to (metaConnection?.accessTokenStatus?.dashboardTitleCase() ?: "Not configured"),
+                "Credential storage" to metaConnection.dashboardMetaCredentialStorageLabel(),
                 "Messaging" to (metaConnection?.messagingStatus?.dashboardTitleCase() ?: "Not configured"),
                 "Public link" to shopLink.ifBlank { "Hidden until setup completes" },
             ),
@@ -19624,11 +19690,11 @@ private fun MetaConnectionSetupSheet(
         DashboardModuleChecklistCard(
             title = "Next backend step",
             items = listOf(
-                "Owner connects the business's own WhatsApp account.",
-                "Backend stores and refreshes Meta credentials securely.",
-                "Then ORMA can send approved WhatsApp templates and sync catalog items.",
+                "This setup belongs only to the current ORMA business.",
+                "The same Phone Number ID cannot be reused by another ORMA business.",
+                "Production credentials should come from Meta OAuth or embedded signup so ORMA stores them encrypted per business.",
             ),
-            tertiaryText = current?.accessTokenStatus?.dashboardTitleCase() ?: "Credentials pending",
+            tertiaryText = current.dashboardMetaCredentialStorageLabel(),
         )
         OrmaActionRow(
             primaryText = if (state.dashboard.metaActionLoading) "Saving..." else "Save WhatsApp setup",
@@ -19807,6 +19873,24 @@ private fun OrmaMetaConnectionStatus?.dashboardMetaIdsReady(): Boolean {
 
 private fun OrmaMetaConnectionStatus?.dashboardMetaCredentialsReady(): Boolean =
     this?.accessTokenStatus.dashboardMetaReadyValue()
+
+private fun OrmaMetaConnectionStatus?.dashboardMetaCredentialStorageLabel(): String =
+    when (this?.credentialSource?.trim()?.lowercase()) {
+        "oauth" -> "Encrypted for this business"
+        "embedded_signup" -> "Embedded signup, encrypted for this business"
+        "system_user_env" -> "Render pilot token, backend-only"
+        "none", null, "" -> "Not configured"
+        else -> "Backend credential for this business"
+    }
+
+private fun OrmaMetaConnectionStatus?.dashboardMetaCredentialStorageDetail(): String =
+    when (this?.credentialSource?.trim()?.lowercase()) {
+        "oauth" -> "OAuth token is encrypted in this workspace record and used only for this business."
+        "embedded_signup" -> "Embedded signup token is encrypted in this workspace record and used only for this business."
+        "system_user_env" -> "A shared Render system-user token is active. Use it for testing/admin setup, then move production businesses to OAuth or embedded signup."
+        "none", null, "" -> "No backend Meta credential is active for this business yet."
+        else -> "Backend credential is active for this business."
+    }
 
 private fun OrmaMetaConnectionStatus?.dashboardMetaWebhookReady(): Boolean =
     this?.webhookSubscribedAt?.isNotBlank() == true || dashboardMetaMessagingReady()
@@ -21074,6 +21158,7 @@ private fun BookingDetailsMobileNextActionCard(
     actionLoading: Boolean,
 ) {
     val terminal = order.status in setOf("completed", "cancelled")
+    val canAcknowledge = order.status.trim().lowercase() == "new"
     DashboardMobileRecordCard {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -21091,6 +21176,7 @@ private fun BookingDetailsMobileNextActionCard(
                 )
                 Text(
                     text = when {
+                        canAcknowledge -> "Acknowledge this catalog request before fulfilment."
                         order.balanceDueValue() > 0.0 -> "Collect balance before closing."
                         terminal -> order.status.dashboardTerminalStatusCopy()
                         order.scheduledAt.isNullOrBlank() -> "Set fulfilment and move the status forward."
@@ -21129,8 +21215,12 @@ private fun BookingDetailsMobileNextActionCard(
                 enabled = !actionLoading,
             )
             DashboardWideActionButton(
-                text = "Complete",
-                onClick = onMarkCompleted,
+                text = if (canAcknowledge) "Acknowledge" else "Complete",
+                onClick = if (canAcknowledge) {
+                    { onStatusChange("confirmed") }
+                } else {
+                    onMarkCompleted
+                },
                 modifier = Modifier.weight(1f),
                 primary = true,
                 enabled = !actionLoading && !terminal,
@@ -21754,6 +21844,7 @@ private fun BookingDetailsFulfillmentCard(
     onMarkCompleted: (() -> Unit)? = null,
     actionLoading: Boolean = false,
 ) {
+    val canAcknowledge = order.status.trim().lowercase() == "new"
     DashboardRecordCard {
         Text(
             text = "Status and fulfilment",
@@ -21773,13 +21864,22 @@ private fun BookingDetailsFulfillmentCard(
                 order.notes?.takeIf { it.isNotBlank() }?.let { "Notes" to it },
             ),
         )
-        if (onScheduleDispatch != null || onMarkCompleted != null) {
+        if (canAcknowledge || onScheduleDispatch != null || onMarkCompleted != null) {
             BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
                 if (maxWidth < 460.dp) {
                     Column(
                         modifier = Modifier.fillMaxWidth(),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
+                        if (canAcknowledge) {
+                            DashboardWideActionButton(
+                                text = "Acknowledge",
+                                onClick = { onStatusChange("confirmed") },
+                                modifier = Modifier.fillMaxWidth(),
+                                primary = true,
+                                enabled = !actionLoading,
+                            )
+                        }
                         onScheduleDispatch?.let { scheduleDispatch ->
                             DashboardWideActionButton(
                                 text = if (order.scheduledAt.isNullOrBlank()) "Schedule dispatch" else "Edit dispatch",
@@ -21794,7 +21894,7 @@ private fun BookingDetailsFulfillmentCard(
                                 onClick = markCompleted,
                                 modifier = Modifier.fillMaxWidth(),
                                 primary = true,
-                                enabled = !actionLoading && order.status !in setOf("completed", "cancelled"),
+                                enabled = !actionLoading && !canAcknowledge && order.status !in setOf("completed", "cancelled"),
                             )
                         }
                     }
@@ -21803,6 +21903,15 @@ private fun BookingDetailsFulfillmentCard(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
+                        if (canAcknowledge) {
+                            DashboardWideActionButton(
+                                text = "Acknowledge",
+                                onClick = { onStatusChange("confirmed") },
+                                modifier = Modifier.weight(1f),
+                                primary = true,
+                                enabled = !actionLoading,
+                            )
+                        }
                         onScheduleDispatch?.let { scheduleDispatch ->
                             DashboardWideActionButton(
                                 text = if (order.scheduledAt.isNullOrBlank()) "Schedule dispatch" else "Edit dispatch",
@@ -21817,7 +21926,7 @@ private fun BookingDetailsFulfillmentCard(
                                 onClick = markCompleted,
                                 modifier = Modifier.weight(1f),
                                 primary = true,
-                                enabled = !actionLoading && order.status !in setOf("completed", "cancelled"),
+                                enabled = !actionLoading && !canAcknowledge && order.status !in setOf("completed", "cancelled"),
                             )
                         }
                     }
@@ -25402,6 +25511,9 @@ private fun ProductEditorScreen(
         )
     }
     var customUnitVisible by rememberSaveable(product?.id) { mutableStateOf(false) }
+    var customCategoryVisible by rememberSaveable(product?.id) {
+        mutableStateOf(product?.categoryId.isNullOrBlank() && !product?.categoryName.isNullOrBlank())
+    }
     val categoryOptions = remember(state.dashboard.categories, draft.itemType) {
         state.dashboard.categories.filter { it.matchesCategoryItemType(draft.itemType) }
     }
@@ -25409,6 +25521,9 @@ private fun ProductEditorScreen(
     LaunchedEffect(draft.itemType, draft.categoryId, state.dashboard.categories) {
         if (draft.categoryId.isNotBlank() && categoryOptions.none { it.id == draft.categoryId }) {
             draft = draft.copy(categoryId = "")
+        }
+        if (categoryOptions.isEmpty()) {
+            customCategoryVisible = true
         }
     }
     LaunchedEffect(draft.itemType, draft.unit, unitOptions) {
@@ -25551,6 +25666,7 @@ private fun ProductEditorScreen(
                         bookingRequired = itemType == "appointment",
                         expiryDate = if (itemType == "product") draft.expiryDate else "",
                     )
+                    customCategoryVisible = state.dashboard.categories.none { it.matchesCategoryItemType(itemType) }
                 },
             )
         } else {
@@ -25559,34 +25675,62 @@ private fun ProductEditorScreen(
                 tone = OrmaStatusTone.Info,
             )
         }
-        DashboardDropdownPicker(
-            label = "${draft.itemType.sellableItemTypeLabel()} category",
-            selected = categoryOptions.firstOrNull { it.id == draft.categoryId },
-            placeholder = if (categoryOptions.isEmpty()) "No categories yet" else "Choose category",
-            options = categoryOptions,
-            optionLabel = { it.categoryOptionLabel() },
-            onSelected = { draft = draft.copy(categoryId = it.id, categoryName = "") },
-            supportingText = if (categoryOptions.isEmpty()) {
-                "Type a new category below to create it with this item."
-            } else {
-                "Use an existing category or type a new one below."
-            },
-            onClear = if (draft.categoryId.isNotBlank()) {
-                { draft = draft.copy(categoryId = "", categoryName = "") }
-            } else {
-                null
+        Text(
+            text = "${draft.itemType.sellableItemTypeLabel()} category",
+            modifier = Modifier.padding(start = 4.dp),
+            style = MaterialTheme.typography.labelMedium,
+            color = OrmaColors.TextSecondary,
+        )
+        OrmaSegmentedRow(
+            options = listOf(false, true),
+            selected = customCategoryVisible,
+            label = { if (it) "Custom category" else "Existing category" },
+            onSelected = { useCustomCategory ->
+                customCategoryVisible = useCustomCategory
+                draft = if (useCustomCategory) {
+                    draft.copy(categoryId = "")
+                } else {
+                    draft.copy(categoryName = "")
+                }
             },
         )
-        OrmaTextField(
-            value = draft.categoryName,
-            onValueChange = { draft = draft.copy(categoryName = it.take(80), categoryId = "") },
-            label = "Create new category",
-            placeholder = when (draft.itemType) {
-                "service" -> "Repairs, consulting"
-                "appointment" -> "Consultation, salon"
-                else -> "Bakery, lunch menu"
-            },
-        )
+        if (customCategoryVisible) {
+            OrmaTextField(
+                value = draft.categoryName,
+                onValueChange = { draft = draft.copy(categoryName = it.take(80), categoryId = "") },
+                label = "Custom category",
+                placeholder = when (draft.itemType) {
+                    "service" -> "Repairs, consulting"
+                    "appointment" -> "Consultation, salon"
+                    else -> "Bakery, lunch menu"
+                },
+            )
+            Text(
+                text = "This category will be created or reused when you save.",
+                modifier = Modifier.padding(start = 4.dp),
+                style = MaterialTheme.typography.labelMedium,
+                color = OrmaColors.TextSecondary,
+            )
+        } else {
+            DashboardDropdownPicker(
+                label = "Choose category",
+                selected = categoryOptions.firstOrNull { it.id == draft.categoryId },
+                placeholder = if (categoryOptions.isEmpty()) "No categories yet" else "Choose category",
+                options = categoryOptions,
+                optionLabel = { it.categoryOptionLabel() },
+                onSelected = { draft = draft.copy(categoryId = it.id, categoryName = "") },
+                supportingText = if (categoryOptions.isEmpty()) {
+                    "Switch to custom category to create one with this item."
+                } else {
+                    "Use a saved category for grouping, offers, and checkout filtering."
+                },
+                onClear = if (draft.categoryId.isNotBlank()) {
+                    { draft = draft.copy(categoryId = "", categoryName = "") }
+                } else {
+                    null
+                },
+            )
+        }
         ProductImagePickerCard(
             productName = draft.name,
             image = draft.image,
@@ -27920,6 +28064,7 @@ private fun <T> DashboardChipPicker(
 }
 
 private val DashboardOrderStatuses = listOf(
+    "new",
     "draft",
     "confirmed",
     "part_paid",
@@ -27928,7 +28073,7 @@ private val DashboardOrderStatuses = listOf(
     "cancelled",
 )
 
-private val DashboardActiveOrderStatuses = setOf("draft", "confirmed", "part_paid")
+private val DashboardActiveOrderStatuses = setOf("new", "draft", "confirmed", "part_paid")
 
 private val DashboardFullPaymentStatuses = setOf("paid", "completed")
 
@@ -30179,6 +30324,7 @@ private fun invoiceNumberToWords(number: Long): String {
 
 private fun String.dashboardStatusLabel(): String =
     when (this) {
+        "new" -> "New"
         "draft" -> "Captured"
         "confirmed" -> "Confirmed"
         "part_paid" -> "Part paid"
@@ -30191,6 +30337,7 @@ private fun String.dashboardStatusLabel(): String =
 
 private fun OrmaOrder.dashboardNextStatuses(): List<String> =
     when (status.trim().lowercase()) {
+        "new" -> listOf("confirmed", "cancelled")
         "draft" -> listOf("confirmed", "cancelled")
         "confirmed" -> listOf("part_paid", "paid", "completed")
         "part_paid" -> listOf("paid", "completed")
@@ -30202,6 +30349,7 @@ private fun OrmaOrder.dashboardNextStatuses(): List<String> =
 
 private fun String.dashboardOrderStatusTone(): OrmaStatusTone =
     when (trim().lowercase()) {
+        "new" -> OrmaStatusTone.Warning
         "draft" -> OrmaStatusTone.Info
         "confirmed" -> OrmaStatusTone.Info
         "part_paid" -> OrmaStatusTone.Warning
@@ -30213,7 +30361,7 @@ private fun String.dashboardOrderStatusTone(): OrmaStatusTone =
 
 private fun String.dashboardStatusActionCopy(): String =
     when (trim().lowercase()) {
-        "confirmed" -> "Accept the request and move it into active work."
+        "confirmed" -> "Acknowledge the request and move it into active work."
         "part_paid" -> "Mark that some payment has been collected."
         "paid" -> "Mark payment collected and keep fulfilment open."
         "completed" -> "Close the order after fulfilment or service completion."
@@ -32635,6 +32783,7 @@ private fun DashboardAccountContent(
                 verticalArrangement = Arrangement.spacedBy(18.dp),
             ) {
                 DashboardAccountProfileCard(state = state, roleLabel = roleLabel)
+                DashboardAccountNotificationCard(state = state, actions = actions)
                 if (canManageAccountSetup) {
                     DashboardAccountLogoCard(state = state, actions = actions)
                 } else {
@@ -32755,6 +32904,14 @@ private fun DashboardMobileAccountContent(
         }
 
         DashboardMobileAccountGroup(title = "Operations") {
+            DashboardMobileAccountRow(
+                icon = DashboardNavIconKind.Account,
+                title = "Notifications",
+                body = dashboardNotificationPlatformCopy(state.notificationsEnabled),
+                trailingText = if (state.notificationsEnabled) "Turn off" else "Enable",
+                maxBodyLines = 3,
+                onClick = { actions.onNotificationDecision(!state.notificationsEnabled) },
+            )
             DashboardMobileAccountRow(
                 icon = DashboardNavIconKind.Products,
                 title = "Products and stock",
@@ -33397,6 +33554,67 @@ private fun DashboardAccountProfileCard(
                 "Notifications" to if (state.notificationsEnabled) "Enabled" else "Off",
             ),
         )
+    }
+}
+
+@Composable
+private fun DashboardAccountNotificationCard(
+    state: OnboardingUiState,
+    actions: OnboardingActions,
+) {
+    val platformName = getPlatform().name
+    DashboardRecordCard {
+        OrmaBadge(
+            text = if (state.notificationsEnabled) "ENABLED" else "OFF",
+            tone = if (state.notificationsEnabled) OrmaStatusTone.Success else OrmaStatusTone.Info,
+        )
+        Text(
+            text = "Notifications",
+            style = MaterialTheme.typography.titleMedium,
+            color = OrmaColors.TextPrimary,
+        )
+        Text(
+            text = dashboardNotificationPlatformCopy(state.notificationsEnabled),
+            style = MaterialTheme.typography.bodyMedium,
+            color = OrmaColors.TextSecondary,
+        )
+        OrmaKeyValueList(
+            rows = listOf(
+                "Current device" to platformName,
+                "Status" to if (state.notificationsEnabled) "Enabled" else "Off",
+                "Delivery" to dashboardNotificationDeliveryLabel(),
+            ),
+        )
+        DashboardWideActionButton(
+            text = if (state.notificationsEnabled) "Turn off notifications" else "Enable notifications",
+            onClick = { actions.onNotificationDecision(!state.notificationsEnabled) },
+            modifier = Modifier.fillMaxWidth(),
+            primary = !state.notificationsEnabled,
+            enabled = !state.onboardingLoading,
+        )
+    }
+}
+
+private fun dashboardNotificationPlatformCopy(enabled: Boolean): String {
+    val platform = getPlatform().name.lowercase()
+    return when {
+        enabled -> "This device is registered for workspace alerts."
+        isOrmaWebDownloadSurface() -> "Enable browser notifications to receive catalog orders and refresh the open sales queue."
+        platform.contains("android") -> "Enable Android notifications to receive catalog orders on this device."
+        platform.contains("desktop") || platform.contains("jvm") -> "Desktop push is not connected yet. Use web or Android notifications for live alerts on this workspace."
+        platform.contains("ios") -> "iOS push is not connected yet. Use web or Android notifications for live alerts on this workspace."
+        else -> "Enable notifications to receive catalog orders and workspace alerts on supported devices."
+    }
+}
+
+private fun dashboardNotificationDeliveryLabel(): String {
+    val platform = getPlatform().name.lowercase()
+    return when {
+        isOrmaWebDownloadSurface() -> "Web push"
+        platform.contains("android") -> "Firebase Android"
+        platform.contains("desktop") || platform.contains("jvm") -> "Not connected"
+        platform.contains("ios") -> "Not connected"
+        else -> "Supported devices"
     }
 }
 

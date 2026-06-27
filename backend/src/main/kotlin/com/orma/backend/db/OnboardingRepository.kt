@@ -379,6 +379,22 @@ class OnboardingRepository(
         }
     }
 
+    suspend fun unregisterNotificationDevice(
+        firebaseUser: VerifiedFirebaseUser,
+        deviceToken: String?,
+    ) = withContext(Dispatchers.IO) {
+        dataSource.connection.use { connection ->
+            val user = connection.upsertUser(
+                firebaseUser = firebaseUser,
+                providerFallback = null,
+                emailFallback = null,
+                phoneNumberFallback = null,
+                displayNameFallback = null,
+            )
+            connection.disableNotificationDeviceToken(user.id, deviceToken)
+        }
+    }
+
     suspend fun saveBusinessLogo(
         workspaceId: String,
         storagePath: String,
@@ -1108,6 +1124,21 @@ class OnboardingRepository(
             """.trimIndent(),
         ).use { statement ->
             statement.setString(1, userId)
+            statement.executeUpdate()
+        }
+    }
+
+    private fun Connection.disableNotificationDeviceToken(userId: String, token: String?) {
+        val cleanToken = token?.trim()?.takeIf { it.isNotBlank() } ?: return
+        prepareStatement(
+            """
+            update notification_device_tokens
+            set enabled = false, updated_at = now()
+            where user_id = ?::uuid and token = ?
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setString(1, userId)
+            statement.setString(2, cleanToken)
             statement.executeUpdate()
         }
     }

@@ -46,6 +46,11 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 
+class MetaConnectionValidationException(
+    val code: String,
+    publicMessage: String,
+) : IllegalArgumentException(publicMessage)
+
 class MetaIntegrationRepository(
     private val dataSource: DataSource,
     private val config: AppConfig,
@@ -64,6 +69,7 @@ class MetaIntegrationRepository(
     ): MetaConnectionStatusResponse? = withContext(Dispatchers.IO) {
         dataSource.connection.use { connection ->
             val access = connection.resolveMetaWorkspaceAccess(firebaseUser) ?: return@withContext null
+            connection.ensureMetaPhoneNumberAvailable(access.workspaceId, request.phoneNumberId)
             connection.upsertMetaConnection(access.workspaceId, request)
             connection.metaStatus(access.workspaceId)
         }
@@ -1322,6 +1328,7 @@ class MetaIntegrationRepository(
             instagramBusinessAccountId = connection?.instagramBusinessAccountId,
             scopes = connection?.scopes.orEmpty(),
             accessTokenStatus = connection?.accessTokenStatus ?: "not_configured",
+            credentialSource = connection?.credentialSource ?: "none",
             tokenExpiresAt = connection?.tokenExpiresAt,
             webhookSubscribedAt = connection?.webhookSubscribedAt,
             messagingStatus = connection?.messagingStatus ?: "not_configured",
@@ -1365,6 +1372,32 @@ class MetaIntegrationRepository(
             statement.setString(1, workspaceId)
             statement.executeQuery().use { result ->
                 if (result.next()) result.toMetaConnectionRow() else null
+            }
+        }
+    }
+
+    private fun Connection.ensureMetaPhoneNumberAvailable(
+        workspaceId: String,
+        phoneNumberId: String?,
+    ) {
+        val cleanPhoneNumberId = phoneNumberId?.trim()?.takeIf { it.isNotBlank() } ?: return
+        val sql = """
+            select workspace_id::text
+            from meta_connections
+            where phone_number_id = ?
+              and workspace_id <> ?::uuid
+            limit 1
+        """.trimIndent()
+        prepareStatement(sql).use { statement ->
+            statement.setString(1, cleanPhoneNumberId)
+            statement.setString(2, workspaceId)
+            statement.executeQuery().use { result ->
+                if (result.next()) {
+                    throw MetaConnectionValidationException(
+                        code = "meta_phone_number_already_connected",
+                        publicMessage = "This WhatsApp Phone Number ID is already connected to another ORMA business.",
+                    )
+                }
             }
         }
     }

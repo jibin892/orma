@@ -3,6 +3,7 @@ package org.orma.project_90.onboarding.feature
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -71,6 +72,7 @@ import org.orma.project_90.onboarding.desktop.OrmaOnboardingDesktopUi
 import org.orma.project_90.onboarding.mobile.OrmaOnboardingMobileUi
 import org.orma.project_90.notifications.requestOrmaNotificationPermission
 import org.orma.project_90.notifications.currentOrmaNotificationDeviceToken
+import org.orma.project_90.notifications.observeOrmaNotificationMessages
 import org.orma.project_90.notifications.OrmaNotificationTokenException
 
 @Composable
@@ -1411,6 +1413,21 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
                 }
                 is OrmaBackendResult.Failure -> applyDashboardFailure(result.title, result.message, result.code)
             }
+        }
+    }
+
+    DisposableEffect(state.step, state.workspaceId) {
+        if (state.step != OnboardingStep.Dashboard || state.workspaceId.isBlank()) {
+            onDispose { }
+        } else {
+            val workspaceId = state.workspaceId
+            val observer = observeOrmaNotificationMessages { message ->
+                val matchesWorkspace = message.workspaceId.isBlank() || message.workspaceId == workspaceId
+                if (message.type == "order_created" && matchesWorkspace) {
+                    refreshDashboard("New catalog booking received.")
+                }
+            }
+            onDispose { observer.dispose() }
         }
     }
 

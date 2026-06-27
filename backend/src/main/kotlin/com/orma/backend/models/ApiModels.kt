@@ -877,6 +877,7 @@ data class MetaConnectionStatusResponse(
     val instagramBusinessAccountId: String? = null,
     val scopes: List<String> = emptyList(),
     val accessTokenStatus: String = "not_configured",
+    val credentialSource: String = "none",
     val tokenExpiresAt: String? = null,
     val webhookSubscribedAt: String? = null,
     val messagingStatus: String = "not_configured",

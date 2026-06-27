@@ -30,16 +30,24 @@ class OrderNotificationService(
             connection.orderNotificationContext(order.id)
         } ?: return@withContext
 
-        val title = "New order ${context.orderNumber}"
+        val workLabel = context.orderType.orderWorkLabel()
+        val title = if (context.source == "public_catalog") {
+            "New catalog $workLabel ${context.orderNumber}"
+        } else {
+            "New $workLabel ${context.orderNumber}"
+        }
         val body = buildString {
             append(context.customerName?.takeIf { it.isNotBlank() } ?: "A customer")
-            append(" placed an order for ")
+            append(" placed a ")
+            append(workLabel)
+            append(" for ")
             append("${context.currency} ${context.total}")
         }
         val payload = mapOf(
             "type" to "order_created",
             "orderId" to context.orderId,
             "orderNumber" to context.orderNumber,
+            "orderType" to context.orderType,
             "workspaceId" to context.workspaceId,
         )
         val tokens = dataSource.connection.use { connection ->
@@ -107,6 +115,8 @@ class OrderNotificationService(
                 o.id::text as order_id,
                 o.workspace_id::text as workspace_id,
                 o.order_number,
+                o.order_type,
+                o.source,
                 c.name as customer_name,
                 o.total,
                 o.currency
@@ -210,10 +220,19 @@ class OrderNotificationService(
             orderId = getString("order_id"),
             workspaceId = getString("workspace_id"),
             orderNumber = getString("order_number"),
+            orderType = getString("order_type"),
+            source = getString("source"),
             customerName = getString("customer_name"),
             total = getBigDecimal("total").setScale(2).toPlainString(),
             currency = getString("currency"),
         )
+
+    private fun String.orderWorkLabel(): String =
+        when (trim().lowercase()) {
+            "appointment" -> "appointment"
+            "service" -> "service request"
+            else -> "order"
+        }
 
     private fun Map<String, String>.toJsonObjectString(): String =
         entries.joinToString(prefix = "{", postfix = "}") { (key, value) ->
@@ -238,6 +257,8 @@ class OrderNotificationService(
         val orderId: String,
         val workspaceId: String,
         val orderNumber: String,
+        val orderType: String,
+        val source: String,
         val customerName: String?,
         val total: String,
         val currency: String,
