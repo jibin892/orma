@@ -144,6 +144,7 @@ class OrderNotificationService(
              and wm.status = 'active'
             where ndt.workspace_id = ?::uuid
               and ndt.enabled = true
+              and lower(ndt.platform) in ('android', 'web', 'ios')
               and au.notifications_enabled = true
         """.trimIndent()
         return prepareStatement(sql).use { statement ->

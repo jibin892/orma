@@ -11,9 +11,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.orma.project_90.getPlatform
 import org.orma.project_90.backend.OrmaBackendResult
+import org.orma.project_90.backend.OrmaDashboardNotificationPreview
 import org.orma.project_90.backend.OrmaGstinLookup
 import org.orma.project_90.backend.OrmaBackendSession
 import org.orma.project_90.backend.OrmaCustomerDraft
@@ -74,10 +76,12 @@ import org.orma.project_90.notifications.requestOrmaNotificationPermission
 import org.orma.project_90.notifications.currentOrmaNotificationDeviceToken
 import org.orma.project_90.notifications.observeOrmaNotificationMessages
 import org.orma.project_90.notifications.OrmaNotificationTokenException
+import org.orma.project_90.notifications.showOrmaNativeNotification
 
 @Composable
 fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
     var state by remember { mutableStateOf(OnboardingUiState(authLoadingKind = AuthLoadingKind.RestoringSession)) }
+    var desktopKnownNotificationIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     val authGateway = remember { createOrmaAuthGateway() }
     val backendClient = remember { createOrmaBackendClient() }
     val scope = rememberCoroutineScope()
@@ -703,6 +707,29 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
                 }
                 is OrmaBackendResult.Failure -> applyBackendFailure(result.title, result.message, result.code)
             }
+        }
+    }
+
+    fun handleDesktopNotificationPreview(
+        notifications: List<OrmaDashboardNotificationPreview>,
+        notifyNewEvents: Boolean,
+    ) {
+        if (!isOrmaDesktopRuntime()) return
+        val nextIds = notifications.mapNotNull { it.id.takeIf(String::isNotBlank) }.toSet()
+        if (!notifyNewEvents || desktopKnownNotificationIds.isEmpty()) {
+            desktopKnownNotificationIds = nextIds
+            return
+        }
+        val newNotifications = notifications
+            .asReversed()
+            .filter { it.id.isNotBlank() && it.id !in desktopKnownNotificationIds }
+        desktopKnownNotificationIds = desktopKnownNotificationIds + nextIds
+        if (!state.notificationsEnabled) return
+        newNotifications.forEach { notification ->
+            showOrmaNativeNotification(
+                title = notification.title,
+                body = notification.body,
+            )
         }
     }
 
