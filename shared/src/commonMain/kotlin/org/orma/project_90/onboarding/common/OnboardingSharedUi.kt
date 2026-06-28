@@ -19149,15 +19149,24 @@ private fun DashboardMarketingContent(
         )
         return
     }
-    var selectedMarketingTab by rememberSaveable { mutableStateOf("store") }
+    var selectedMarketingTab by rememberSaveable { mutableStateOf(DashboardMarketingTabProducts) }
+    LaunchedEffect(metaSetupComplete) {
+        if (metaSetupComplete && state.dashboard.metaWhatsAppTemplates.isEmpty() && !state.dashboard.metaActionLoading) {
+            actions.onLoadMetaWhatsAppTemplates()
+        }
+    }
     DashboardListScaffold(
         eyebrow = "MARKETING",
-        title = if (selectedMarketingTab == "store") "Store" else "Sales channels",
+        title = selectedMarketingTab.dashboardMarketingTabTitle(),
         body = when {
-            selectedMarketingTab == "store" && state.workspaceId.isNotBlank() ->
-                "Share the public ORMA store link or QR code so customers can order, request services, or book appointments."
-            selectedMarketingTab == "store" ->
+            selectedMarketingTab == DashboardMarketingTabProducts && state.workspaceId.isNotBlank() ->
+                "Review products ready for WhatsApp and share the public ORMA store link or QR code."
+            selectedMarketingTab == DashboardMarketingTabProducts ->
                 "Complete workspace setup to create the public ORMA store link and QR code."
+            selectedMarketingTab == DashboardMarketingTabTemplates ->
+                "List approved, pending, and rejected templates from the connected WhatsApp Business Account."
+            selectedMarketingTab == DashboardMarketingTabCreateTemplate ->
+                "Create one WhatsApp template for order, product, service, or appointment updates."
             marketingSourceProducts.isEmpty() ->
                 "Add catalog items first, then connect WhatsApp, Facebook, Instagram, and campaign sync."
             state.hasActiveDashboardFilter(DashboardFilterScopeMarketing) ->
@@ -19165,63 +19174,96 @@ private fun DashboardMarketingContent(
             else ->
                 "${marketingSourceProducts.size} catalog items available for WhatsApp, Meta, and social selling."
         },
-        primaryText = if (selectedMarketingTab == "store") "Manage catalog" else "Review catalog",
+        primaryText = when (selectedMarketingTab) {
+            DashboardMarketingTabTemplates -> if (state.dashboard.metaActionLoading) "Refreshing" else "Refresh templates"
+            DashboardMarketingTabCreateTemplate -> "View templates"
+            else -> "Manage catalog"
+        },
         onPrimary = {
-            onOpenProducts?.invoke()
+            when (selectedMarketingTab) {
+                DashboardMarketingTabTemplates -> actions.onLoadMetaWhatsAppTemplates()
+                DashboardMarketingTabCreateTemplate -> selectedMarketingTab = DashboardMarketingTabTemplates
+                else -> onOpenProducts?.invoke()
+            }
         },
         loading = state.dashboard.loading,
         wide = wide,
     ) {
-        OrmaSegmentedRow(
-            options = listOf("store", "channels"),
+        DashboardMarketingWorkspaceTabs(
             selected = selectedMarketingTab,
-            label = { if (it == "store") "Store" else "Channels" },
             onSelected = { selectedMarketingTab = it },
-            modifier = Modifier.widthIn(max = 340.dp),
         )
-        if (selectedMarketingTab == "store") {
-            if (wide) {
-                DashboardModuleWorkspace(
-                    wide = true,
-                    primary = {
-                        DashboardMarketingProductRecords(
-                            state = state,
-                            products = products,
-                        )
-                    },
-                    secondary = {
-                        DashboardMarketingShopLinkCard(state = state, wide = true)
-                    },
-                )
-            } else {
-                DashboardMarketingShopLinkCard(state = state, wide = false)
-                DashboardMarketingProductRecords(
+        when (selectedMarketingTab) {
+            DashboardMarketingTabTemplates -> {
+                DashboardMarketingTemplateListWorkspace(
                     state = state,
-                    products = products,
+                    onRefresh = actions.onLoadMetaWhatsAppTemplates,
+                    onCreate = { selectedMarketingTab = DashboardMarketingTabCreateTemplate },
+                    onSyncDefaults = actions.onSyncMetaWhatsAppTemplates,
                 )
             }
-        } else if (wide) {
-            DashboardModuleWorkspace(
-                wide = true,
-                primary = {
-                    DashboardMarketingChannelCard(state = state, actions = actions)
-                },
-                secondary = {
+            DashboardMarketingTabCreateTemplate -> {
+                DashboardMarketingCreateTemplateWorkspace(
+                    state = state,
+                    onSubmit = actions.onCreateMetaWhatsAppTemplate,
+                    onViewTemplates = { selectedMarketingTab = DashboardMarketingTabTemplates },
+                )
+            }
+            else -> {
+                if (wide) {
+                    DashboardModuleWorkspace(
+                        wide = true,
+                        primary = {
+                            DashboardMarketingProductRecords(
+                                state = state,
+                                products = products,
+                            )
+                        },
+                        secondary = {
+                            DashboardMarketingShopLinkCard(state = state, wide = true)
+                        },
+                    )
+                } else {
+                    DashboardMarketingShopLinkCard(state = state, wide = false)
                     DashboardMarketingProductRecords(
                         state = state,
                         products = products,
                     )
-                },
-            )
-        } else {
-            DashboardMarketingChannelCard(state = state, actions = actions)
-            DashboardMarketingProductRecords(
-                state = state,
-                products = products,
-            )
+                }
+            }
         }
     }
 }
+
+private const val DashboardMarketingTabProducts = "marketed_products"
+private const val DashboardMarketingTabTemplates = "created_templates"
+private const val DashboardMarketingTabCreateTemplate = "create_template"
+private val DashboardMarketingTabOptions = listOf(
+    DashboardMarketingTabProducts,
+    DashboardMarketingTabTemplates,
+    DashboardMarketingTabCreateTemplate,
+)
+
+@Composable
+private fun DashboardMarketingWorkspaceTabs(
+    selected: String,
+    onSelected: (String) -> Unit,
+) {
+    DashboardCompactSegmentedPicker(
+        options = DashboardMarketingTabOptions,
+        selected = selected.takeIf { it in DashboardMarketingTabOptions } ?: DashboardMarketingTabProducts,
+        label = { it.dashboardMarketingTabTitle() },
+        onSelected = onSelected,
+        modifier = Modifier.fillMaxWidth(),
+    )
+}
+
+private fun String.dashboardMarketingTabTitle(): String =
+    when (this) {
+        DashboardMarketingTabTemplates -> "Created templates"
+        DashboardMarketingTabCreateTemplate -> "Create template"
+        else -> "Marketed products"
+    }
 
 @Composable
 private fun DashboardMarketingSetupWorkspace(
@@ -19969,6 +20011,73 @@ private fun DashboardMarketingShopLinkCard(
 }
 
 @Composable
+private fun DashboardMarketingTemplateListWorkspace(
+    state: OnboardingUiState,
+    onRefresh: () -> Unit,
+    onCreate: () -> Unit,
+    onSyncDefaults: () -> Unit,
+) {
+    DashboardRecordCard {
+        DashboardMetaTemplateManager(
+            templates = state.dashboard.metaWhatsAppTemplates,
+            syncItems = state.dashboard.metaTemplateSyncItems,
+            actionLoading = state.dashboard.metaActionLoading,
+            onRefresh = onRefresh,
+            onCreate = onCreate,
+            onSyncDefaults = onSyncDefaults,
+            showDivider = false,
+        )
+    }
+}
+
+@Composable
+private fun DashboardMarketingCreateTemplateWorkspace(
+    state: OnboardingUiState,
+    onSubmit: (OrmaMetaWhatsAppTemplateDraft) -> Unit,
+    onViewTemplates: () -> Unit,
+) {
+    DashboardRecordCard {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.Top,
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    text = "Create new WhatsApp template",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = OrmaColors.TextPrimary,
+                )
+                Text(
+                    text = "Submit a template for Meta approval. Approved templates can be used for product, service, appointment, and order updates.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = OrmaColors.TextSecondary,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            OrmaBadge(
+                text = state.dashboard.metaConnection?.messagingStatus?.dashboardTitleCase()?.uppercase() ?: "WHATSAPP",
+                tone = if (state.dashboard.metaConnection.dashboardMetaMessagingReady()) {
+                    OrmaStatusTone.Success
+                } else {
+                    OrmaStatusTone.Warning
+                },
+            )
+        }
+        DashboardMetaTemplateCreateForm(
+            state = state,
+            onSubmit = onSubmit,
+            secondaryText = "View templates",
+            onSecondary = onViewTemplates,
+        )
+    }
+}
+
+@Composable
 private fun DashboardMarketingChannelCard(
     state: OnboardingUiState,
     actions: OnboardingActions,
@@ -20412,8 +20521,11 @@ private fun DashboardMetaTemplateManager(
     onRefresh: () -> Unit,
     onCreate: () -> Unit,
     onSyncDefaults: () -> Unit,
+    showDivider: Boolean = true,
 ) {
-    HorizontalDivider(color = OrmaColors.Hairline.copy(alpha = 0.55f))
+    if (showDivider) {
+        HorizontalDivider(color = OrmaColors.Hairline.copy(alpha = 0.55f))
+    }
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -20599,6 +20711,28 @@ private fun MetaWhatsAppTemplateCreateSheet(
     onDismiss: () -> Unit,
     onSubmit: (OrmaMetaWhatsAppTemplateDraft) -> Unit,
 ) {
+    val closeSheet = LocalSmoothSheetDismiss.current ?: onDismiss
+    DashboardFormSheet(
+        title = "Create WhatsApp template",
+        body = "Submit a template to the connected WhatsApp Business Account. Meta approval happens in WhatsApp Manager.",
+        onDismiss = onDismiss,
+    ) {
+        DashboardMetaTemplateCreateForm(
+            state = state,
+            onSubmit = onSubmit,
+            secondaryText = "Cancel",
+            onSecondary = closeSheet,
+        )
+    }
+}
+
+@Composable
+private fun DashboardMetaTemplateCreateForm(
+    state: OnboardingUiState,
+    onSubmit: (OrmaMetaWhatsAppTemplateDraft) -> Unit,
+    secondaryText: String?,
+    onSecondary: (() -> Unit)?,
+) {
     var draft by remember {
         mutableStateOf(
             OrmaMetaWhatsAppTemplateDraft(
@@ -20611,85 +20745,78 @@ private fun MetaWhatsAppTemplateCreateSheet(
         )
     }
     var sampleText by rememberSaveable { mutableStateOf(draft.sampleParameters.joinToString(", ")) }
-    val closeSheet = LocalSmoothSheetDismiss.current ?: onDismiss
-    DashboardFormSheet(
-        title = "Create WhatsApp template",
-        body = "Submit a template to the connected WhatsApp Business Account. Meta approval happens in WhatsApp Manager.",
-        onDismiss = onDismiss,
-    ) {
-        OrmaTextField(
-            value = draft.name,
-            onValueChange = { value ->
-                draft = draft.copy(
-                    name = value
-                        .lowercase()
-                        .map { char -> if (char.isLetterOrDigit()) char else '_' }
-                        .joinToString("")
-                        .replace(Regex("_+"), "_")
-                        .take(80),
-                )
-            },
-            label = "Template name",
-            placeholder = "orma_custom_update",
-        )
-        OrmaSegmentedRow(
-            options = listOf("UTILITY", "MARKETING", "AUTHENTICATION"),
-            selected = draft.category,
-            label = { if (it == "AUTHENTICATION") "Auth" else it.lowercase().replaceFirstChar { char -> char.uppercase() } },
-            onSelected = { draft = draft.copy(category = it) },
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OrmaTextField(
-            value = draft.languageCode,
-            onValueChange = { draft = draft.copy(languageCode = it.replace("-", "_").take(12)) },
-            label = "Language code",
-            placeholder = "en_US",
-        )
-        OrmaTextField(
-            value = draft.bodyText,
-            onValueChange = { draft = draft.copy(bodyText = it.take(1024)) },
-            label = "Template body",
-            placeholder = "Hi {{1}}, your order {{2}} is ready.",
-            singleLine = false,
-            minLines = 4,
-        )
-        OrmaTextField(
-            value = sampleText,
-            onValueChange = { sampleText = it.take(500) },
-            label = "Sample values",
-            supportingText = "Comma-separated examples for {{1}}, {{2}}, {{3}}.",
-            placeholder = "Jibin Cherian, ORD-123456, confirmed",
-            singleLine = false,
-            minLines = 2,
-        )
-        DashboardModuleChecklistCard(
-            title = "Template rules",
-            items = listOf(
-                "Use approved templates for business-initiated WhatsApp messages.",
-                "Keep variables simple and provide matching sample values.",
-                "Approved templates can be selected later for order, service, and appointment updates.",
-            ),
-            tertiaryText = state.dashboard.metaConnection?.messagingStatus?.dashboardTitleCase() ?: "Messaging setup",
-        )
-        OrmaActionRow(
-            primaryText = if (state.dashboard.metaActionLoading) "Submitting..." else "Submit template",
-            onPrimary = {
-                onSubmit(
-                    draft.copy(
-                        sampleParameters = sampleText
-                            .split(",")
-                            .map { it.trim() }
-                            .filter { it.isNotBlank() },
-                    ),
-                )
-            },
-            primaryEnabled = !state.dashboard.metaActionLoading &&
-                draft.name.trim().length >= 3 &&
-                draft.bodyText.trim().length >= 10,
-            secondaryText = "Cancel",
-            onSecondary = closeSheet,
-        )
-    }
+    OrmaTextField(
+        value = draft.name,
+        onValueChange = { value ->
+            draft = draft.copy(
+                name = value
+                    .lowercase()
+                    .map { char -> if (char.isLetterOrDigit()) char else '_' }
+                    .joinToString("")
+                    .replace(Regex("_+"), "_")
+                    .take(80),
+            )
+        },
+        label = "Template name",
+        placeholder = "orma_custom_update",
+    )
+    OrmaSegmentedRow(
+        options = listOf("UTILITY", "MARKETING", "AUTHENTICATION"),
+        selected = draft.category,
+        label = { if (it == "AUTHENTICATION") "Auth" else it.lowercase().replaceFirstChar { char -> char.uppercase() } },
+        onSelected = { draft = draft.copy(category = it) },
+        modifier = Modifier.fillMaxWidth(),
+    )
+    OrmaTextField(
+        value = draft.languageCode,
+        onValueChange = { draft = draft.copy(languageCode = it.replace("-", "_").take(12)) },
+        label = "Language code",
+        placeholder = "en_US",
+    )
+    OrmaTextField(
+        value = draft.bodyText,
+        onValueChange = { draft = draft.copy(bodyText = it.take(1024)) },
+        label = "Template body",
+        placeholder = "Hi {{1}}, your order {{2}} is ready.",
+        singleLine = false,
+        minLines = 4,
+    )
+    OrmaTextField(
+        value = sampleText,
+        onValueChange = { sampleText = it.take(500) },
+        label = "Sample values",
+        supportingText = "Comma-separated examples for {{1}}, {{2}}, {{3}}.",
+        placeholder = "Jibin Cherian, ORD-123456, confirmed",
+        singleLine = false,
+        minLines = 2,
+    )
+    DashboardModuleChecklistCard(
+        title = "Template rules",
+        items = listOf(
+            "Use approved templates for business-initiated WhatsApp messages.",
+            "Keep variables simple and provide matching sample values.",
+            "Approved templates can be selected later for order, service, and appointment updates.",
+        ),
+        tertiaryText = state.dashboard.metaConnection?.messagingStatus?.dashboardTitleCase() ?: "Messaging setup",
+    )
+    OrmaActionRow(
+        primaryText = if (state.dashboard.metaActionLoading) "Submitting..." else "Submit template",
+        onPrimary = {
+            onSubmit(
+                draft.copy(
+                    sampleParameters = sampleText
+                        .split(",")
+                        .map { it.trim() }
+                        .filter { it.isNotBlank() },
+                ),
+            )
+        },
+        primaryEnabled = !state.dashboard.metaActionLoading &&
+            draft.name.trim().length >= 3 &&
+            draft.bodyText.trim().length >= 10,
+        secondaryText = secondaryText,
+        onSecondary = onSecondary,
+    )
 }
 
 private fun dashboardMetaConnectionRows(
@@ -22312,6 +22439,7 @@ private fun DashboardBookingDetailsContent(
     var showDeliverySheet by rememberSaveable(order.id) { mutableStateOf(false) }
     var showDispatchSheet by rememberSaveable(order.id) { mutableStateOf(false) }
     var addonSessionId by rememberSaveable(order.id) { mutableStateOf<String?>(null) }
+    var scheduleSessionId by rememberSaveable(order.id) { mutableStateOf<String?>(null) }
     val canEditSale = state.hasDashboardPermission(DashboardTeamPermissionEditSale)
     val canChangeStatus = state.hasDashboardPermission(DashboardTeamPermissionChangeBookingStatus)
     fun updateSession(
@@ -22354,6 +22482,9 @@ private fun DashboardBookingDetailsContent(
                 },
                 onAddAddon = { session ->
                     addonSessionId = session.id
+                },
+                onScheduleSession = { session ->
+                    scheduleSessionId = session.id
                 },
             )
         }
@@ -22431,6 +22562,26 @@ private fun DashboardBookingDetailsContent(
             },
         )
     }
+    val scheduleSession = scheduleSessionId?.let { id -> order.sessions.firstOrNull { it.id == id } }
+    if (scheduleSession != null) {
+        BookingSessionScheduleSheet(
+            order = order,
+            session = scheduleSession,
+            wide = wide,
+            actionLoading = actionLoading,
+            onDismiss = { scheduleSessionId = null },
+            onSubmit = { scheduledAt, notes ->
+                updateSession(scheduleSession.id) { session ->
+                    session.copy(
+                        scheduledAt = scheduledAt,
+                        status = "scheduled",
+                        notes = notes,
+                    )
+                }
+                scheduleSessionId = null
+            },
+        )
+    }
     if (showDeliverySheet) {
         BookingDetailsDeliveryAddressSheet(
             order = order,
@@ -22473,6 +22624,7 @@ private fun DashboardMobileBookingDetailsContent(
 ) {
     var showItemsSheet by rememberSaveable(order.id) { mutableStateOf(false) }
     var addonSessionId by rememberSaveable(order.id) { mutableStateOf<String?>(null) }
+    var scheduleSessionId by rememberSaveable(order.id) { mutableStateOf<String?>(null) }
     val upiMethod = state.dashboard.defaultUpiPaymentMethod()
     fun updateSession(
         sessionId: String,
@@ -22531,6 +22683,9 @@ private fun DashboardMobileBookingDetailsContent(
         onAddAddon = { session ->
             addonSessionId = session.id
         },
+        onScheduleSession = { session ->
+            scheduleSessionId = session.id
+        },
     )
     BookingDetailsDocumentsCard(
         state = state,
@@ -22572,6 +22727,26 @@ private fun DashboardMobileBookingDetailsContent(
                     )
                 }
                 addonSessionId = null
+            },
+        )
+    }
+    val scheduleSession = scheduleSessionId?.let { id -> order.sessions.firstOrNull { it.id == id } }
+    if (scheduleSession != null) {
+        BookingSessionScheduleSheet(
+            order = order,
+            session = scheduleSession,
+            wide = false,
+            actionLoading = actionLoading,
+            onDismiss = { scheduleSessionId = null },
+            onSubmit = { scheduledAt, notes ->
+                updateSession(scheduleSession.id) { session ->
+                    session.copy(
+                        scheduledAt = scheduledAt,
+                        status = "scheduled",
+                        notes = notes,
+                    )
+                }
+                scheduleSessionId = null
             },
         )
     }
@@ -23355,6 +23530,7 @@ private fun BookingDetailsPackageSessionsCard(
     actionLoading: Boolean,
     onCompleteSession: (OrmaOrderSession) -> Unit,
     onAddAddon: (OrmaOrderSession) -> Unit,
+    onScheduleSession: (OrmaOrderSession) -> Unit,
 ) {
     val sessionBackedOrder = order.orderType in setOf("appointment", "service") || order.sessions.isNotEmpty()
     if (!sessionBackedOrder) return
@@ -23413,6 +23589,7 @@ private fun BookingDetailsPackageSessionsCard(
                         actionLoading = actionLoading,
                         onCompleteSession = onCompleteSession,
                         onAddAddon = onAddAddon,
+                        onScheduleSession = onScheduleSession,
                     )
                 }
             }
@@ -23429,8 +23606,10 @@ private fun BookingSessionRow(
     actionLoading: Boolean,
     onCompleteSession: (OrmaOrderSession) -> Unit,
     onAddAddon: (OrmaOrderSession) -> Unit,
+    onScheduleSession: (OrmaOrderSession) -> Unit,
 ) {
     val completed = session.status.trim().lowercase() == "completed"
+    val needsSchedule = session.scheduledAt.isNullOrBlank() || session.status.trim().lowercase() == "pending_schedule"
     val sessionTotal = session.addonTotal.toDoubleOrNull().orZero()
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -23493,12 +23672,22 @@ private fun BookingSessionRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     if (canEditSessions) {
-                        DashboardWideActionButton(
-                            text = "Add add-on / payment",
-                            onClick = { onAddAddon(session) },
-                            modifier = Modifier.weight(1f),
-                            enabled = !actionLoading,
-                        )
+                        if (needsSchedule) {
+                            DashboardWideActionButton(
+                                text = "Schedule session",
+                                onClick = { onScheduleSession(session) },
+                                modifier = Modifier.weight(1f),
+                                primary = true,
+                                enabled = !actionLoading,
+                            )
+                        } else {
+                            DashboardWideActionButton(
+                                text = "Add add-on / payment",
+                                onClick = { onAddAddon(session) },
+                                modifier = Modifier.weight(1f),
+                                enabled = !actionLoading,
+                            )
+                        }
                     }
                     if (canCompleteSessions && !completed) {
                         DashboardWideActionButton(
@@ -23512,6 +23701,54 @@ private fun BookingSessionRow(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun BookingSessionScheduleSheet(
+    order: OrmaOrder,
+    session: OrmaOrderSession,
+    wide: Boolean,
+    actionLoading: Boolean,
+    onDismiss: () -> Unit,
+    onSubmit: (String, String) -> Unit,
+) {
+    var scheduledAt by remember(session.id) {
+        mutableStateOf(session.scheduledAt.orEmpty().ifBlank { order.scheduledAt.orEmpty() })
+    }
+    var notes by remember(session.id) { mutableStateOf(session.notes.orEmpty()) }
+    val ready = scheduledAt.trim().length >= 4
+    DashboardFormSheet(
+        title = "Schedule session",
+        body = "${session.title.ifBlank { "Session ${session.sequenceNumber}" }} · ${order.orderNumber}",
+        onDismiss = onDismiss,
+        wide = wide,
+    ) {
+        DashboardRecordCard {
+            OrmaCalendarDateTimeField(
+                value = scheduledAt,
+                onValueChange = { scheduledAt = it },
+                label = "Session date and time",
+                placeholder = "Choose session time",
+                supportingText = "Use this to schedule a remaining package session.",
+                allowClear = true,
+            )
+            OrmaTextField(
+                value = notes,
+                onValueChange = { notes = it.take(400) },
+                label = "Session notes",
+                placeholder = "Optional",
+                singleLine = false,
+                minLines = 2,
+            )
+        }
+        OrmaActionRow(
+            secondaryText = "Cancel",
+            onSecondary = onDismiss,
+            primaryText = if (actionLoading) "Saving" else "Save session",
+            onPrimary = { onSubmit(scheduledAt.trim(), notes.trim()) },
+            primaryEnabled = ready && !actionLoading,
+        )
     }
 }
 
@@ -27709,6 +27946,7 @@ private fun ProductEditorScreen(
         ProductOptionsEditor(
             itemType = draft.itemType,
             unit = draft.unit,
+            baseSellingPrice = draft.sellingPrice.trim(),
             catalogProducts = state.dashboard.products,
             currentProductId = product?.id.orEmpty(),
             variants = draft.variants,
@@ -27756,7 +27994,7 @@ private fun ProductEditorScreen(
                                         name = variant.name.trim(),
                                         sku = variant.sku.trim(),
                                         barcode = variant.barcode.trim(),
-                                        sellingPrice = variant.sellingPrice.trim(),
+                                        sellingPrice = variant.sellingPrice.trim().ifBlank { draft.sellingPrice.trim() },
                                         costPrice = variant.costPrice.trim(),
                                         stockQuantity = if (draft.itemType == "product") {
                                             variant.stockQuantity.trim()
@@ -27813,12 +28051,14 @@ private fun ProductEditorScreen(
 private fun ProductOptionsEditor(
     itemType: String,
     unit: String,
+    baseSellingPrice: String,
     catalogProducts: List<OrmaProduct>,
     currentProductId: String,
     variants: List<OrmaProductVariantDraft>,
     onVariantsChange: (List<OrmaProductVariantDraft>) -> Unit,
 ) {
     val copy = itemType.optionEditorCopy()
+    val defaultVariantSellingPrice = baseSellingPrice.trim().takeIf { it.isNotBlank() }.orEmpty()
     val componentCandidates = remember(itemType, catalogProducts, currentProductId) {
         catalogProducts.packageComponentCandidates(itemType, currentProductId)
     }
@@ -27862,11 +28102,35 @@ private fun ProductOptionsEditor(
                             style = MaterialTheme.typography.labelLarge,
                             color = OrmaColors.TextSecondary,
                         )
-                        OrmaTextButton(
-                            text = "Remove",
-                            onClick = { onVariantsChange(variants.filterIndexed { itemIndex, _ -> itemIndex != index }) },
-                        )
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            val variantStatus = variant.status.normalizedCatalogAvailabilityStatus()
+                            OrmaBadge(
+                                text = variantStatus.catalogAvailabilityLabel().uppercase(),
+                                tone = variantStatus.catalogAvailabilityTone(),
+                            )
+                            OrmaTextButton(
+                                text = "Remove",
+                                onClick = { onVariantsChange(variants.filterIndexed { itemIndex, _ -> itemIndex != index }) },
+                            )
+                        }
                     }
+                    OrmaSwitchRow(
+                        title = "${copy.rowTitle} active",
+                        body = if (variant.status.normalizedCatalogAvailabilityStatus() == "active") {
+                            "Shown in catalog and available for orders."
+                        } else {
+                            "Hidden from catalog and blocked from new orders."
+                        },
+                        checked = variant.status.normalizedCatalogAvailabilityStatus() == "active",
+                        onCheckedChange = { active ->
+                            onVariantsChange(variants.mapIndexed { itemIndex, old ->
+                                if (itemIndex == index) old.copy(status = if (active) "active" else "inactive") else old
+                            })
+                        },
+                    )
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         OrmaTextField(
                             value = variant.name,
@@ -27880,7 +28144,7 @@ private fun ProductOptionsEditor(
                             modifier = Modifier.weight(1f),
                         )
                         OrmaTextField(
-                            value = variant.sellingPrice,
+                            value = variant.sellingPrice.ifBlank { defaultVariantSellingPrice },
                             onValueChange = { value ->
                                 onVariantsChange(variants.mapIndexed { itemIndex, old ->
                                     if (itemIndex == index) old.copy(sellingPrice = value.moneyInput()) else old
@@ -28114,7 +28378,14 @@ private fun ProductOptionsEditor(
         }
         DashboardWideActionButton(
             text = copy.addAction,
-            onClick = { onVariantsChange(variants + OrmaProductVariantDraft(status = "active")) },
+            onClick = {
+                onVariantsChange(
+                    variants + OrmaProductVariantDraft(
+                        sellingPrice = defaultVariantSellingPrice,
+                        status = "active",
+                    ),
+                )
+            },
         )
     }
 }
@@ -28415,14 +28686,41 @@ private fun DashboardPackageRecord.packageTimingOrStockLine(): String? =
         else -> null
     }
 
-private fun DashboardPackageRecord.packageAddonLine(): String? {
-    val count = variant.addons.count { it.status.normalizedCatalogAvailabilityStatus() == "active" }
-    return when (count) {
+private fun DashboardPackageRecord.packageComponentLine(): String? {
+    val activeComponents = variant.components.filter { it.status.normalizedCatalogAvailabilityStatus() == "active" }
+    val componentLine = when {
+        activeComponents.isEmpty() -> null
+        activeComponents.size == 1 -> activeComponents.first().packageComponentSummary()
+        else -> activeComponents.take(2).joinToString(", ") { it.packageComponentSummary() }
+            .let { summary ->
+                if (activeComponents.size > 2) "$summary +${activeComponents.size - 2}" else summary
+            }
+    }
+    val addOnCount = variant.addons.count { it.status.normalizedCatalogAvailabilityStatus() == "active" }
+    val addOnLine = when (addOnCount) {
         0 -> null
         1 -> "1 add-on"
-        else -> "$count add-ons"
+        else -> "$addOnCount add-ons"
     }
+    return listOfNotNull(componentLine, addOnLine).joinToString(" / ").ifBlank { null }
 }
+
+private fun org.orma.project_90.backend.OrmaProductVariantComponent.packageComponentSummary(): String =
+    buildString {
+        val quantityValue = quantity.toDoubleOrNull()?.takeIf { it > 0.0 } ?: 1.0
+        val quantityLabel = if (quantityValue % 1.0 == 0.0) {
+            quantityValue.toInt().toString()
+        } else {
+            quantity
+        }
+        append(quantityLabel)
+        append(" x ")
+        append(productName.ifBlank { "Item" })
+        variantName?.takeIf { it.isNotBlank() }?.let {
+            append(" - ")
+            append(it)
+        }
+    }
 
 private fun OrmaProductVariant.packageIncludedLabel(itemType: String, unit: String): String {
     val count = includedQuantity.coerceAtLeast(1)

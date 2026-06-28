@@ -409,6 +409,12 @@ class DashboardRepository(
                         paymentMethod = paymentMethod,
                     ),
                 )
+            } catch (error: DashboardOrderValidationException) {
+                connection.rollback()
+                if (error.code == "public_catalog_stock_unavailable") {
+                    return@withContext PublicCatalogOrderSubmitResult.ItemsUnavailable
+                }
+                throw error
             } catch (error: Throwable) {
                 connection.rollback()
                 throw error
@@ -4534,6 +4540,12 @@ class DashboardRepository(
             }
         val preparedItems = request.items.map { it.toPreparedOrderItem() }
         validateOrderCatalogItemTypes(access.workspaceId, orderType, preparedItems)
+        if (source == "public_catalog" && status == "new" && !publicCatalogInventoryHasCapacity(access.workspaceId, preparedItems)) {
+            throw DashboardOrderValidationException(
+                code = "public_catalog_stock_unavailable",
+                publicMessage = "Selected items are no longer available in the requested quantity.",
+            )
+        }
         val subtotal = preparedItems.fold(BigDecimal.ZERO) { total, item -> total.add(item.lineSubtotal) }.scaled()
         val taxTotal = preparedItems.fold(BigDecimal.ZERO) { total, item -> total.add(item.lineTax) }.scaled()
         val total = preparedItems.fold(BigDecimal.ZERO) { sum, item -> sum.add(item.lineTotal) }.scaled()
@@ -5778,6 +5790,232 @@ class DashboardRepository(
         )
     }
 
+    private fun Connection.publicCatalogInventoryHasCapacity(
+        workspaceId: String,
+        items: List<PreparedOrderItem>,
+    ): Boolean {
+        val requirements = items.publicCatalogInventoryRequirements()
+        if (requirements.isEmpty()) return true
+
+        lockPublicCatalogInventoryRows(
+            workspaceId = workspaceId,
+            productIds = requirements.map { it.productId }.distinct(),
+            variantIds = requirements.mapNotNull { it.variantId }.distinct(),
+        )
+        val productStock = loadProductStockStates(workspaceId, requirements.map { it.productId }.distinct())
+        val variantStock = loadVariantStockStates(workspaceId, requirements.mapNotNull { it.variantId }.distinct())
+
+        return requirements.all { requirement ->
+            val product = productStock[requirement.productId] ?: return@all false
+            if (!product.trackStock) return@all true
+            val availableStock = if (requirement.variantScoped) {
+                requirement.variantId?.let { variantStock[it]?.stockQuantity } ?: return@all false
+            } else {
+                product.stockQuantity
+            }
+            val reserved = publicCatalogReservedQuantity(
+                workspaceId = workspaceId,
+                productId = requirement.productId,
+                variantId = requirement.variantId,
+                variantScoped = requirement.variantScoped,
+            )
+            requirement.quantity <= availableStock.subtract(reserved)
+        }
+    }
+
+    private fun List<PreparedOrderItem>.publicCatalogInventoryRequirements(): List<InventoryRequirement> {
+        val requirements = linkedMapOf<InventoryRequirementKey, BigDecimal>()
+        fun addRequirement(productId: String?, variantId: String?, quantity: BigDecimal) {
+            val cleanProductId = productId ?: return
+            if (quantity <= BigDecimal.ZERO) return
+            val productKey = InventoryRequirementKey(cleanProductId, null, variantScoped = false)
+            requirements[productKey] = requirements[productKey]?.add(quantity) ?: quantity
+            if (variantId != null) {
+                val variantKey = InventoryRequirementKey(cleanProductId, variantId, variantScoped = true)
+                requirements[variantKey] = requirements[variantKey]?.add(quantity) ?: quantity
+            }
+        }
+        forEach { item ->
+            if (item.components.isNotEmpty()) {
+                item.components
+                    .filter { it.itemType == "product" && it.trackStock }
+                    .forEach { component ->
+                        addRequirement(
+                            productId = component.productId,
+                            variantId = component.variantId,
+                            quantity = item.quantity.multiply(component.quantity).scaled(),
+                        )
+                    }
+            } else {
+                addRequirement(
+                    productId = item.productId,
+                    variantId = item.variantId,
+                    quantity = item.quantity.scaled(),
+                )
+            }
+        }
+        return requirements.map { (key, quantity) ->
+            InventoryRequirement(
+                productId = key.productId,
+                variantId = key.variantId,
+                variantScoped = key.variantScoped,
+                quantity = quantity.scaled(),
+            )
+        }
+    }
+
+    private fun Connection.lockPublicCatalogInventoryRows(
+        workspaceId: String,
+        productIds: List<String>,
+        variantIds: List<String>,
+    ) {
+        productIds.sorted().forEach { productId ->
+            prepareStatement(
+                """
+                select id
+                from products
+                where workspace_id = ?::uuid and id = ?::uuid
+                for update
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setString(1, workspaceId)
+                statement.setString(2, productId)
+                statement.executeQuery().use { result -> result.next() }
+            }
+        }
+        variantIds.sorted().forEach { variantId ->
+            prepareStatement(
+                """
+                select id
+                from product_variants
+                where workspace_id = ?::uuid and id = ?::uuid
+                for update
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setString(1, workspaceId)
+                statement.setString(2, variantId)
+                statement.executeQuery().use { result -> result.next() }
+            }
+        }
+    }
+
+    private fun Connection.loadProductStockStates(
+        workspaceId: String,
+        productIds: List<String>,
+    ): Map<String, ProductStockState> {
+        if (productIds.isEmpty()) return emptyMap()
+        val placeholders = productIds.distinct().joinToString(", ") { "?::uuid" }
+        val states = mutableMapOf<String, ProductStockState>()
+        prepareStatement(
+            """
+            select id::text, track_stock, stock_quantity
+            from products
+            where workspace_id = ?::uuid and id in ($placeholders) and status = 'active'
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setString(1, workspaceId)
+            productIds.distinct().forEachIndexed { index, productId ->
+                statement.setString(index + 2, productId)
+            }
+            statement.executeQuery().use { result ->
+                while (result.next()) {
+                    states[result.getString("id")] = ProductStockState(
+                        trackStock = result.getBoolean("track_stock"),
+                        stockQuantity = result.getBigDecimal("stock_quantity") ?: BigDecimal.ZERO,
+                    )
+                }
+            }
+        }
+        return states
+    }
+
+    private fun Connection.loadVariantStockStates(
+        workspaceId: String,
+        variantIds: List<String>,
+    ): Map<String, VariantStockState> {
+        if (variantIds.isEmpty()) return emptyMap()
+        val placeholders = variantIds.distinct().joinToString(", ") { "?::uuid" }
+        val states = mutableMapOf<String, VariantStockState>()
+        prepareStatement(
+            """
+            select id::text, stock_quantity
+            from product_variants
+            where workspace_id = ?::uuid and id in ($placeholders) and status = 'active'
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setString(1, workspaceId)
+            variantIds.distinct().forEachIndexed { index, variantId ->
+                statement.setString(index + 2, variantId)
+            }
+            statement.executeQuery().use { result ->
+                while (result.next()) {
+                    states[result.getString("id")] = VariantStockState(
+                        stockQuantity = result.getBigDecimal("stock_quantity") ?: BigDecimal.ZERO,
+                    )
+                }
+            }
+        }
+        return states
+    }
+
+    private fun Connection.publicCatalogReservedQuantity(
+        workspaceId: String,
+        productId: String,
+        variantId: String?,
+        variantScoped: Boolean,
+    ): BigDecimal {
+        val directVariantClause = if (variantScoped) {
+            "and oi.variant_id is not distinct from ?::uuid"
+        } else {
+            ""
+        }
+        val componentVariantClause = if (variantScoped) {
+            "and pvc.component_variant_id is not distinct from ?::uuid"
+        } else {
+            ""
+        }
+        val sql = """
+            select coalesce(sum(reserved_quantity), 0) as reserved_quantity
+            from (
+                select oi.quantity as reserved_quantity
+                from order_items oi
+                join orders o on o.id = oi.order_id
+                where o.workspace_id = ?::uuid
+                  and o.source = 'public_catalog'
+                  and o.status = 'new'
+                  and o.inventory_applied = false
+                  and oi.product_id = ?::uuid
+                  $directVariantClause
+                union all
+                select oi.quantity * pvc.quantity as reserved_quantity
+                from order_items oi
+                join orders o on o.id = oi.order_id
+                join product_variant_components pvc
+                  on pvc.workspace_id = o.workspace_id
+                 and pvc.package_variant_id = oi.variant_id
+                 and pvc.status = 'active'
+                where o.workspace_id = ?::uuid
+                  and o.source = 'public_catalog'
+                  and o.status = 'new'
+                  and o.inventory_applied = false
+                  and pvc.component_product_id = ?::uuid
+                  $componentVariantClause
+            ) reservations
+        """.trimIndent()
+        return prepareStatement(sql).use { statement ->
+            var index = 1
+            statement.setString(index++, workspaceId)
+            statement.setString(index++, productId)
+            if (variantScoped) statement.setNullableUuid(index++, variantId)
+            statement.setString(index++, workspaceId)
+            statement.setString(index++, productId)
+            if (variantScoped) statement.setNullableUuid(index, variantId)
+            statement.executeQuery().use { result ->
+                if (result.next()) result.getBigDecimal("reserved_quantity") ?: BigDecimal.ZERO else BigDecimal.ZERO
+            }
+        }
+    }
+
     private fun Connection.loadCatalogPackageComponents(
         workspaceId: String,
         variantIds: List<String>,
@@ -6963,6 +7201,28 @@ class DashboardRepository(
         val variantId: String?,
         val variantName: String?,
         val quantity: BigDecimal,
+    )
+
+    private data class InventoryRequirement(
+        val productId: String,
+        val variantId: String?,
+        val variantScoped: Boolean,
+        val quantity: BigDecimal,
+    )
+
+    private data class InventoryRequirementKey(
+        val productId: String,
+        val variantId: String?,
+        val variantScoped: Boolean,
+    )
+
+    private data class ProductStockState(
+        val trackStock: Boolean,
+        val stockQuantity: BigDecimal,
+    )
+
+    private data class VariantStockState(
+        val stockQuantity: BigDecimal,
     )
 
     private data class CatalogVariant(

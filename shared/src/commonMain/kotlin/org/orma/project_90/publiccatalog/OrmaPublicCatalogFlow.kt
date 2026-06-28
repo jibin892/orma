@@ -2690,6 +2690,15 @@ private fun PublicCatalogVariantPickerRow(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
+                variant.publicCatalogComponentSummary()?.let { componentSummary ->
+                    Text(
+                        text = componentSummary,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = OrmaColors.TextSecondary,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
             QuantityStepper(
                 quantity = quantity,
@@ -3571,6 +3580,29 @@ private fun OrmaProductVariant.publicCatalogPackageDetail(itemType: String, unit
         "appointment" -> "$count sessions"
         "service" -> "$count service sessions"
         else -> "$count ${unit.ifBlank { "items" }}"
+    }
+}
+
+private fun OrmaProductVariant.publicCatalogComponentSummary(): String? {
+    val activeComponents = components.filter { it.status.trim().lowercase() == "active" }
+    if (activeComponents.isEmpty()) return null
+    val summary = activeComponents.take(2).joinToString(", ") { component ->
+        val quantityValue = component.quantity.toDoubleOrNull()?.takeIf { it > 0.0 } ?: 1.0
+        val quantityLabel = if (quantityValue % 1.0 == 0.0) quantityValue.toInt().toString() else component.quantity
+        buildString {
+            append(quantityLabel)
+            append(" x ")
+            append(component.productName.ifBlank { "Item" })
+            component.variantName?.takeIf { it.isNotBlank() }?.let {
+                append(" - ")
+                append(it)
+            }
+        }
+    }
+    return if (activeComponents.size > 2) {
+        "$summary +${activeComponents.size - 2}"
+    } else {
+        summary
     }
 }
 

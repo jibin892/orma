@@ -157,14 +157,13 @@
                 const code = error && error.code ? error.code : "FIREBASE_WEB_MESSAGING_TOKEN_FAILED";
                 const message = error && error.message ? error.message : "";
                 if (
-                    code === "messaging/token-subscribe-failed" ||
-                    code === "messaging/token-update-failed" ||
+                    isFirebasePushSubscriptionError(error) ||
                     message.indexOf("missing required authentication credential") >= 0 ||
                     message.indexOf("Expected OAuth 2 access token") >= 0
                 ) {
                     return {
-                        errorTitle: "Web push setup needs Firebase access",
-                        errorMessage: "Firebase rejected this browser push registration. In Firebase/Google Cloud, verify the Web Push key, Firebase Installations API, Firebase Cloud Messaging API, and API key domain restrictions for localhost and the deployed ORMA domain.",
+                        errorTitle: "Browser push could not connect",
+                        errorMessage: "ORMA reset this browser's push subscription and tried again, but Firebase still rejected the registration. Check the Firebase Web Push key, Firebase Installations API, Cloud Messaging API, and API key domain restrictions for localhost and the deployed ORMA domain.",
                         errorCode: code
                     };
                 }
@@ -187,6 +186,37 @@
                     errorMessage: message || "ORMA could not create a browser notification token.",
                     errorCode: code
                 };
+            }
+
+            function isFirebasePushSubscriptionError(error) {
+                const code = error && error.code ? error.code : "";
+                const message = error && error.message ? error.message : "";
+                return code === "messaging/token-subscribe-failed" ||
+                    code === "messaging/token-update-failed" ||
+                    message.indexOf("messaging/token-subscribe-failed") >= 0 ||
+                    message.indexOf("messaging/token-update-failed") >= 0;
+            }
+
+            async function resetFirebaseWebPushSubscription(messagingModule, messaging, serviceWorkerRegistration) {
+                try {
+                    if (messagingModule && typeof messagingModule.deleteToken === "function") {
+                        await messagingModule.deleteToken(messaging);
+                    }
+                } catch (_) {
+                    // Firebase can fail deleting a token that was never created. Continue with the browser reset.
+                }
+                try {
+                    const subscription = serviceWorkerRegistration &&
+                        serviceWorkerRegistration.pushManager &&
+                        typeof serviceWorkerRegistration.pushManager.getSubscription === "function"
+                        ? await serviceWorkerRegistration.pushManager.getSubscription()
+                        : null;
+                    if (subscription && typeof subscription.unsubscribe === "function") {
+                        await subscription.unsubscribe();
+                    }
+                } catch (_) {
+                    // Browsers can reject subscription cleanup for stale registrations; retry token creation anyway.
+                }
             }
 
             function currentUserWhenReady(auth, authModule, timeoutMs) {
@@ -491,7 +521,19 @@
                             tokenOptions.serviceWorkerRegistration = serviceWorkerRegistration;
                         }
                         tokenOptions.vapidKey = vapidKey;
-                        const token = await messagingModule.getToken(messaging, tokenOptions);
+                        let token = "";
+                        try {
+                            token = await messagingModule.getToken(messaging, tokenOptions);
+                        } catch (error) {
+                            if (!isFirebasePushSubscriptionError(error)) {
+                                throw error;
+                            }
+                            await resetFirebaseWebPushSubscription(messagingModule, messaging, serviceWorkerRegistration);
+                            if (serviceWorkerRegistration && serviceWorkerRegistration.update) {
+                                await serviceWorkerRegistration.update().catch(() => undefined);
+                            }
+                            token = await messagingModule.getToken(messaging, tokenOptions);
+                        }
                         if (!token) {
                             return {
                                 token: "",
