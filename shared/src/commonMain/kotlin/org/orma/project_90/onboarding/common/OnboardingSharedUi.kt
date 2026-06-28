@@ -9445,7 +9445,18 @@ private const val DashboardProductSortItem = "product_item"
 private const val DashboardProductSortType = "product_type"
 private const val DashboardProductSortStock = "product_stock"
 private const val DashboardProductSortPrice = "product_price"
+private const val DashboardPackageSortPackage = "package_name"
+private const val DashboardPackageSortParent = "package_parent"
+private const val DashboardPackageSortType = "package_type"
+private const val DashboardPackageSortQuantity = "package_quantity"
+private const val DashboardPackageSortPrice = "package_price"
 private val DashboardProductActionColumnWidth = 324.dp
+private val DashboardPackageActionColumnWidth = 136.dp
+
+private data class DashboardPackageRecord(
+    val product: OrmaProduct,
+    val variant: OrmaProductVariant,
+)
 
 private data class DashboardCatalogAvailabilityOption(
     val key: String,
@@ -9499,6 +9510,11 @@ private val DashboardProductDescendingFirstSorts: Set<String> = setOf(
     DashboardProductSortPrice,
 )
 
+private val DashboardPackageDescendingFirstSorts: Set<String> = setOf(
+    DashboardPackageSortQuantity,
+    DashboardPackageSortPrice,
+)
+
 private fun sortedDashboardProducts(
     products: List<OrmaProduct>,
     sortKey: String,
@@ -9509,6 +9525,28 @@ private fun sortedDashboardProducts(
         DashboardProductSortStock -> products.sortedBy { it.stockQuantity.toDoubleOrNull().orZero() }
         DashboardProductSortPrice -> products.sortedBy { it.sellingPrice.toDoubleOrNull().orZero() }
         else -> products.sortedBy { it.name.lowercase() }
+    }
+    return if (ascending) sorted else sorted.asReversed()
+}
+
+private fun dashboardPackageRecords(products: List<OrmaProduct>): List<DashboardPackageRecord> =
+    products.flatMap { product ->
+        product.variants
+            .filter { it.name.trim().isNotBlank() && it.status.normalizedCatalogAvailabilityStatus() != "archived" }
+            .map { variant -> DashboardPackageRecord(product = product, variant = variant) }
+    }
+
+private fun sortedDashboardPackageRecords(
+    records: List<DashboardPackageRecord>,
+    sortKey: String,
+    ascending: Boolean,
+): List<DashboardPackageRecord> {
+    val sorted = when (sortKey) {
+        DashboardPackageSortParent -> records.sortedBy { it.product.name.lowercase() }
+        DashboardPackageSortType -> records.sortedBy { it.product.itemType.packageTypeLabel() }
+        DashboardPackageSortQuantity -> records.sortedBy { it.variant.includedQuantity.coerceAtLeast(1) }
+        DashboardPackageSortPrice -> records.sortedBy { it.variant.sellingPrice.toDoubleOrNull().orZero() }
+        else -> records.sortedBy { it.variant.name.lowercase() }
     }
     return if (ascending) sorted else sorted.asReversed()
 }
@@ -16671,6 +16709,27 @@ private fun DashboardProductsWorkspace(
             onSelected = onTabSelected,
         )
         when (selectedTab) {
+            DashboardProductWorkspaceTabPackages -> {
+                val packageRecords = dashboardPackageRecords(products)
+                DashboardPackageSearchToolbar(
+                    state = state,
+                    actions = actions,
+                    onAddPackage = onAddProduct,
+                )
+                DashboardPackageKpiStrip(
+                    state = state,
+                    products = products,
+                    packageRecords = packageRecords,
+                )
+                DashboardPackageRecordsSurface(
+                    state = state,
+                    actions = actions,
+                    packageRecords = packageRecords,
+                    onAddPackage = onAddProduct,
+                    onEditPackage = { record -> onEditClick(record.product) },
+                    wide = true,
+                )
+            }
             DashboardProductWorkspaceTabSuppliers -> {
                 DashboardSupplierSearchToolbar(
                     state = state,
@@ -16770,6 +16829,7 @@ private fun DashboardMobileProductCatalogWorkspace(
 ) {
     val supplierTab = selectedTab == DashboardProductWorkspaceTabSuppliers
     val offerTab = selectedTab == DashboardProductWorkspaceTabOffers
+    val packageTab = selectedTab == DashboardProductWorkspaceTabPackages
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -16814,6 +16874,21 @@ private fun DashboardMobileProductCatalogWorkspace(
                 offers = offers,
                 onAddOffer = onAddOffer,
                 onEditOffer = onEditOffer,
+                wide = false,
+            )
+        } else if (packageTab) {
+            val packageRecords = dashboardPackageRecords(products)
+            DashboardPackageSearchToolbar(
+                state = state,
+                actions = actions,
+                onAddPackage = onAddProduct,
+            )
+            DashboardPackageRecordsSurface(
+                state = state,
+                actions = actions,
+                packageRecords = packageRecords,
+                onAddPackage = onAddProduct,
+                onEditPackage = { record -> onEditProduct(record.product) },
                 wide = false,
             )
         } else {
@@ -17144,10 +17219,12 @@ private fun DashboardMobileSupplierSearchCard(
 }
 
 private const val DashboardProductWorkspaceTabItems = "items"
+private const val DashboardProductWorkspaceTabPackages = "packages"
 private const val DashboardProductWorkspaceTabSuppliers = "suppliers"
 private const val DashboardProductWorkspaceTabOffers = "offers"
 private val DashboardProductWorkspaceTabOptions = listOf(
     DashboardProductWorkspaceTabItems,
+    DashboardProductWorkspaceTabPackages,
     DashboardProductWorkspaceTabSuppliers,
     DashboardProductWorkspaceTabOffers,
 )
@@ -17163,6 +17240,7 @@ private fun DashboardProductWorkspaceTabs(
         selected = selectedTab.takeIf { it in DashboardProductWorkspaceTabOptions } ?: DashboardProductWorkspaceTabItems,
         label = {
             when (it) {
+                DashboardProductWorkspaceTabPackages -> "Package"
                 DashboardProductWorkspaceTabSuppliers -> "Supplier"
                 DashboardProductWorkspaceTabOffers -> "Offers"
                 else -> activeItemType.sellableItemTypeLabel()
@@ -18329,6 +18407,511 @@ private fun DashboardOfferRow(
 }
 
 @Composable
+private fun DashboardPackageSearchToolbar(
+    state: OnboardingUiState,
+    actions: OnboardingActions,
+    onAddPackage: () -> Unit,
+) {
+    val filters = state.dashboard.filtersForScope(DashboardFilterScopeProducts)
+    val filtersActive = state.hasActiveDashboardFilter(DashboardFilterScopeProducts)
+    val itemTypeOptions = state.dashboardItemTypeFilterOptions()
+    val selectedItemType = state.selectedDashboardItemTypeFilter()
+    val showItemTypeFilter = itemTypeOptions.size > 1
+    val canCreatePackage = state.canCreateDashboardCatalogItem()
+    val itemTypeFilter: @Composable (Modifier) -> Unit = { modifier ->
+        if (showItemTypeFilter) {
+            DashboardCompactSegmentedPicker(
+                options = itemTypeOptions,
+                selected = selectedItemType,
+                label = { if (it == "all") "All packages" else it.sellableItemTypeLabel() },
+                onSelected = {
+                    updateDashboardProductItemTypeFilter(actions, DashboardFilterScopeProducts, it)
+                    if (it != "all" && it != "product") {
+                        updateDashboardLowStockFilter(actions, DashboardFilterScopeProducts, false)
+                    }
+                },
+                modifier = modifier,
+            )
+        }
+    }
+    DashboardWorkspaceToolbarCard(
+        title = "Package focus",
+        body = "Product packs, service levels, and appointment sessions are grouped by business type.",
+        badgeText = if (state.dashboard.loading) "SYNC" else "LIVE",
+        primaryText = if (canCreatePackage) "Add package" else null,
+        onPrimary = if (canCreatePackage) onAddPackage else null,
+        primaryEnabled = !state.dashboard.loading,
+        secondaryText = if (state.dashboard.loading) "Syncing" else "Sync",
+        onSecondary = actions.onDashboardRefresh,
+        secondaryEnabled = !state.dashboard.loading,
+    ) {
+        BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+            val compact = maxWidth < 700.dp
+            if (compact) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    DashboardCompactSearchField(
+                        value = filters.query,
+                        onValueChange = { updateDashboardSearchFilter(actions, DashboardFilterScopeProducts, it) },
+                        placeholder = "Package, item, SKU, barcode",
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = OrmaShapes.Field,
+                    )
+                    if (showItemTypeFilter) {
+                        itemTypeFilter(Modifier.fillMaxWidth())
+                    }
+                    DashboardDateRangeFilter(
+                        filters = filters,
+                        actions = actions,
+                        filterScope = DashboardFilterScopeProducts,
+                        wide = false,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    if (filtersActive) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End,
+                        ) {
+                            DashboardSalesInlineResetButton(
+                                onClick = { clearDashboardWorkspaceFilters(state, actions, DashboardFilterScopeProducts) },
+                            )
+                        }
+                    }
+                    dashboardCatalogFilterSummary(state)?.let {
+                        DashboardSalesActiveFilterSummary(text = it)
+                    }
+                }
+            } else {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        DashboardCompactSearchField(
+                            value = filters.query,
+                            onValueChange = { updateDashboardSearchFilter(actions, DashboardFilterScopeProducts, it) },
+                            placeholder = "Package, item, SKU, barcode",
+                            modifier = Modifier.weight(1.35f),
+                            shape = OrmaShapes.Field,
+                        )
+                        if (showItemTypeFilter) {
+                            itemTypeFilter(Modifier.weight(1.05f))
+                        }
+                        if (filtersActive) {
+                            DashboardSalesInlineResetButton(
+                                onClick = { clearDashboardWorkspaceFilters(state, actions, DashboardFilterScopeProducts) },
+                            )
+                        }
+                    }
+                    DashboardDateRangeFilter(
+                        filters = filters,
+                        actions = actions,
+                        filterScope = DashboardFilterScopeProducts,
+                        wide = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    dashboardCatalogFilterSummary(state)?.let {
+                        DashboardSalesActiveFilterSummary(text = it)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DashboardPackageKpiStrip(
+    state: OnboardingUiState,
+    products: List<OrmaProduct>,
+    packageRecords: List<DashboardPackageRecord>,
+) {
+    val activePackages = packageRecords.count { it.variant.status.normalizedCatalogAvailabilityStatus() == "active" }
+    val productPacks = packageRecords.count { it.product.itemType == "product" }
+    val sessionPackages = packageRecords.count { it.product.itemType != "product" }
+    val withAddons = packageRecords.count { record ->
+        record.variant.addons.any { it.status.normalizedCatalogAvailabilityStatus() == "active" }
+    }
+    DashboardFocusMetricStrip(
+        metrics = listOf(
+            DashboardFocusMetric(
+                label = "Packages",
+                value = packageRecords.size.toString(),
+                detail = if (state.hasActiveDashboardFilter(DashboardFilterScopeProducts)) "after filters" else "saved options",
+                tone = OrmaStatusTone.Info,
+            ),
+            DashboardFocusMetric(
+                label = "Active",
+                value = activePackages.toString(),
+                detail = "available",
+                tone = if (packageRecords.isNotEmpty() && activePackages == packageRecords.size) OrmaStatusTone.Success else OrmaStatusTone.Info,
+            ),
+            DashboardFocusMetric(
+                label = "Product packs",
+                value = productPacks.toString(),
+                detail = "stock variants",
+                tone = OrmaStatusTone.Success,
+            ),
+            DashboardFocusMetric(
+                label = "Sessions",
+                value = sessionPackages.toString(),
+                detail = "service or appointment",
+                tone = OrmaStatusTone.Info,
+            ),
+            DashboardFocusMetric(
+                label = "Add-ons",
+                value = withAddons.toString(),
+                detail = "${products.size} parent items",
+                tone = if (withAddons > 0) OrmaStatusTone.Warning else OrmaStatusTone.Info,
+            ),
+        ),
+    )
+}
+
+@Composable
+private fun DashboardPackageRecordsSurface(
+    state: OnboardingUiState,
+    actions: OnboardingActions,
+    packageRecords: List<DashboardPackageRecord>,
+    onAddPackage: () -> Unit,
+    onEditPackage: (DashboardPackageRecord) -> Unit,
+    wide: Boolean,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = OrmaShapes.SmallCard,
+        color = OrmaColors.CardBackground,
+        contentColor = OrmaColors.TextPrimary,
+        border = BorderStroke(0.6.dp, OrmaColors.Hairline),
+        tonalElevation = 0.dp,
+        shadowElevation = OrmaElevation.Subtle,
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            DashboardRecordsSurfaceHeader(
+                title = "Package records",
+                body = "Manage product packs, service levels, appointment sessions, prices, and add-ons.",
+                badgeText = if (state.dashboard.loading) "SYNC" else "${packageRecords.size} SHOWN",
+            )
+            if (packageRecords.isEmpty()) {
+                if (state.dashboard.loading) {
+                    DashboardRecordRowsSkeleton(rowCount = 5, columns = if (wide) 5 else 3)
+                } else {
+                    DashboardInlineEmptyRecords(
+                        icon = DashboardNavIconKind.Products,
+                        title = when {
+                            !state.dashboard.errorMessage.isNullOrBlank() -> "Could not load packages"
+                            state.hasActiveDashboardFilter(DashboardFilterScopeProducts) -> "No matching packages"
+                            else -> "No packages yet"
+                        },
+                        body = when {
+                            !state.dashboard.errorMessage.isNullOrBlank() -> state.dashboard.errorMessage.orEmpty()
+                            state.hasActiveDashboardFilter(DashboardFilterScopeProducts) -> "Clear filters or search another package, item, SKU, barcode, or category."
+                            else -> "Product packs, service levels, and appointment session packages will appear here after they are saved."
+                        },
+                    )
+                    if (state.canCreateDashboardCatalogItem()) {
+                        OrmaSecondaryButton(
+                            text = "Add package",
+                            onClick = onAddPackage,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
+            } else if (wide) {
+                if (state.dashboard.loading) {
+                    DashboardInlineRefreshingSkeleton()
+                }
+                var sortKey by rememberSaveable { mutableStateOf(DashboardPackageSortPackage) }
+                var sortAscending by rememberSaveable { mutableStateOf(true) }
+                val sortedPackages = remember(packageRecords, sortKey, sortAscending) {
+                    sortedDashboardPackageRecords(
+                        records = packageRecords,
+                        sortKey = sortKey,
+                        ascending = sortAscending,
+                    )
+                }
+                DashboardPackageTable(
+                    packageRecords = sortedPackages,
+                    sortKey = sortKey,
+                    sortAscending = sortAscending,
+                    onSortChange = { nextSortKey ->
+                        if (sortKey == nextSortKey) {
+                            sortAscending = !sortAscending
+                        } else {
+                            sortKey = nextSortKey
+                            sortAscending = nextSortKey !in DashboardPackageDescendingFirstSorts
+                        }
+                    },
+                    onEditPackage = onEditPackage,
+                )
+            } else {
+                if (state.dashboard.loading) {
+                    DashboardInlineRefreshingSkeleton()
+                }
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    packageRecords.forEach { record ->
+                        DashboardPackageRow(
+                            record = record,
+                            onEditClick = { onEditPackage(record) },
+                        )
+                    }
+                }
+            }
+            DashboardPaginationControls(
+                pagination = state.dashboard.productPagination,
+                wide = wide,
+                loading = state.dashboard.loading,
+                onPageChange = { actions.onDashboardPageChange(DashboardPageTarget.Products, it) },
+            )
+        }
+    }
+}
+
+@Composable
+@OptIn(ExperimentalFoundationApi::class)
+private fun DashboardPackageTable(
+    packageRecords: List<DashboardPackageRecord>,
+    sortKey: String,
+    sortAscending: Boolean,
+    onSortChange: (String) -> Unit,
+    onEditPackage: (DashboardPackageRecord) -> Unit,
+) {
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val minTableWidth = 980.dp
+        val tableWidth = if (maxWidth > minTableWidth) maxWidth else minTableWidth
+        Box(modifier = Modifier.horizontalScroll(rememberScrollState())) {
+            LazyColumn(
+                modifier = Modifier
+                    .width(tableWidth)
+                    .heightIn(max = 620.dp),
+            ) {
+                stickyHeader {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = OrmaColors.CardBackground,
+                        contentColor = OrmaColors.TextPrimary,
+                        tonalElevation = 0.dp,
+                        shadowElevation = 0.dp,
+                    ) {
+                        Column {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                DashboardSaleHeaderCell(
+                                    text = "Package",
+                                    sortKey = DashboardPackageSortPackage,
+                                    activeSortKey = sortKey,
+                                    sortAscending = sortAscending,
+                                    onSortChange = onSortChange,
+                                    modifier = Modifier.weight(1.24f),
+                                )
+                                DashboardSaleHeaderCell(
+                                    text = "Item",
+                                    sortKey = DashboardPackageSortParent,
+                                    activeSortKey = sortKey,
+                                    sortAscending = sortAscending,
+                                    onSortChange = onSortChange,
+                                    modifier = Modifier.weight(1.14f),
+                                )
+                                DashboardSaleHeaderCell(
+                                    text = "Type",
+                                    sortKey = DashboardPackageSortType,
+                                    activeSortKey = sortKey,
+                                    sortAscending = sortAscending,
+                                    onSortChange = onSortChange,
+                                    modifier = Modifier.weight(0.86f),
+                                )
+                                DashboardSaleHeaderCell(
+                                    text = "Included",
+                                    sortKey = DashboardPackageSortQuantity,
+                                    activeSortKey = sortKey,
+                                    sortAscending = sortAscending,
+                                    onSortChange = onSortChange,
+                                    modifier = Modifier.weight(0.86f),
+                                )
+                                DashboardSaleHeaderCell(
+                                    text = "Price",
+                                    sortKey = DashboardPackageSortPrice,
+                                    activeSortKey = sortKey,
+                                    sortAscending = sortAscending,
+                                    onSortChange = onSortChange,
+                                    modifier = Modifier.weight(0.82f),
+                                )
+                                DashboardSaleHeaderCell(
+                                    text = "Actions",
+                                    sortKey = null,
+                                    activeSortKey = sortKey,
+                                    sortAscending = sortAscending,
+                                    onSortChange = onSortChange,
+                                    modifier = Modifier.width(DashboardPackageActionColumnWidth),
+                                )
+                            }
+                            HorizontalDivider(
+                                modifier = Modifier.padding(horizontal = 10.dp),
+                                thickness = 0.8.dp,
+                                color = OrmaColors.CellBackground.copy(alpha = 0.72f),
+                            )
+                        }
+                    }
+                }
+                itemsIndexed(
+                    items = packageRecords,
+                    key = { index, record -> record.packageRecordKey(index) },
+                ) { index, record ->
+                    DashboardWidePackageRow(
+                        record = record,
+                        zebra = index % 2 == 1,
+                        onEditClick = { onEditPackage(record) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DashboardWidePackageRow(
+    record: DashboardPackageRecord,
+    zebra: Boolean = false,
+    onEditClick: () -> Unit,
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val hovered by interactionSource.collectIsHoveredAsState()
+    val rowBackground = when {
+        hovered -> OrmaColors.ScreenBackground.copy(alpha = 0.44f)
+        zebra -> OrmaColors.ScreenBackground.copy(alpha = 0.18f)
+        else -> Color.Transparent
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(OrmaShapes.SmallCard)
+                .background(rowBackground)
+                .hoverable(interactionSource)
+                .clickable(onClick = onEditClick)
+                .padding(horizontal = 10.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            DashboardWideCell(
+                primary = record.variant.name,
+                secondary = record.packageIdentityLine(),
+                modifier = Modifier.weight(1.24f),
+            )
+            DashboardWideCell(
+                primary = record.product.name,
+                secondary = listOfNotNull(record.product.categoryName, record.product.supplierName)
+                    .joinToString(" / ")
+                    .ifBlank { record.product.unit.ifBlank { "Uncategorized" } },
+                modifier = Modifier.weight(1.14f),
+            )
+            DashboardWideCell(
+                primary = record.product.itemType.packageTypeLabel(),
+                secondary = record.variant.status.catalogAvailabilityLabel(),
+                modifier = Modifier.weight(0.86f),
+            )
+            DashboardWideCell(
+                primary = record.variant.packageIncludedLabel(record.product.itemType, record.product.unit),
+                secondary = record.packageTimingOrStockLine(),
+                modifier = Modifier.weight(0.86f),
+            )
+            DashboardWideCell(
+                primary = dashboardMoney(record.packageSellingPrice(), record.product.currency),
+                secondary = record.packageAddonLine(),
+                modifier = Modifier.weight(0.82f),
+            )
+            Box(
+                modifier = Modifier.width(DashboardPackageActionColumnWidth),
+                contentAlignment = Alignment.CenterEnd,
+            ) {
+                DashboardTableActionButton(
+                    text = "Edit",
+                    iconKind = OrmaFlatIconKind.Edit,
+                    onClick = onEditClick,
+                )
+            }
+        }
+        HorizontalDivider(
+            modifier = Modifier.padding(horizontal = 10.dp),
+            thickness = 0.8.dp,
+            color = if (hovered) {
+                OrmaColors.CellBackground.copy(alpha = 0.86f)
+            } else {
+                OrmaColors.CellBackground.copy(alpha = 0.62f)
+            },
+        )
+    }
+}
+
+@Composable
+private fun DashboardPackageRow(
+    record: DashboardPackageRecord,
+    onEditClick: () -> Unit,
+) {
+    val status = record.variant.status.normalizedCatalogAvailabilityStatus()
+    DashboardMobileRecordCard {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.Top,
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    text = record.variant.name,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = OrmaColors.TextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = "${record.product.name} / ${record.product.itemType.packageTypeLabel()}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = OrmaColors.TextSecondary,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            OrmaBadge(
+                text = if (status == "active") record.variant.includedQuantity.coerceAtLeast(1).toString() else status.catalogAvailabilityLabel().uppercase(),
+                tone = status.catalogAvailabilityTone(),
+            )
+        }
+        OrmaKeyValueList(
+            rows = listOf(
+                "Included" to record.variant.packageIncludedLabel(record.product.itemType, record.product.unit),
+                "Price" to dashboardMoney(record.packageSellingPrice(), record.product.currency),
+                "Stock / time" to record.packageTimingOrStockLine().orEmpty().ifBlank { "Not set" },
+                "Add-ons" to record.packageAddonLine().orEmpty().ifBlank { "None" },
+            ),
+        )
+        OrmaSecondaryButton(
+            text = "Edit package",
+            onClick = onEditClick,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+@Composable
 private fun DashboardProductKpiStrip(
     state: OnboardingUiState,
     products: List<OrmaProduct>,
@@ -18502,6 +19085,7 @@ private fun DashboardCatalogOperationsPanel(
 ) {
     val supplierCount = state.dashboard.suppliers.size
     val offerCount = state.dashboard.offers.size
+    val packageCount = dashboardPackageRecords(state.dashboard.products).size
     val lowStock = state.dashboard.summary.lowStockProducts
     DashboardRecordCard {
         Row(
@@ -18519,7 +19103,7 @@ private fun DashboardCatalogOperationsPanel(
                     color = OrmaColors.TextPrimary,
                 )
                 Text(
-                    text = "Use this panel for supplier setup, offers, and restock attention.",
+                    text = "Use this panel for supplier setup, packages, offers, and restock attention.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = OrmaColors.TextSecondary,
                     maxLines = 3,
@@ -18534,6 +19118,7 @@ private fun DashboardCatalogOperationsPanel(
         BookingMetricGrid(
             metrics = listOf(
                 BookingMetric("Suppliers", supplierCount.toString(), "purchase sources"),
+                BookingMetric("Packages", packageCount.toString(), "packs and options"),
                 BookingMetric("Offers", offerCount.toString(), "active promos"),
                 BookingMetric("Low stock", lowStock.toString(), "restock queue"),
             ),
@@ -27582,6 +28167,55 @@ private fun String.optionEditorCopy(): OptionEditorCopy =
         )
     }
 
+private fun String.packageTypeLabel(): String =
+    when (trim().lowercase()) {
+        "appointment" -> "Appointment package"
+        "service" -> "Service package"
+        else -> "Product pack"
+    }
+
+private fun DashboardPackageRecord.packageRecordKey(index: Int): String =
+    listOf(
+        product.id,
+        variant.id.ifBlank { variant.name.ifBlank { index.toString() } },
+    ).joinToString(":")
+
+private fun DashboardPackageRecord.packageSellingPrice(): String =
+    variant.sellingPrice.ifBlank { product.sellingPrice.ifBlank { "0" } }
+
+private fun DashboardPackageRecord.packageIdentityLine(): String =
+    listOf(
+        variant.sku.orEmpty(),
+        variant.barcode.orEmpty(),
+        variant.status.catalogAvailabilityLabel(),
+    ).filter { it.isNotBlank() }.joinToString(" / ")
+
+private fun DashboardPackageRecord.packageTimingOrStockLine(): String? =
+    when (product.itemType.trim().lowercase()) {
+        "product" -> "${variant.stockQuantity.ifBlank { "0" }} ${product.unit.ifBlank { "units" }} stock"
+        "appointment" -> (variant.durationMinutes ?: product.durationMinutes)?.let { "$it min per session" }
+        "service" -> (variant.durationMinutes ?: product.durationMinutes)?.let { "$it min per service" }
+        else -> null
+    }
+
+private fun DashboardPackageRecord.packageAddonLine(): String? {
+    val count = variant.addons.count { it.status.normalizedCatalogAvailabilityStatus() == "active" }
+    return when (count) {
+        0 -> null
+        1 -> "1 add-on"
+        else -> "$count add-ons"
+    }
+}
+
+private fun OrmaProductVariant.packageIncludedLabel(itemType: String, unit: String): String {
+    val count = includedQuantity.coerceAtLeast(1)
+    return when (itemType.trim().lowercase()) {
+        "appointment" -> if (count == 1) "1 session" else "$count sessions"
+        "service" -> if (count == 1) "1 service session" else "$count service sessions"
+        else -> if (count == 1) "1 ${unit.ifBlank { "item" }}" else "$count ${unit.ifBlank { "items" }}"
+    }
+}
+
 private fun OrmaProductVariant.packageDetailLabel(itemType: String, unit: String): String? {
     val count = includedQuantity.takeIf { it > 1 } ?: return null
     return when (itemType.trim().lowercase()) {
@@ -33157,6 +33791,15 @@ private fun filteredDashboardProducts(
             product.expiryDate.orEmpty(),
             product.status,
             product.createdAt,
+            product.variants.joinToString(" ") { variant ->
+                listOf(
+                    variant.name,
+                    variant.sku.orEmpty(),
+                    variant.barcode.orEmpty(),
+                    variant.status,
+                    variant.addons.joinToString(" ") { addon -> addon.name },
+                ).joinToString(" ")
+            },
         ).joinToString(" ").containsAllDashboardTokens(tokens)
         modeMatches && stockMatches && itemTypeMatches && dateMatches && textMatches
     }
