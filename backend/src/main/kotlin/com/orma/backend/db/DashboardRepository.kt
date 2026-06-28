@@ -1917,12 +1917,19 @@ class DashboardRepository(
                 if (variantId != null && variant == null) {
                     return@mapNotNull null
                 }
-                val availableStock = variant?.stockQuantity?.decimalOrZero() ?: product.stockQuantity.decimalOrZero()
-                if (product.trackStock && availableStock <= BigDecimal.ZERO) {
-                    return@mapNotNull null
-                }
-                if (product.trackStock && quantity > availableStock) {
-                    return@mapNotNull null
+                val packageComponents = variant?.components.orEmpty()
+                if (packageComponents.isNotEmpty()) {
+                    if (!packageComponents.packageComponentsAvailable(quantity)) {
+                        return@mapNotNull null
+                    }
+                } else {
+                    val availableStock = variant?.stockQuantity?.decimalOrZero() ?: product.stockQuantity.decimalOrZero()
+                    if (product.trackStock && availableStock <= BigDecimal.ZERO) {
+                        return@mapNotNull null
+                    }
+                    if (product.trackStock && quantity > availableStock) {
+                        return@mapNotNull null
+                    }
                 }
                 val variantPrice = variant?.sellingPrice?.moneyOrZero()
                 val variantDiscount = if (variantPrice != null && product.offer != null) {
@@ -1956,6 +1963,16 @@ class DashboardRepository(
                         .scaled(),
                 )
             }
+
+    private fun List<ProductVariantComponentResponse>.packageComponentsAvailable(quantity: BigDecimal): Boolean =
+        filter {
+            it.status.cleanCatalogStatus() == "active" &&
+                it.itemType.cleanItemType() == "product" &&
+                it.trackStock
+        }.all { component ->
+            val required = quantity.multiply(component.quantity.decimalOrZero().takeIf { it > BigDecimal.ZERO } ?: BigDecimal.ONE)
+            component.stockQuantity.decimalOrZero() >= required
+        }
 
     private fun Connection.publicOrderProduct(
         workspaceId: String,
@@ -3921,10 +3938,13 @@ class DashboardRepository(
                 p.item_type,
                 p.unit,
                 p.selling_price as product_selling_price,
+                p.stock_quantity as product_stock_quantity,
+                p.track_stock,
                 p.duration_minutes as product_duration_minutes,
                 pvc.component_variant_id::text,
                 pv.name as variant_name,
                 pv.selling_price as variant_selling_price,
+                pv.stock_quantity as variant_stock_quantity,
                 pv.duration_minutes as variant_duration_minutes,
                 pvc.quantity,
                 pvc.status
@@ -3948,6 +3968,12 @@ class DashboardRepository(
                     } else {
                         variantPrice
                     }
+                    val variantStockQuantity = result.getBigDecimal("variant_stock_quantity")
+                    val stockQuantity = if (result.wasNull()) {
+                        result.getBigDecimal("product_stock_quantity")
+                    } else {
+                        variantStockQuantity
+                    }
                     componentsByVariant.getOrPut(packageVariantId) { mutableListOf() }.add(
                         ProductVariantComponentResponse(
                             productId = result.getString("component_product_id"),
@@ -3958,6 +3984,8 @@ class DashboardRepository(
                             quantity = result.getBigDecimal("quantity").decimalString(),
                             unit = result.getString("unit") ?: "pcs",
                             sellingPrice = sellingPrice.moneyString(),
+                            stockQuantity = stockQuantity.decimalString(),
+                            trackStock = result.getBoolean("track_stock"),
                             durationMinutes = result.getNullableInt("variant_duration_minutes")
                                 ?: result.getNullableInt("product_duration_minutes"),
                             status = result.getString("status").cleanCatalogStatus(),
@@ -5736,8 +5764,10 @@ class DashboardRepository(
                 p.item_type,
                 p.unit,
                 p.track_stock,
+                p.stock_quantity as product_stock_quantity,
                 pvc.component_variant_id::text,
                 pv.name as variant_name,
+                pv.stock_quantity as variant_stock_quantity,
                 pvc.quantity
             from product_variant_components pvc
             join products p on p.id = pvc.component_product_id and p.workspace_id = pvc.workspace_id
@@ -5757,6 +5787,12 @@ class DashboardRepository(
             statement.executeQuery().use { result ->
                 while (result.next()) {
                     val packageVariantId = result.getString("package_variant_id")
+                    val variantStockQuantity = result.getBigDecimal("variant_stock_quantity")
+                    val stockQuantity = if (result.wasNull()) {
+                        result.getBigDecimal("product_stock_quantity")
+                    } else {
+                        variantStockQuantity
+                    }
                     componentsByVariant.getOrPut(packageVariantId) { mutableListOf() }.add(
                         PreparedPackageComponent(
                             productId = result.getString("component_product_id"),
@@ -5764,6 +5800,7 @@ class DashboardRepository(
                             itemType = result.getString("item_type").cleanItemType(),
                             unit = result.getString("unit") ?: "pcs",
                             trackStock = result.getBoolean("track_stock"),
+                            stockQuantity = stockQuantity ?: BigDecimal.ZERO,
                             variantId = result.getString("component_variant_id"),
                             variantName = result.getString("variant_name"),
                             quantity = result.getBigDecimal("quantity")
@@ -6891,6 +6928,7 @@ class DashboardRepository(
         val itemType: String,
         val unit: String,
         val trackStock: Boolean,
+        val stockQuantity: BigDecimal,
         val variantId: String?,
         val variantName: String?,
         val quantity: BigDecimal,

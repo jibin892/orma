@@ -311,6 +311,8 @@ data class OrmaProductVariantComponent(
     val quantity: String = "1",
     val unit: String = "pcs",
     val sellingPrice: String = "0.00",
+    val stockQuantity: String = "0",
+    val trackStock: Boolean = false,
     val durationMinutes: Int? = null,
     val status: String = "active",
 )
@@ -2487,6 +2489,8 @@ private fun String.toProductVariantComponent(): OrmaProductVariantComponent =
         quantity = jsonDecimalString("quantity") ?: "1",
         unit = jsonString("unit") ?: "pcs",
         sellingPrice = jsonDecimalString("sellingPrice") ?: "0.00",
+        stockQuantity = jsonDecimalString("stockQuantity") ?: "0",
+        trackStock = jsonBoolean("trackStock") ?: false,
         durationMinutes = jsonInt("durationMinutes"),
         status = jsonString("status") ?: "active",
     )
