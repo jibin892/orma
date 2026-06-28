@@ -681,6 +681,7 @@ data class PublicCatalogOrderRequest(
     val fulfillmentType: String = "take_away",
     val scheduledAt: String? = null,
     val paymentMode: String = "pay_on_spot",
+    val clientRequestId: String? = null,
     val items: List<PublicCatalogOrderItemRequest>,
 )
 
@@ -755,6 +756,7 @@ data class OrderRequest(
     val fulfillmentType: String = "standard",
     val paymentMode: String = "pay_on_spot",
     val source: String = "dashboard",
+    val clientRequestId: String? = null,
     val items: List<OrderItemRequest>,
     val sessions: List<OrderSessionRequest> = emptyList(),
 )

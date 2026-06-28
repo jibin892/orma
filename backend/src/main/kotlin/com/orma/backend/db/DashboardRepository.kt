@@ -367,6 +367,7 @@ class DashboardRepository(
                         fulfillmentType = fulfillment,
                         paymentMode = paymentMode,
                         source = "public_catalog",
+                        clientRequestId = request.clientRequestId,
                         items = publicItems.map { it.orderItem },
                     ),
                     discountTotalOverride = publicItems.fold(BigDecimal.ZERO) { total, item ->
@@ -4202,6 +4203,14 @@ class DashboardRepository(
             )
         }
         val currency = request.currency?.cleanOptionalUpper() ?: access.currency
+        val source = request.source.cleanOrderSource()
+        val clientRequestId = request.clientRequestId.cleanClientRequestId()
+        if (clientRequestId != null) {
+            lockOrderClientRequest(access.workspaceId, source, clientRequestId)
+            getOrderByClientRequestId(access.workspaceId, source, clientRequestId)?.let { existingOrder ->
+                return existingOrder
+            }
+        }
         val customerId = request.customerId.cleanUuidOrNull()
         if (customerId != null) {
             updateCustomerBillingDetails(
@@ -4245,11 +4254,12 @@ class DashboardRepository(
             insert into orders (
                 workspace_id, customer_id, order_number, order_type, status, scheduled_at,
                 subtotal, tax_total, discount_total, paid_total, total, currency,
-                notes, inventory_applied, created_by_user_id, source, fulfillment_type, payment_mode, updated_at
+                notes, inventory_applied, created_by_user_id, source, fulfillment_type, payment_mode,
+                client_request_id, updated_at
             )
             values (
                 ?::uuid, ?::uuid, ?, ?, ?, ?::timestamptz,
-                ?, ?, ?, ?, ?, ?, ?, ?, ?::uuid, ?, ?, ?, now()
+                ?, ?, ?, ?, ?, ?, ?, ?, ?::uuid, ?, ?, ?, ?, now()
             )
             returning id::text
         """.trimIndent()
@@ -4269,9 +4279,10 @@ class DashboardRepository(
             statement.setNullableString(13, request.notes?.cleanOptional())
             statement.setBoolean(14, inventoryApplied)
             statement.setString(15, access.userId)
-            statement.setString(16, request.source.cleanOrderSource())
+            statement.setString(16, source)
             statement.setString(17, request.fulfillmentType.cleanFulfillmentType())
             statement.setString(18, paymentMode)
+            statement.setNullableString(19, clientRequestId)
             statement.executeQuery().use { result ->
                 result.next()
                 result.getString("id")
@@ -4295,6 +4306,41 @@ class DashboardRepository(
         )
 
         return getOrder(access.workspaceId, orderId, includeItems = true) ?: error("Created order was not found.")
+    }
+
+    private fun Connection.lockOrderClientRequest(
+        workspaceId: String,
+        source: String,
+        clientRequestId: String,
+    ) {
+        prepareStatement("select pg_advisory_xact_lock(hashtext(?), hashtext(?))").use { statement ->
+            statement.setString(1, workspaceId)
+            statement.setString(2, "$source:$clientRequestId")
+            statement.execute()
+        }
+    }
+
+    private fun Connection.getOrderByClientRequestId(
+        workspaceId: String,
+        source: String,
+        clientRequestId: String,
+    ): OrderResponse? {
+        val orderId = prepareStatement(
+            """
+            select id::text
+            from orders
+            where workspace_id = ?::uuid and source = ? and client_request_id = ?
+            limit 1
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setString(1, workspaceId)
+            statement.setString(2, source)
+            statement.setString(3, clientRequestId)
+            statement.executeQuery().use { result ->
+                if (result.next()) result.getString("id") else null
+            }
+        }
+        return orderId?.let { getOrder(workspaceId, it, includeItems = true) }
     }
 
     private fun Connection.updateOrder(
@@ -5712,6 +5758,13 @@ class DashboardRepository(
             ?.uppercase()
             ?.filter { it.isLetterOrDigit() || it == '-' || it == '_' }
             ?.take(40)
+            ?.ifBlank { null }
+
+    private fun String?.cleanClientRequestId(): String? =
+        cleanOptional()
+            ?.lowercase()
+            ?.filter { it.isLetterOrDigit() || it == '-' || it == '_' || it == ':' || it == '.' }
+            ?.take(96)
             ?.ifBlank { null }
 
     private fun String?.cleanOfferCapAmount(discountType: String): BigDecimal? =

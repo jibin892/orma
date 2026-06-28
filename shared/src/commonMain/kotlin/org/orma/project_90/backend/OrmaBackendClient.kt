@@ -8,8 +8,10 @@ import org.orma.project_90.auth.ormaPostJson
 import org.orma.project_90.auth.ormaPostJsonAuthorized
 import org.orma.project_90.auth.ormaPostMultipartAuthorized
 import org.orma.project_90.auth.ormaPutJsonAuthorized
+import org.orma.project_90.calendar.ormaCurrentIsoDate
 import org.orma.project_90.media.OrmaPickedImage
 import org.orma.project_90.onboarding.BusinessSetupDraft
+import kotlin.random.Random
 
 data class OrmaBackendUser(
     val id: String,
@@ -442,6 +444,7 @@ data class OrmaPublicCatalog(
 )
 
 data class OrmaPublicCatalogOrderDraft(
+    val clientRequestId: String = ormaClientRequestId("catalog"),
     val customerName: String = "",
     val phoneNumber: String = "",
     val notes: String = "",
@@ -650,6 +653,7 @@ data class OrmaWorkspacePaymentMethodDraft(
 )
 
 data class OrmaOrderDraft(
+    val clientRequestId: String = ormaClientRequestId("order"),
     val customerId: String = "",
     val customerName: String = "",
     val customerPhoneNumber: String = "",
