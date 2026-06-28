@@ -135,6 +135,7 @@ import org.orma.project_90.backend.OrmaProductCategoryDraft
 import org.orma.project_90.backend.OrmaProductDraft
 import org.orma.project_90.backend.OrmaProductVariant
 import org.orma.project_90.backend.OrmaProductVariantAddonDraft
+import org.orma.project_90.backend.OrmaProductVariantComponentDraft
 import org.orma.project_90.backend.OrmaProductVariantDraft
 import org.orma.project_90.backend.OrmaStockAdjustmentDraft
 import org.orma.project_90.backend.OrmaProductOffer
@@ -27708,6 +27709,8 @@ private fun ProductEditorScreen(
         ProductOptionsEditor(
             itemType = draft.itemType,
             unit = draft.unit,
+            catalogProducts = state.dashboard.products,
+            currentProductId = product?.id.orEmpty(),
             variants = draft.variants,
             onVariantsChange = { draft = draft.copy(variants = it) },
         )
@@ -27781,6 +27784,16 @@ private fun ProductEditorScreen(
                                                     )
                                                 }
                                         },
+                                        components = variant.components
+                                            .filter { it.productId.trim().isNotBlank() }
+                                            .map { component ->
+                                                component.copy(
+                                                    productId = component.productId.trim(),
+                                                    variantId = component.variantId.trim(),
+                                                    quantity = component.quantity.trim().ifBlank { "1" },
+                                                    status = component.status.normalizedCatalogAvailabilityStatus(),
+                                                )
+                                            },
                                         status = variant.status.normalizedCatalogAvailabilityStatus(),
                                     )
                                 },
@@ -27800,10 +27813,15 @@ private fun ProductEditorScreen(
 private fun ProductOptionsEditor(
     itemType: String,
     unit: String,
+    catalogProducts: List<OrmaProduct>,
+    currentProductId: String,
     variants: List<OrmaProductVariantDraft>,
     onVariantsChange: (List<OrmaProductVariantDraft>) -> Unit,
 ) {
     val copy = itemType.optionEditorCopy()
+    val componentCandidates = remember(itemType, catalogProducts, currentProductId) {
+        catalogProducts.packageComponentCandidates(itemType, currentProductId)
+    }
     DashboardRecordCard {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -27946,6 +27964,17 @@ private fun ProductOptionsEditor(
                             modifier = Modifier.weight(1f),
                         )
                     }
+                    PackageComponentsEditor(
+                        itemType = itemType,
+                        unit = unit,
+                        components = variant.components,
+                        componentCandidates = componentCandidates,
+                        onComponentsChange = { nextComponents ->
+                            onVariantsChange(variants.mapIndexed { itemIndex, old ->
+                                if (itemIndex == index) old.copy(components = nextComponents) else old
+                            })
+                        },
+                    )
                     if (itemType != "product") {
                         Text(
                             text = copy.addonsTitle,
