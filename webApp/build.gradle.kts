@@ -61,3 +61,22 @@ tasks.matching { it.name == "jsBrowserDistribution" }.configureEach {
     finalizedBy(stageDesktopDownloads)
     finalizedBy(stageVercelSpaRouting)
 }
+
+val composeRuntimeJs = rootProject.layout.buildDirectory
+    .file("js/packages/Orma-webApp/kotlin/androidx-compose-runtime-runtime.js")
+    .get()
+    .asFile
+
+tasks.matching { it.name == "jsBrowserProductionWebpack" }.configureEach {
+    notCompatibleWithConfigurationCache("Sanitizes generated Compose runtime JavaScript before webpack reads it.")
+
+    doFirst {
+        if (composeRuntimeJs.exists()) {
+            val bytes = composeRuntimeJs.readBytes()
+            val firstNullByte = bytes.indexOf(0.toByte())
+            if (firstNullByte >= 0) {
+                composeRuntimeJs.writeBytes(bytes.copyOf(firstNullByte))
+            }
+        }
+    }
+}
