@@ -631,6 +631,7 @@ private fun ApplicationCall.dashboardFilters(): DashboardQueryFilters {
         limit = query["limit"]?.toIntOrNull() ?: 50,
         lowStockOnly = query["lowStock"].toBooleanQuery(),
         supplierId = query["supplierId"],
+        categoryId = query["categoryId"],
         barcode = query["barcode"],
         scheduledOnly = query["scheduledOnly"].toBooleanQuery(),
         excludeCancelled = query["excludeCancelled"].toBooleanQuery(),

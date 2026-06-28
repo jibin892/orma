@@ -238,6 +238,7 @@ internal data class OnboardingActions(
     val onDashboardDateFilterChange: (String, String) -> Unit,
     val onProductItemTypeFilterChange: (String) -> Unit,
     val onProductLowStockFilterChange: (Boolean) -> Unit,
+    val onProductCategoryFilterChange: (String) -> Unit,
     val onDashboardPageChange: (DashboardPageTarget, Int) -> Unit,
     val onLoadCustomerOrders: (String) -> Unit,
     val onCreateCustomer: (OrmaCustomerDraft) -> Unit,

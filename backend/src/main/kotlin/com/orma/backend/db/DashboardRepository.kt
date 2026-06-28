@@ -96,6 +96,7 @@ data class DashboardQueryFilters(
     val limit: Int = 50,
     val lowStockOnly: Boolean = false,
     val supplierId: String? = null,
+    val categoryId: String? = null,
     val barcode: String? = null,
     val scheduledOnly: Boolean = false,
     val excludeCancelled: Boolean = false,
@@ -432,6 +433,21 @@ class DashboardRepository(
             val access = connection.resolveWorkspaceAccess(firebaseUser) ?: return@withContext null
             fun orderParams(): Array<String> =
                 filters.withOrderDateParams(access.workspaceId).toTypedArray()
+            val supplierPayableAmount = connection.supplierFinancialAmount(
+                workspaceId = access.workspaceId,
+                filters = filters,
+                amountColumn = "payable_amount",
+                supplierAmountColumn = "payable_total",
+                supplierDateExpression = "s.created_at",
+            )
+            val supplierSpentAmount = connection.supplierFinancialAmount(
+                workspaceId = access.workspaceId,
+                filters = filters,
+                amountColumn = "paid_amount",
+                supplierAmountColumn = "paid_total",
+                supplierDateExpression = "coalesce(s.last_payment_at, s.updated_at, s.created_at)",
+            )
+            val supplierBalanceAmount = (supplierPayableAmount - supplierSpentAmount).coerceAtLeast(BigDecimal.ZERO)
 
             DashboardSummaryResponse(
                 currency = access.currency,
@@ -445,6 +461,15 @@ class DashboardRepository(
                     """.trimIndent(),
                     *filters.withCreatedDateParams(access.workspaceId).toTypedArray(),
                 ),
+                totalSalesAmount = connection.scalarDecimal(
+                    """
+                    select coalesce(sum(o.total), 0)
+                    from orders o
+                    where o.workspace_id = ?::uuid and o.status <> 'cancelled'
+                    ${filters.orderDateWhereSql("o")}
+                    """.trimIndent(),
+                    *orderParams(),
+                ).moneyString(),
                 totalPaidAmount = connection.scalarDecimal(
                     """
                     select coalesce(sum(${effectivePaidTotalSql("o")}), 0)
@@ -454,6 +479,18 @@ class DashboardRepository(
                     """.trimIndent(),
                     *orderParams(),
                 ).moneyString(),
+                totalOutstandingAmount = connection.scalarDecimal(
+                    """
+                    select coalesce(sum(greatest(coalesce(o.total, 0) - ${effectivePaidTotalSql("o")}, 0)), 0)
+                    from orders o
+                    where o.workspace_id = ?::uuid and o.status <> 'cancelled'
+                    ${filters.orderDateWhereSql("o")}
+                    """.trimIndent(),
+                    *orderParams(),
+                ).moneyString(),
+                supplierPayableAmount = supplierPayableAmount.moneyString(),
+                supplierSpentAmount = supplierSpentAmount.moneyString(),
+                supplierBalanceAmount = supplierBalanceAmount.moneyString(),
                 ordersCount = connection.scalarInt(
                     """
                     select count(*)
@@ -2149,6 +2186,47 @@ class DashboardRepository(
             }
         }
 
+    private fun Connection.supplierFinancialAmount(
+        workspaceId: String,
+        filters: DashboardQueryFilters,
+        amountColumn: String,
+        supplierAmountColumn: String,
+        supplierDateExpression: String,
+    ): BigDecimal {
+        val params = mutableListOf(workspaceId, workspaceId)
+        val sql = buildString {
+            append(
+                """
+                select coalesce(sum(amount), 0)
+                from (
+                    select coalesce(s.$supplierAmountColumn, 0) as amount,
+                           $supplierDateExpression as occurred_at
+                    from suppliers s
+                    where s.workspace_id = ?::uuid
+                      and s.status = 'active'
+                      and coalesce(s.$supplierAmountColumn, 0) <> 0
+                    union all
+                    select coalesce(sm.$amountColumn, 0) as amount,
+                           sm.created_at as occurred_at
+                    from stock_movements sm
+                    where sm.workspace_id = ?::uuid
+                      and sm.supplier_id is not null
+                      and coalesce(sm.$amountColumn, 0) <> 0
+                ) supplier_totals
+                where true
+                """.trimIndent(),
+            )
+            appendCreatedDateWhere(filters, params, "occurred_at")
+        }
+        return prepareStatement(sql).use { statement ->
+            statement.bindStringParams(params)
+            statement.executeQuery().use { result ->
+                result.next()
+                result.getBigDecimal(1) ?: BigDecimal.ZERO
+            }
+        }
+    }
+
     private fun Connection.listDashboardRevenueSeries(
         workspaceId: String,
         filters: DashboardQueryFilters,
@@ -2985,6 +3063,7 @@ class DashboardRepository(
     ): PagedResult<ProductOfferResponse> {
         val params = mutableListOf(workspaceId)
         val search = filters.query.cleanSearchTerm()
+        val categoryId = filters.categoryId.cleanUuidOrNull()
         val sql = buildString {
             append(
                 """
@@ -3019,6 +3098,11 @@ class DashboardRepository(
             if (search != null) {
                 append(" and (po.name ilike ? or coalesce(p.name, '') ilike ? or coalesce(pc.name, '') ilike ? or coalesce(c.name, '') ilike ? or coalesce(po.coupon_code, '') ilike ?)")
                 repeat(5) { params.add(search.ilikePattern()) }
+            }
+            if (categoryId != null) {
+                append(" and (po.category_id = ?::uuid or p.category_id = ?::uuid)")
+                params.add(categoryId)
+                params.add(categoryId)
             }
             appendCreatedDateWhere(filters, params, "po.created_at")
             append(" order by po.created_at desc limit ${filters.limit.sanitizedLimit()} offset ${filters.offset()}")
@@ -3338,6 +3422,7 @@ class DashboardRepository(
         val params = mutableListOf(workspaceId)
         val search = filters.query.cleanSearchTerm()
         val supplierId = filters.supplierId.cleanUuidOrNull()
+        val categoryId = filters.categoryId.cleanUuidOrNull()
         val barcode = filters.barcode.cleanSearchTerm()
         val itemType = filters.itemType.cleanItemTypeFilter()
         val sql = buildString {
@@ -3378,6 +3463,10 @@ class DashboardRepository(
             if (supplierId != null) {
                 append(" and p.supplier_id = ?::uuid")
                 params.add(supplierId)
+            }
+            if (categoryId != null) {
+                append(" and p.category_id = ?::uuid")
+                params.add(categoryId)
             }
             if (itemType != null) {
                 append(" and p.item_type = ?")

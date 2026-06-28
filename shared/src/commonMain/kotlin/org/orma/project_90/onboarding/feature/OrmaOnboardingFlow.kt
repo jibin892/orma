@@ -29,6 +29,7 @@ import org.orma.project_90.backend.OrmaCustomerDraft
 import org.orma.project_90.backend.OrmaDashboardFilters
 import org.orma.project_90.backend.OrmaMetaAccessTokenDraft
 import org.orma.project_90.backend.OrmaMetaConnectionDraft
+import org.orma.project_90.backend.OrmaMetaOrderUpdateDraft
 import org.orma.project_90.backend.OrmaMetaWhatsAppTemplateDraft
 import org.orma.project_90.backend.OrmaOrder
 import org.orma.project_90.backend.OrmaOrderDraft
@@ -1620,6 +1621,49 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
         }
     }
 
+    fun dashboardWhatsAppAutoSendReady(snapshot: OnboardingUiState): Boolean {
+        val connection = snapshot.dashboard.metaConnection ?: return false
+        val accessReady = connection.accessTokenStatus.trim().lowercase() in setOf("configured", "connected", "ready")
+        return connection.phoneNumberId?.isNotBlank() == true && accessReady
+    }
+
+    fun automaticWhatsAppScenarioForOrder(order: OrmaOrder, fallbackStatus: String = order.status): String =
+        when (fallbackStatus.trim().lowercase()) {
+            "completed" -> "receipt"
+            "confirmed", "draft", "new" -> if ((order.total.toDoubleOrNull() ?: 0.0) > (order.paidTotal.toDoubleOrNull() ?: 0.0)) {
+                "payment_request"
+            } else {
+                "confirmation"
+            }
+            "paid", "part_paid" -> "payment_received"
+            else -> "status_update"
+        }
+
+    suspend fun sendAutomaticWhatsAppOrderUpdate(
+        idToken: String,
+        order: OrmaOrder,
+        scenario: String,
+        snapshot: OnboardingUiState,
+    ): String? {
+        if (!dashboardWhatsAppAutoSendReady(snapshot) || order.customerPhoneNumber.isNullOrBlank()) return null
+        return when (
+            val result = backendClient.sendMetaOrderUpdate(
+                idToken = idToken,
+                draft = OrmaMetaOrderUpdateDraft(
+                    orderId = order.id,
+                    scenario = scenario,
+                ),
+            )
+        ) {
+            is OrmaBackendResult.Success -> if (result.value.sent) {
+                " WhatsApp ${scenario.dashboardWhatsAppScenarioLabel()} sent."
+            } else {
+                " WhatsApp not sent: ${result.value.message}"
+            }
+            is OrmaBackendResult.Failure -> " WhatsApp not sent: ${result.message}"
+        }
+    }
+
     fun createDashboardOrder(draft: OrmaOrderDraft) {
         val snapshot = state
         if (snapshot.dashboard.actionLoading || draft.items.none { it.description.isNotBlank() || it.productId.isNotBlank() }) return
@@ -1629,7 +1673,13 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
             when (val result = backendClient.createOrder(idToken, draft.copy(currency = draft.currency.ifBlank { snapshot.dashboard.summary.currency }))) {
                 is OrmaBackendResult.Success -> {
                     resetDashboardOrderPage()
-                    refreshDashboard("Order created.")
+                    val whatsAppMessage = sendAutomaticWhatsAppOrderUpdate(
+                        idToken = idToken,
+                        order = result.value,
+                        scenario = automaticWhatsAppScenarioForOrder(result.value, draft.status),
+                        snapshot = snapshot,
+                    ).orEmpty()
+                    refreshDashboard("Order created.$whatsAppMessage")
                 }
                 is OrmaBackendResult.Failure -> applyDashboardFailure(result.title, result.message, result.code)
             }
@@ -1667,7 +1717,13 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
             when (val result = backendClient.updateOrderStatus(idToken, orderId, status, paidTotal)) {
                 is OrmaBackendResult.Success -> {
                     resetDashboardOrderPage()
-                    refreshDashboard("Order updated.")
+                    val whatsAppMessage = sendAutomaticWhatsAppOrderUpdate(
+                        idToken = idToken,
+                        order = result.value,
+                        scenario = automaticWhatsAppScenarioForOrder(result.value, status),
+                        snapshot = snapshot,
+                    ).orEmpty()
+                    refreshDashboard("Order updated.$whatsAppMessage")
                 }
                 is OrmaBackendResult.Failure -> applyDashboardFailure(result.title, result.message, result.code)
             }
@@ -2555,6 +2611,14 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
             )
             refreshDashboard()
         },
+        onProductCategoryFilterChange = {
+            state = state.copy(
+                dashboard = state.dashboard.withResetPagination(
+                    filters = state.dashboard.activeFilters().copy(categoryId = it.trim().take(80)),
+                ),
+            )
+            refreshDashboard()
+        },
         onDashboardPageChange = ::changeDashboardPage,
         onLoadCustomerOrders = ::loadDashboardCustomerOrders,
         onCreateCustomer = ::createDashboardCustomer,
@@ -2888,6 +2952,15 @@ private fun String.allowedDashboardItemTypes(): List<String> =
         "appointment" -> listOf("appointment")
         "mixed" -> listOf("product", "service", "appointment")
         else -> listOf("product")
+    }
+
+private fun String.dashboardWhatsAppScenarioLabel(): String =
+    when (trim().lowercase()) {
+        "payment_request", "payment_link", "upi_payment" -> "payment request"
+        "receipt", "receipt_sent", "completed_receipt" -> "receipt"
+        "confirmation", "order_created", "order_confirmed" -> "confirmation"
+        "payment_received" -> "payment receipt"
+        else -> "update"
     }
 
 private fun isOrmaDesktopRuntime(): Boolean {

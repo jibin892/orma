@@ -132,7 +132,12 @@ data class OrmaDashboardSummary(
     val currency: String = "INR",
     val businessMode: String = "product_selling",
     val totalCustomers: Int = 0,
+    val totalSalesAmount: String = "0.00",
     val totalPaidAmount: String = "0.00",
+    val totalOutstandingAmount: String = "0.00",
+    val supplierPayableAmount: String = "0.00",
+    val supplierSpentAmount: String = "0.00",
+    val supplierBalanceAmount: String = "0.00",
     val ordersCount: Int = 0,
     val bookingsCount: Int = 0,
     val salesCount: Int = 0,
@@ -759,6 +764,7 @@ data class OrmaDashboardFilters(
     val page: Int = 1,
     val lowStockOnly: Boolean = false,
     val supplierId: String = "",
+    val categoryId: String = "",
     val barcode: String = "",
     val scheduledOnly: Boolean = false,
     val excludeCancelled: Boolean = false,
@@ -923,6 +929,21 @@ data class OrmaMetaWhatsAppTemplateSyncResult(
     val failed: Int,
     val templates: List<OrmaMetaWhatsAppTemplateSyncItem>,
     val message: String,
+)
+
+data class OrmaMetaOrderUpdateDraft(
+    val orderId: String,
+    val scenario: String = "",
+    val templateName: String = "",
+    val languageCode: String = "",
+    val recipientPhoneNumber: String = "",
+)
+
+data class OrmaMetaOrderUpdateResult(
+    val sent: Boolean,
+    val status: String,
+    val message: String,
+    val messageId: String?,
 )
 
 sealed interface OrmaBackendResult<out T> {
@@ -1942,6 +1963,28 @@ class OrmaBackendClient(
             parse = { it.toMetaWhatsAppTemplateSyncResult() },
         )
 
+    suspend fun sendMetaOrderUpdate(
+        idToken: String,
+        draft: OrmaMetaOrderUpdateDraft,
+    ): OrmaBackendResult<OrmaMetaOrderUpdateResult> =
+        executeBackendRequest(
+            actionTitle = "Send WhatsApp update",
+            request = {
+                ormaPostJsonAuthorized(
+                    url = config.url("/integrations/meta/whatsapp/send-order-update"),
+                    bearerToken = idToken,
+                    body = buildJsonObject(
+                        "orderId" to JsonValue.StringValue(draft.orderId),
+                        "scenario" to JsonValue.StringValue(draft.scenario.blankToNull()),
+                        "templateName" to JsonValue.StringValue(draft.templateName.blankToNull()),
+                        "languageCode" to JsonValue.StringValue(draft.languageCode.blankToNull()),
+                        "recipientPhoneNumber" to JsonValue.StringValue(draft.recipientPhoneNumber.blankToNull()),
+                    ),
+                )
+            },
+            parse = { it.toMetaOrderUpdateResult() },
+        )
+
     suspend fun loadPublicCatalog(
         workspaceId: String,
     ): OrmaBackendResult<OrmaPublicCatalog> =
@@ -2023,6 +2066,7 @@ class OrmaBackendClient(
             filters.dateTo.trim().takeIf { it.isNotBlank() }?.let { add("dateTo" to it) }
             if (filters.lowStockOnly) add("lowStock" to "true")
             filters.supplierId.trim().takeIf { it.isNotBlank() }?.let { add("supplierId" to it) }
+            filters.categoryId.trim().takeIf { it.isNotBlank() }?.let { add("categoryId" to it) }
             filters.barcode.trim().takeIf { it.isNotBlank() }?.let { add("barcode" to it) }
             if (filters.scheduledOnly) add("scheduledOnly" to "true")
             if (filters.excludeCancelled) add("excludeCancelled" to "true")
@@ -2237,7 +2281,12 @@ private fun String.toDashboardSummary(): OrmaDashboardSummary =
         currency = jsonString("currency") ?: "INR",
         businessMode = jsonString("businessMode") ?: "product_selling",
         totalCustomers = jsonInt("totalCustomers") ?: 0,
+        totalSalesAmount = jsonDecimalString("totalSalesAmount") ?: "0.00",
         totalPaidAmount = jsonDecimalString("totalPaidAmount") ?: "0.00",
+        totalOutstandingAmount = jsonDecimalString("totalOutstandingAmount") ?: "0.00",
+        supplierPayableAmount = jsonDecimalString("supplierPayableAmount") ?: "0.00",
+        supplierSpentAmount = jsonDecimalString("supplierSpentAmount") ?: "0.00",
+        supplierBalanceAmount = jsonDecimalString("supplierBalanceAmount") ?: "0.00",
         ordersCount = jsonInt("ordersCount") ?: 0,
         bookingsCount = jsonInt("bookingsCount") ?: 0,
         salesCount = jsonInt("salesCount") ?: 0,
@@ -2810,6 +2859,14 @@ private fun String.toMetaWhatsAppTemplateSyncResult(): OrmaMetaWhatsAppTemplateS
             )
         },
         message = jsonString("message") ?: "WhatsApp template sync finished.",
+    )
+
+private fun String.toMetaOrderUpdateResult(): OrmaMetaOrderUpdateResult =
+    OrmaMetaOrderUpdateResult(
+        sent = jsonBoolean("sent") ?: false,
+        status = jsonString("status") ?: "unknown",
+        message = jsonString("message") ?: "WhatsApp update finished.",
+        messageId = jsonString("messageId"),
     )
 
 private fun String.toMetaProductReadiness(): OrmaMetaProductReadiness =

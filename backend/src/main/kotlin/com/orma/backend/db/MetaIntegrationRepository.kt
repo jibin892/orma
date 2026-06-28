@@ -31,6 +31,7 @@ import com.orma.backend.meta.MetaGraphWhatsAppTemplateRequest
 import com.orma.backend.meta.MetaTokenCrypto
 import java.math.BigDecimal
 import java.math.RoundingMode
+import java.net.URLEncoder
 import java.sql.Connection
 import java.sql.ResultSet
 import java.sql.Types
@@ -494,8 +495,13 @@ class MetaIntegrationRepository(
             )
         }
 
+        val scenario = request.scenario?.trim()?.lowercase()?.takeIf { it.isNotBlank() }
+            ?: context.defaultWhatsAppScenario()
         val templateName = request.templateName?.trim()?.takeIf { it.isNotBlank() }
-            ?: context.defaultWhatsAppTemplateName(config.metaDefaultOrderTemplate)
+            ?: context.defaultWhatsAppTemplateName(
+                fallback = config.metaDefaultOrderTemplate,
+                scenario = scenario,
+            )
         val languageCode = request.languageCode?.trim()?.takeIf { it.isNotBlank() }
             ?: config.metaDefaultLanguageCode
         return@withContext try {
@@ -505,12 +511,7 @@ class MetaIntegrationRepository(
                 recipientPhoneNumber = recipient,
                 templateName = templateName,
                 languageCode = languageCode,
-                parameters = listOf(
-                    context.orderNumber,
-                    context.customerName ?: "Customer",
-                    "${context.currency} ${context.total}",
-                    context.status,
-                ),
+                parameters = context.whatsAppTemplateParameters(scenario),
             )
             dataSource.connection.use { connection ->
                 connection.updateMetaMessagingStatus(context.workspaceId, "ready", null)
@@ -987,15 +988,28 @@ class MetaIntegrationRepository(
                 o.status,
                 o.fulfillment_type,
                 o.total,
+                coalesce(o.total - o.paid_total, 0) as balance_due,
                 o.currency,
                 c.name as customer_name,
                 c.phone_number as customer_phone_number,
+                pm.upi_id as default_upi_id,
+                pm.payee_name as default_upi_payee,
                 mc.phone_number_id,
                 mc.credential_source,
                 mc.access_token_ciphertext
             from orders o
             left join customers c on c.id = o.customer_id
             left join meta_connections mc on mc.workspace_id = o.workspace_id
+            left join lateral (
+                select upi_id, payee_name
+                from workspace_payment_methods
+                where workspace_id = o.workspace_id
+                  and status = 'active'
+                  and type = 'upi'
+                  and upi_id is not null
+                order by is_default desc, created_at desc
+                limit 1
+            ) pm on true
             where o.id = ?::uuid
               and o.workspace_id = ?::uuid
             limit 1
@@ -1015,9 +1029,14 @@ class MetaIntegrationRepository(
                         status = result.getString("status"),
                         fulfillmentType = result.getString("fulfillment_type") ?: "standard",
                         total = (result.getBigDecimal("total") ?: BigDecimal.ZERO).toPlainString(),
+                        balanceDue = (result.getBigDecimal("balance_due") ?: BigDecimal.ZERO)
+                            .coerceAtLeast(BigDecimal.ZERO)
+                            .toPlainString(),
                         currency = result.getString("currency") ?: "INR",
                         customerName = result.getString("customer_name"),
                         customerPhoneNumber = result.getString("customer_phone_number"),
+                        defaultUpiId = result.getString("default_upi_id"),
+                        defaultUpiPayee = result.getString("default_upi_payee"),
                         phoneNumberId = result.getString("phone_number_id"),
                         credentialSource = result.getString("credential_source") ?: "none",
                         accessTokenCiphertext = result.getString("access_token_ciphertext"),
@@ -1815,9 +1834,12 @@ private data class MetaOrderWhatsAppContext(
     val status: String,
     val fulfillmentType: String,
     val total: String,
+    val balanceDue: String,
     val currency: String,
     val customerName: String?,
     val customerPhoneNumber: String?,
+    val defaultUpiId: String?,
+    val defaultUpiPayee: String?,
     val phoneNumberId: String?,
     val credentialSource: String,
     val accessTokenCiphertext: String?,
@@ -2003,8 +2025,16 @@ private val OrmaWhatsAppTemplates = listOf(
         bodyText = "Hi {{2}}, payment is pending for order {{1}}. Amount: {{3}}. Current status: {{4}}. Please complete payment to continue.",
     ),
     OrmaWhatsAppTemplateSpec(
+        name = "orma_product_payment_link",
+        bodyText = "Hi {{2}}, payment is pending for order {{1}}. Amount: {{3}}. Pay using this UPI link: {{4}}.",
+    ),
+    OrmaWhatsAppTemplateSpec(
         name = "orma_product_payment_received",
         bodyText = "Hi {{2}}, payment is received for order {{1}}. Amount: {{3}}. Current status: {{4}}. Thank you.",
+    ),
+    OrmaWhatsAppTemplateSpec(
+        name = "orma_product_receipt_sent",
+        bodyText = "Hi {{2}}, receipt for order {{1}} is ready. Total: {{3}}. {{4}}.",
     ),
     OrmaWhatsAppTemplateSpec(
         name = "orma_product_order_ready",
@@ -2184,7 +2214,40 @@ private fun MetaCatalogProductRow.readinessIssues(connected: Boolean): List<Stri
     if (trackStock && stockQuantity <= reorderLevel) add("Stock is at or below the reorder level.")
 }
 
-private fun MetaOrderWhatsAppContext.defaultWhatsAppTemplateName(fallback: String): String {
+private fun MetaOrderWhatsAppContext.defaultWhatsAppScenario(): String =
+    when (status.lowercase()) {
+        "completed" -> "receipt"
+        "confirmed", "draft", "new" -> if (balanceDue.toBigDecimalOrNull()?.let { it > BigDecimal.ZERO } == true) {
+            "payment_request"
+        } else {
+            "confirmation"
+        }
+        "paid", "part_paid" -> "payment_received"
+        else -> "status_update"
+    }
+
+private fun MetaOrderWhatsAppContext.defaultWhatsAppTemplateName(
+    fallback: String,
+    scenario: String = defaultWhatsAppScenario(),
+): String {
+    when (scenario.lowercase()) {
+        "payment_request", "payment_link", "upi_payment" -> return if (upiPaymentLink() != null) {
+            "orma_product_payment_link"
+        } else {
+            "orma_product_payment_reminder"
+        }
+        "receipt", "receipt_sent", "completed_receipt" -> return when (orderType.lowercase()) {
+            "appointment" -> "orma_appointment_completed"
+            "service" -> "orma_service_completed"
+            else -> "orma_product_receipt_sent"
+        }
+        "confirmation", "order_created", "order_confirmed" -> return when (orderType.lowercase()) {
+            "appointment" -> "orma_appointment_confirmed"
+            "service" -> "orma_service_request_confirmed"
+            else -> "orma_product_order_confirmed"
+        }
+        "payment_received" -> return "orma_product_payment_received"
+    }
     val statusKey = status.lowercase()
     return when (orderType.lowercase()) {
         "appointment" -> when (statusKey) {
@@ -2215,6 +2278,53 @@ private fun MetaOrderWhatsAppContext.defaultWhatsAppTemplateName(fallback: Strin
         }
     }
 }
+
+private fun MetaOrderWhatsAppContext.whatsAppTemplateParameters(scenario: String): List<String> {
+    val amountValue = when (scenario.lowercase()) {
+        "payment_request", "payment_link", "upi_payment" -> {
+            balanceDue.takeIf { it.toBigDecimalOrNull()?.let { value -> value > BigDecimal.ZERO } == true } ?: total
+        }
+        else -> total
+    }
+    val fourth = when (scenario.lowercase()) {
+        "payment_request", "payment_link", "upi_payment" -> upiPaymentLink()
+            ?: "Please pay using the payment details shared by the business."
+        "receipt", "receipt_sent", "completed_receipt" -> "This WhatsApp message is your digital receipt confirmation."
+        else -> status
+    }
+    return listOf(
+        orderNumber,
+        customerName ?: "Customer",
+        "${currency.ifBlank { "INR" }} $amountValue",
+        fourth,
+    )
+}
+
+private fun MetaOrderWhatsAppContext.upiPaymentLink(): String? {
+    val upiId = defaultUpiId?.trim()?.takeIf { it.contains("@") } ?: return null
+    val amount = balanceDue.toBigDecimalOrNull()
+        ?.takeIf { it > BigDecimal.ZERO }
+        ?.setScale(2, RoundingMode.HALF_UP)
+        ?.toPlainString()
+        ?: return null
+    return buildString {
+        append("upi://pay?pa=")
+        append(upiId.urlQueryEscaped())
+        defaultUpiPayee?.trim()?.takeIf { it.isNotBlank() }?.let { payee ->
+            append("&pn=")
+            append(payee.urlQueryEscaped())
+        }
+        append("&am=")
+        append(amount)
+        append("&cu=")
+        append(currency.ifBlank { "INR" }.urlQueryEscaped())
+        append("&tn=")
+        append(orderNumber.take(32).urlQueryEscaped())
+    }.takeIf { it.length <= 512 }
+}
+
+private fun String.urlQueryEscaped(): String =
+    URLEncoder.encode(this, Charsets.UTF_8.name())
 
 private fun String.isTemplateAlreadyCreatedError(): Boolean {
     val message = lowercase()

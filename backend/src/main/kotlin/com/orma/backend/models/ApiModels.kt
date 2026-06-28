@@ -219,7 +219,12 @@ data class DashboardSummaryResponse(
     val currency: String,
     val businessMode: String = "product_selling",
     val totalCustomers: Int,
+    val totalSalesAmount: String = "0.00",
     val totalPaidAmount: String,
+    val totalOutstandingAmount: String = "0.00",
+    val supplierPayableAmount: String = "0.00",
+    val supplierSpentAmount: String = "0.00",
+    val supplierBalanceAmount: String = "0.00",
     val ordersCount: Int,
     val bookingsCount: Int,
     val salesCount: Int = 0,
@@ -1172,6 +1177,7 @@ data class MetaAccessTokenConnectResponse(
 @Serializable
 data class MetaOrderUpdateRequest(
     val orderId: String,
+    val scenario: String? = null,
     val templateName: String? = null,
     val languageCode: String? = null,
     val recipientPhoneNumber: String? = null,
