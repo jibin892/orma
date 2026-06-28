@@ -491,7 +491,13 @@ fun Route.dashboardRoutes(
             return@put
         }
         if (call.respondOrderStatusPaymentValidation(repository, firebaseUser, orderId, request)) return@put
-        call.respondWorkspaceResult(repository.updateOrderStatus(firebaseUser, orderId, request.status, request.paidTotal))
+        val order = try {
+            repository.updateOrderStatus(firebaseUser, orderId, request.status, request.paidTotal)
+        } catch (error: DashboardOrderValidationException) {
+            call.respondValidation(error.code, error.message ?: "Check the order status.")
+            return@put
+        }
+        call.respondWorkspaceResult(order)
     }
 
     post("/orders/{id}/status") {
@@ -504,7 +510,13 @@ fun Route.dashboardRoutes(
             return@post
         }
         if (call.respondOrderStatusPaymentValidation(repository, firebaseUser, orderId, request)) return@post
-        call.respondWorkspaceResult(repository.updateOrderStatus(firebaseUser, orderId, request.status, request.paidTotal))
+        val order = try {
+            repository.updateOrderStatus(firebaseUser, orderId, request.status, request.paidTotal)
+        } catch (error: DashboardOrderValidationException) {
+            call.respondValidation(error.code, error.message ?: "Check the order status.")
+            return@post
+        }
+        call.respondWorkspaceResult(order)
     }
 
     get("/printers") {

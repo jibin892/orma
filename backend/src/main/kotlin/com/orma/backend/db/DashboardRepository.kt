@@ -4720,6 +4720,12 @@ class DashboardRepository(
             }
         }
         val next = current.add(quantityDelta).scaled()
+        if (next < BigDecimal.ZERO) {
+            throw DashboardOrderValidationException(
+                code = "variant_stock_insufficient",
+                publicMessage = "Not enough variant stock is available for this order.",
+            )
+        }
         prepareStatement(
             """
             update product_variants
@@ -4755,6 +4761,12 @@ class DashboardRepository(
             }
         }
         val next = current.add(quantityDelta).scaled()
+        if (next < BigDecimal.ZERO) {
+            throw DashboardOrderValidationException(
+                code = "product_stock_insufficient",
+                publicMessage = "Not enough product stock is available for this order.",
+            )
+        }
         prepareStatement(
             """
             update products
