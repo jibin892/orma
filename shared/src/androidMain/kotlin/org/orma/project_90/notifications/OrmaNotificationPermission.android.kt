@@ -10,7 +10,7 @@ actual suspend fun requestOrmaNotificationPermission(): OrmaNotificationPermissi
         true -> OrmaNotificationPermissionResult(
             enabled = true,
             title = "Notifications enabled",
-            message = "ORMA can now send workspace updates on this device.",
+            message = "ORMA can now send OneSignal workspace updates on this device.",
         )
         false -> OrmaNotificationPermissionResult(
             enabled = false,

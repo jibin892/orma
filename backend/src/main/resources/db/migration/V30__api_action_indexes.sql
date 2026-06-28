@@ -179,7 +179,7 @@ create index if not exists printer_profiles_barcode_candidate_idx
     on printer_profiles(workspace_id, supports_barcodes, created_at desc)
     where status = 'active';
 
--- FCM fan-out, logout cleanup, and notification activity views.
+-- Push fan-out, logout cleanup, and notification activity views.
 create index if not exists notification_tokens_workspace_active_platform_idx
     on notification_device_tokens(workspace_id, lower(platform), user_id)
     where enabled = true;

@@ -4,7 +4,7 @@ import java.net.InetAddress
 import java.util.UUID
 import java.util.prefs.Preferences
 
-actual suspend fun currentOrmaNotificationDeviceToken(): OrmaNotificationDeviceToken? {
+actual suspend fun currentOrmaNotificationDeviceToken(externalUserId: String?): OrmaNotificationDeviceToken? {
     val preferences = Preferences.userRoot().node("org/orma/project_90/notifications")
     val installationId = preferences.get("desktop_installation_id", null)
         ?: UUID.randomUUID().toString().also { preferences.put("desktop_installation_id", it) }

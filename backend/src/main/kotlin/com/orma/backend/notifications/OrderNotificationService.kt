@@ -1,26 +1,31 @@
 package com.orma.backend.notifications
 
-import com.google.firebase.messaging.AndroidConfig
-import com.google.firebase.messaging.AndroidNotification
-import com.google.firebase.messaging.ApnsConfig
-import com.google.firebase.messaging.Aps
-import com.google.firebase.messaging.FirebaseMessaging
-import com.google.firebase.messaging.Message
-import com.google.firebase.messaging.Notification
-import com.orma.backend.auth.FirebaseAppProvider
 import com.orma.backend.config.AppConfig
 import com.orma.backend.models.OrderResponse
+import java.net.URI
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
 import java.sql.Connection
 import java.sql.ResultSet
+import java.time.Duration
 import javax.sql.DataSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.slf4j.LoggerFactory
 
 class OrderNotificationService(
     private val dataSource: DataSource,
     private val config: AppConfig,
 ) {
+    private val httpClient = HttpClient.newBuilder()
+        .connectTimeout(Duration.ofSeconds(10))
+        .build()
+
     suspend fun notifyOrderCreated(order: OrderResponse) {
         runCatching {
             notifyOrderCreatedInternal(order)
@@ -54,9 +59,8 @@ class OrderNotificationService(
             "orderType" to context.orderType,
             "workspaceId" to context.workspaceId,
         )
-        val deliveryPayload = payload + ("sound" to "default")
-        val tokens = dataSource.connection.use { connection ->
-            connection.activeNotificationTokens(context.workspaceId)
+        val externalUserIds = dataSource.connection.use { connection ->
+            connection.activeOneSignalExternalUserIds(context.workspaceId)
         }
 
         val eventId = dataSource.connection.use { connection ->
@@ -65,72 +69,81 @@ class OrderNotificationService(
                 title = title,
                 body = body,
                 payload = payload,
-                targetCount = tokens.size,
+                targetCount = externalUserIds.size,
                 status = when {
-                    tokens.isEmpty() -> "no_targets"
-                    !config.firebaseMessagingConfigured -> "not_configured"
+                    externalUserIds.isEmpty() -> "no_targets"
+                    !config.oneSignalPushConfigured -> "not_configured"
                     else -> "queued"
                 },
             )
         }
 
-        if (tokens.isEmpty() || !config.firebaseMessagingConfigured) return@withContext
+        if (externalUserIds.isEmpty() || !config.oneSignalPushConfigured) return@withContext
 
-        var successCount = 0
-        var failureCount = 0
-        val messaging = FirebaseMessaging.getInstance(FirebaseAppProvider.app(config))
-        tokens.forEach { token ->
-            val message = Message.builder()
-                .setToken(token)
-                .setNotification(
-                    Notification.builder()
-                        .setTitle(title)
-                        .setBody(body)
-                        .build(),
-                )
-                .setAndroidConfig(
-                    AndroidConfig.builder()
-                        .setPriority(AndroidConfig.Priority.HIGH)
-                        .setNotification(
-                            AndroidNotification.builder()
-                                .setChannelId("orma_workspace_alerts")
-                                .setSound("default")
-                                .build(),
-                        )
-                        .build(),
-                )
-                .setApnsConfig(
-                    ApnsConfig.builder()
-                        .setAps(
-                            Aps.builder()
-                                .setSound("default")
-                                .build(),
-                        )
-                        .build(),
-                )
-                .putAllData(deliveryPayload)
-                .build()
-            runCatching {
-                messaging.send(message)
-            }.onSuccess {
-                successCount += 1
-            }.onFailure { error ->
-                failureCount += 1
-                logger.warn("FCM token send failed for order ${context.orderNumber}: ${error.message}")
-            }
-        }
+        val sent = runCatching {
+            sendOneSignalNotification(
+                externalUserIds = externalUserIds,
+                title = title,
+                body = body,
+                payload = payload,
+            )
+        }.onFailure { error ->
+            logger.warn("OneSignal send failed for order ${context.orderNumber}: ${error.message}")
+        }.isSuccess
 
+        val successCount = if (sent) externalUserIds.size else 0
+        val failureCount = if (sent) 0 else externalUserIds.size
         dataSource.connection.use { connection ->
             connection.updateNotificationEventDelivery(
                 eventId = eventId,
-                status = when {
-                    successCount > 0 && failureCount == 0 -> "sent"
-                    successCount > 0 -> "partial"
-                    else -> "failed"
-                },
+                status = if (sent) "sent" else "failed",
                 successCount = successCount,
                 failureCount = failureCount,
             )
+        }
+    }
+
+    private fun sendOneSignalNotification(
+        externalUserIds: List<String>,
+        title: String,
+        body: String,
+        payload: Map<String, String>,
+    ) {
+        val oneSignalAppId = config.oneSignalAppId?.takeIf { it.isNotBlank() }
+            ?: error("ONESIGNAL_APP_ID is not configured")
+        val oneSignalRestApiKey = config.oneSignalRestApiKey?.takeIf { it.isNotBlank() }
+            ?: error("ONESIGNAL_REST_API_KEY is not configured")
+        val requestBody = buildJsonObject {
+            put("app_id", oneSignalAppId)
+            put("target_channel", "push")
+            put(
+                "include_aliases",
+                buildJsonObject {
+                    put(
+                        "external_id",
+                        buildJsonArray {
+                            externalUserIds.distinct().forEach { add(JsonPrimitive(it)) }
+                        },
+                    )
+                },
+            )
+            put("headings", buildJsonObject { put("en", title) })
+            put("contents", buildJsonObject { put("en", body) })
+            put("data", buildJsonObject { payload.forEach { (key, value) -> put(key, value) } })
+            put("android_channel_id", "orma_workspace_alerts")
+            put("ios_sound", "default")
+            put("priority", 10)
+        }.toString()
+        val request = HttpRequest.newBuilder(URI.create(config.oneSignalNotificationsUrl))
+            .timeout(Duration.ofSeconds(20))
+            .header("Authorization", "Key $oneSignalRestApiKey")
+            .header("Content-Type", "application/json")
+            .POST(HttpRequest.BodyPublishers.ofString(requestBody))
+            .build()
+        val response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
+        if (response.statusCode() !in 200..299) {
+            val responseBody = response.body().orEmpty().take(500)
+            error("OneSignal returned HTTP ${response.statusCode()}: $responseBody")
         }
     }
 
@@ -158,9 +171,9 @@ class OrderNotificationService(
         }
     }
 
-    private fun Connection.activeNotificationTokens(workspaceId: String): List<String> {
+    private fun Connection.activeOneSignalExternalUserIds(workspaceId: String): List<String> {
         val sql = """
-            select distinct ndt.token
+            select distinct au.firebase_uid as external_user_id
             from notification_device_tokens ndt
             join app_users au on au.id = ndt.user_id
             join workspace_members wm
@@ -170,6 +183,7 @@ class OrderNotificationService(
             where ndt.workspace_id = ?::uuid
               and ndt.enabled = true
               and lower(ndt.platform) in ('android', 'web', 'ios')
+              and coalesce(au.firebase_uid, '') <> ''
               and au.notifications_enabled = true
         """.trimIndent()
         return prepareStatement(sql).use { statement ->
@@ -177,7 +191,7 @@ class OrderNotificationService(
             statement.executeQuery().use { result ->
                 buildList {
                     while (result.next()) {
-                        result.getString("token")?.takeIf { it.isNotBlank() }?.let(::add)
+                        result.getString("external_user_id")?.takeIf { it.isNotBlank() }?.let(::add)
                     }
                 }
             }

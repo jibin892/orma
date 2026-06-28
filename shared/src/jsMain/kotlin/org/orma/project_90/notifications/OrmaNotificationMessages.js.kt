@@ -17,9 +17,9 @@ actual fun observeOrmaNotificationMessages(
             ),
         )
     }
-    window.addEventListener("orma:fcm-message", listener)
+    window.addEventListener("orma:push-message", listener)
     return OrmaNotificationMessageObserver {
-        window.removeEventListener("orma:fcm-message", listener)
+        window.removeEventListener("orma:push-message", listener)
     }
 }
 

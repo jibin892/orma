@@ -103,7 +103,9 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
             is OrmaAuthResult.Success -> refreshed.session.idToken
             else -> snapshot.authIdToken
         }.takeIf { it.isNotBlank() } ?: return
-        val deviceToken = runCatching { currentOrmaNotificationDeviceToken()?.token }
+        val deviceToken = runCatching {
+            currentOrmaNotificationDeviceToken(snapshot.authUserId.takeIf { it.isNotBlank() })?.token
+        }
             .getOrNull()
             ?.trim()
             ?.takeIf { it.isNotBlank() }
@@ -748,7 +750,9 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
                     )
                     return@launch
                 }
-                val tokenResult = runCatching { currentOrmaNotificationDeviceToken() }
+                val tokenResult = runCatching {
+                    currentOrmaNotificationDeviceToken(snapshot.authUserId.takeIf { it.isNotBlank() })
+                }
                 notificationDeviceToken = tokenResult.getOrNull()
                 if (notificationDeviceToken == null) {
                     val tokenError = tokenResult.exceptionOrNull() as? OrmaNotificationTokenException

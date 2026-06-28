@@ -11,6 +11,9 @@ data class AppConfig(
     val firebaseProjectId: String?,
     val firebaseCredentialsPath: String?,
     val firebaseStorageBucket: String?,
+    val oneSignalAppId: String?,
+    val oneSignalRestApiKey: String?,
+    val oneSignalNotificationsUrl: String,
     val mediaStorageProvider: String?,
     val cloudinaryCloudName: String?,
     val cloudinaryApiKey: String?,
@@ -37,7 +40,10 @@ data class AppConfig(
         get() = !firebaseProjectId.isNullOrBlank()
 
     val firebaseMessagingConfigured: Boolean
-        get() = firebaseAuthConfigured
+        get() = false
+
+    val oneSignalPushConfigured: Boolean
+        get() = !oneSignalAppId.isNullOrBlank() && !oneSignalRestApiKey.isNullOrBlank()
 
     val firebaseStorageConfigured: Boolean
         get() = firebaseAuthConfigured && !firebaseStorageBucket.isNullOrBlank()
@@ -99,6 +105,10 @@ data class AppConfig(
                 firebaseCredentialsPath = env["FIREBASE_CREDENTIALS_PATH"].orNullIfBlank(),
                 firebaseStorageBucket = env["FIREBASE_STORAGE_BUCKET"].orNullIfBlank()
                     ?: firebaseProjectId?.let { "$it.firebasestorage.app" },
+                oneSignalAppId = env["ONESIGNAL_APP_ID"].orNullIfBlank() ?: defaultOneSignalAppId,
+                oneSignalRestApiKey = env["ONESIGNAL_REST_API_KEY"].orNullIfBlank(),
+                oneSignalNotificationsUrl = env["ONESIGNAL_NOTIFICATIONS_URL"].orEmpty()
+                    .ifBlank { "https://api.onesignal.com/notifications" },
                 mediaStorageProvider = env["MEDIA_STORAGE_PROVIDER"].orNullIfBlank(),
                 cloudinaryCloudName = env["CLOUDINARY_CLOUD_NAME"].orNullIfBlank(),
                 cloudinaryApiKey = env["CLOUDINARY_API_KEY"].orNullIfBlank(),
@@ -143,6 +153,8 @@ data class AppConfig(
             "https://orma-web-dun.vercel.app",
         )
 
+        private const val defaultOneSignalAppId = "60d2a2a5-e140-46ba-abca-aa2216043e03"
+
         private val defaultMetaOAuthScopes = listOf(
             "business_management",
             "catalog_management",
@@ -161,6 +173,9 @@ data class AppConfig(
             firebaseProjectId = null,
             firebaseCredentialsPath = null,
             firebaseStorageBucket = null,
+            oneSignalAppId = defaultOneSignalAppId,
+            oneSignalRestApiKey = null,
+            oneSignalNotificationsUrl = "https://api.onesignal.com/notifications",
             mediaStorageProvider = null,
             cloudinaryCloudName = null,
             cloudinaryApiKey = null,

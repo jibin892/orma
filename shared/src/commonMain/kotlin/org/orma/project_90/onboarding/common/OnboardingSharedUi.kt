@@ -6067,14 +6067,14 @@ private fun DashboardMobileHomeKpiDashboard(
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
+            verticalAlignment = Alignment.Top,
         ) {
             Column(
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(3.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 Text(
-                    text = "Today",
+                    text = "Business today",
                     style = MaterialTheme.typography.labelLarge,
                     color = OrmaColors.TextSecondary,
                     maxLines = 1,
@@ -6091,13 +6091,31 @@ private fun DashboardMobileHomeKpiDashboard(
                     text = body,
                     style = MaterialTheme.typography.bodySmall,
                     color = OrmaColors.TextSecondary,
-                    maxLines = 1,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
             OrmaBadge(
                 text = if (state.dashboard.loading) "SYNC" else "LIVE",
                 tone = if (state.dashboard.loading) OrmaStatusTone.Info else OrmaStatusTone.Success,
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            DashboardWideActionButton(
+                text = if (state.dashboard.actionLoading) "Saving" else primaryText,
+                onClick = primaryAction,
+                modifier = Modifier.weight(1f),
+                primary = true,
+                enabled = !state.dashboard.actionLoading,
+            )
+            DashboardWideActionButton(
+                text = secondaryText,
+                onClick = secondaryAction,
+                modifier = Modifier.weight(1f),
+                enabled = !state.dashboard.actionLoading,
             )
         }
         Row(
@@ -6127,7 +6145,7 @@ private fun DashboardMobileHomeKpiDashboard(
             verticalAlignment = Alignment.Top,
         ) {
             DashboardMobileHomeKpiTile(
-                label = "Queue",
+                label = "Open",
                 value = activeOrders.toString(),
                 detail = if (readyToClose > 0) "$readyToClose paid" else orderType.orderProgressPlural(),
                 tone = if (activeOrders > 0) OrmaStatusTone.Warning else OrmaStatusTone.Success,
@@ -6135,41 +6153,12 @@ private fun DashboardMobileHomeKpiDashboard(
                 modifier = Modifier.weight(1f),
             )
             DashboardMobileHomeKpiTile(
-                label = "Spent",
-                value = dashboardMoney(summary.supplierSpentAmount, currency),
-                detail = if (summary.supplierBalanceAmount.toDoubleOrNull().orZero() > 0.0) {
-                    "${dashboardMoney(summary.supplierBalanceAmount, currency)} due"
-                } else {
-                    "suppliers"
-                },
-                tone = if (summary.supplierBalanceAmount.toDoubleOrNull().orZero() > 0.0) OrmaStatusTone.Warning else OrmaStatusTone.Info,
+                label = "Customers",
+                value = totalCustomers.toString(),
+                detail = customerDetail,
+                tone = if (totalCustomers == 0 || reachableCustomers == 0) OrmaStatusTone.Warning else OrmaStatusTone.Info,
+                onClick = onCustomer,
                 modifier = Modifier.weight(1f),
-            )
-        }
-        DashboardMobileHomeKpiTile(
-            label = "Customers",
-            value = totalCustomers.toString(),
-            detail = customerDetail,
-            tone = if (totalCustomers == 0 || reachableCustomers == 0) OrmaStatusTone.Warning else OrmaStatusTone.Info,
-            onClick = onCustomer,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            DashboardWideActionButton(
-                text = if (state.dashboard.actionLoading) "Saving" else primaryText,
-                onClick = primaryAction,
-                modifier = Modifier.weight(1f),
-                primary = true,
-                enabled = !state.dashboard.actionLoading,
-            )
-            DashboardWideActionButton(
-                text = secondaryText,
-                onClick = secondaryAction,
-                modifier = Modifier.weight(1f),
-                enabled = !state.dashboard.actionLoading,
             )
         }
         Row(
@@ -8286,6 +8275,7 @@ private fun DashboardMobileSalesWorkspace(
         DashboardMobileSalesSearchCard(
             state = state,
             actions = actions,
+            orders = visibleOrders,
             visibleCount = visibleOrders.size,
             totalCount = state.dashboard.orderPagination.totalItems.coerceAtLeast(state.dashboard.orders.size),
             onShowFilters = { showFilterSheet = true },
@@ -8420,6 +8410,7 @@ private fun DashboardMobileSalesSummaryCard(
 private fun DashboardMobileSalesSearchCard(
     state: OnboardingUiState,
     actions: OnboardingActions,
+    orders: List<OrmaOrder>,
     visibleCount: Int,
     totalCount: Int,
     onShowFilters: () -> Unit,
@@ -8428,51 +8419,103 @@ private fun DashboardMobileSalesSearchCard(
     val filters = state.dashboard.filtersForScope(DashboardFilterScopeOrders)
     val filtersActive = state.hasActiveDashboardFilter(DashboardFilterScopeOrders)
     val summary = dashboardSalesFilterSummary(state)
+    val orderType = state.activeDashboardOrderType()
+    val currency = state.dashboard.summary.currency.ifBlank {
+        orders.firstOrNull()?.currency ?: "INR"
+    }
+    val openCount = orders.count { it.status in DashboardActiveOrderStatuses || it.balanceDueValue() > 0.0 }
+    val dueValue = orders.sumOf { it.balanceDueValue() }
+    val collectedValue = orders.sumOf { it.paidTotal.toDoubleOrNull().orZero() }
+    val headline = when {
+        dueValue > 0.0 -> "${dashboardMoney(dueValue.toDashboardMoneyInput(), currency)} to collect"
+        openCount > 0 -> "$openCount open ${orderType.orderProgressPlural()}"
+        visibleCount > 0 -> "$visibleCount records in view"
+        else -> "No open ${orderType.orderProgressPlural()}"
+    }
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        DashboardCompactSearchField(
-            value = filters.query,
-            onValueChange = { updateDashboardSearchFilter(actions, DashboardFilterScopeOrders, it) },
-            placeholder = when {
-                state.selectedDashboardOrderTypeFilter() == "all" -> "Order, customer, payment"
-                state.activeDashboardOrderType() == "service" -> "Service, customer, payment"
-                state.activeDashboardOrderType() == "appointment" -> "Appointment, customer, date"
-                else -> "Sale, customer, payment"
-            },
-            modifier = Modifier.fillMaxWidth(),
-            shape = OrmaShapes.Field,
-        )
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+        DashboardMobileRecordCard {
             Row(
-                modifier = Modifier
-                    .weight(1f)
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top,
             ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(3.dp),
+                ) {
+                    Text(
+                        text = "Sales counter",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = OrmaColors.TextPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = headline,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = OrmaColors.TextSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
                 OrmaBadge(
                     text = if (filtersActive && totalCount > 0) "$visibleCount/$totalCount" else "$visibleCount ORDERS",
                     tone = if (filtersActive) OrmaStatusTone.Warning else OrmaStatusTone.Info,
                 )
             }
-            DashboardToolbarHeaderActionButton(
-                text = "Filters",
-                onClick = onShowFilters,
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
+                DashboardMobileHomeKpiTile(
+                    label = "Due",
+                    value = dashboardMoney(dueValue.toDashboardMoneyInput(), currency),
+                    detail = if (dueValue > 0.0) "collect" else "clear",
+                    tone = if (dueValue > 0.0) OrmaStatusTone.Warning else OrmaStatusTone.Success,
+                    modifier = Modifier.weight(1f),
+                )
+                DashboardMobileHomeKpiTile(
+                    label = "Paid",
+                    value = dashboardMoney(collectedValue.toDashboardMoneyInput(), currency),
+                    detail = "$openCount open",
+                    tone = OrmaStatusTone.Info,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            DashboardCompactSearchField(
+                value = filters.query,
+                onValueChange = { updateDashboardSearchFilter(actions, DashboardFilterScopeOrders, it) },
+                placeholder = when {
+                    state.selectedDashboardOrderTypeFilter() == "all" -> "Order, customer, payment"
+                    state.activeDashboardOrderType() == "service" -> "Service, customer, payment"
+                    state.activeDashboardOrderType() == "appointment" -> "Appointment, customer, date"
+                    else -> "Sale, customer, payment"
+                },
+                modifier = Modifier.fillMaxWidth(),
+                shape = OrmaShapes.Field,
             )
-            DashboardToolbarHeaderActionButton(
-                text = if (filtersActive) "Reset" else if (state.dashboard.loading) "Syncing" else "Refresh",
-                onClick = if (filtersActive) onResetFilters else actions.onDashboardRefresh,
-                enabled = filtersActive || !state.dashboard.loading,
-            )
-        }
-        summary?.let {
-            DashboardSalesActiveFilterSummary(text = it)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                DashboardToolbarHeaderActionButton(
+                    text = "Filters",
+                    onClick = onShowFilters,
+                )
+                DashboardToolbarHeaderActionButton(
+                    text = if (filtersActive) "Reset" else if (state.dashboard.loading) "Syncing" else "Refresh",
+                    onClick = if (filtersActive) onResetFilters else actions.onDashboardRefresh,
+                    enabled = filtersActive || !state.dashboard.loading,
+                )
+            }
+            summary?.let {
+                DashboardSalesActiveFilterSummary(text = it)
+            }
         }
     }
 }
@@ -12517,7 +12560,9 @@ private fun DashboardInvoiceBuilderPage(
         }
     }
     val totalText = orderCartTotal(effectiveItems, draft.currency, taxEnabled)
-    val balancePayable = (orderCartTotalValue(effectiveItems, taxEnabled) - draft.paidTotal.toDoubleOrNull().orZero()).coerceAtLeast(0.0)
+    val paymentDelta = orderCartTotalValue(effectiveItems, taxEnabled) - draft.paidTotal.toDoubleOrNull().orZero()
+    val balancePayable = paymentDelta.coerceAtLeast(0.0)
+    val refundPayable = (-paymentDelta).coerceAtLeast(0.0)
 
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -12536,7 +12581,13 @@ private fun DashboardInvoiceBuilderPage(
                 itemCount = draft.items.size,
                 totalText = totalText,
                 paidText = dashboardMoney(draft.paidTotal.ifBlank { "0" }, draft.currency),
-                balanceText = dashboardMoney(balancePayable.toDashboardMoneyInput(), draft.currency),
+                settlementLabel = if (refundPayable > 0.0) "Refund" else "Balance",
+                settlementText = dashboardMoney(
+                    (if (refundPayable > 0.0) refundPayable else balancePayable).toDashboardMoneyInput(),
+                    draft.currency,
+                ),
+                settlementDetail = if (refundPayable > 0.0) "return" else "payable",
+                settlementTone = if (refundPayable > 0.0 || balancePayable > 0.0) OrmaStatusTone.Warning else OrmaStatusTone.Success,
                 taxEnabled = taxEnabled,
             )
         }
@@ -12609,6 +12660,7 @@ private fun DashboardInvoiceBuilderPage(
                         draft = draft,
                         totalText = totalText,
                         balancePayable = balancePayable,
+                        refundPayable = refundPayable,
                         offerDiscountTotal = offerDiscountTotal,
                         attemptedSubmit = attemptedSubmit,
                         paidError = paidError,
@@ -12710,6 +12762,7 @@ private fun DashboardInvoiceBuilderPage(
                             draft = draft,
                             totalText = totalText,
                             balancePayable = balancePayable,
+                            refundPayable = refundPayable,
                             offerDiscountTotal = offerDiscountTotal,
                             attemptedSubmit = attemptedSubmit,
                             paidError = paidError,
@@ -12934,7 +12987,9 @@ private fun DashboardOrderBuilderPage(
         selectedCategoryId = DashboardInvoiceCategoryAll
     }
     val totalText = orderCartTotal(draft.items, draft.currency)
-    val balancePayable = (orderCartTotalValue(draft.items) - draft.paidTotal.toDoubleOrNull().orZero()).coerceAtLeast(0.0)
+    val paymentDelta = orderCartTotalValue(draft.items) - draft.paidTotal.toDoubleOrNull().orZero()
+    val balancePayable = paymentDelta.coerceAtLeast(0.0)
+    val refundPayable = (-paymentDelta).coerceAtLeast(0.0)
     val catalogTitle = "${draft.orderType.orderItemPickerLabel()} catalog"
     val catalogBody = "Search first, then add ${draft.orderType.orderItemPickerLabel().lowercase()} items from category groups."
 
@@ -12955,7 +13010,13 @@ private fun DashboardOrderBuilderPage(
                 itemCount = draft.items.size,
                 totalText = totalText,
                 paidText = dashboardMoney(draft.paidTotal.ifBlank { "0" }, draft.currency),
-                balanceText = dashboardMoney(balancePayable.toDashboardMoneyInput(), draft.currency),
+                settlementLabel = if (refundPayable > 0.0) "Refund" else "Balance",
+                settlementText = dashboardMoney(
+                    (if (refundPayable > 0.0) refundPayable else balancePayable).toDashboardMoneyInput(),
+                    draft.currency,
+                ),
+                settlementDetail = if (refundPayable > 0.0) "return" else "payable",
+                settlementTone = if (refundPayable > 0.0 || balancePayable > 0.0) OrmaStatusTone.Warning else OrmaStatusTone.Success,
                 discountTotal = offerDiscountTotal,
                 currency = draft.currency,
             )
@@ -13118,7 +13179,10 @@ private fun DashboardOrderBuilderSummary(
     itemCount: Int,
     totalText: String,
     paidText: String,
-    balanceText: String,
+    settlementLabel: String,
+    settlementText: String,
+    settlementDetail: String,
+    settlementTone: OrmaStatusTone,
     discountTotal: Double,
     currency: String,
 ) {
@@ -13134,7 +13198,7 @@ private fun DashboardOrderBuilderSummary(
                 weight = 1.2f,
             ),
             DashboardFocusMetric("Paid", paidText, "captured", OrmaStatusTone.Info),
-            DashboardFocusMetric("Balance", balanceText, "payable", OrmaStatusTone.Warning),
+            DashboardFocusMetric(settlementLabel, settlementText, settlementDetail, settlementTone),
         )
         if (compact) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -13255,7 +13319,10 @@ private fun DashboardInvoiceBuilderSummary(
     itemCount: Int,
     totalText: String,
     paidText: String,
-    balanceText: String,
+    settlementLabel: String,
+    settlementText: String,
+    settlementDetail: String,
+    settlementTone: OrmaStatusTone,
     taxEnabled: Boolean,
 ) {
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
@@ -13264,7 +13331,7 @@ private fun DashboardInvoiceBuilderSummary(
             DashboardFocusMetric("Lines", itemCount.toString(), "selected", OrmaStatusTone.Info),
             DashboardFocusMetric("Total", totalText, if (taxEnabled) "tax enabled" else "tax disabled", OrmaStatusTone.Success, weight = 1.2f),
             DashboardFocusMetric("Paid", paidText, "captured", OrmaStatusTone.Info),
-            DashboardFocusMetric("Balance", balanceText, "payable", OrmaStatusTone.Warning),
+            DashboardFocusMetric(settlementLabel, settlementText, settlementDetail, settlementTone),
         )
         if (compact) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -13741,6 +13808,7 @@ private fun DashboardInvoiceCheckoutPanel(
     draft: OrmaOrderDraft,
     totalText: String,
     balancePayable: Double,
+    refundPayable: Double,
     offerDiscountTotal: Double,
     attemptedSubmit: Boolean,
     paidError: String?,
@@ -13872,7 +13940,11 @@ private fun DashboardInvoiceCheckoutPanel(
                 }
                 if (!isQuotation) {
                     add("Paid" to dashboardMoney(draft.paidTotal.ifBlank { "0" }, draft.currency))
-                    add("Balance payable" to dashboardMoney(balancePayable.toDashboardMoneyInput(), draft.currency))
+                    if (refundPayable > 0.0) {
+                        add("Refund due" to dashboardMoney(refundPayable.toDashboardMoneyInput(), draft.currency))
+                    } else {
+                        add("Balance payable" to dashboardMoney(balancePayable.toDashboardMoneyInput(), draft.currency))
+                    }
                 }
             },
         )
@@ -16001,6 +16073,7 @@ private fun DashboardMobileCustomersWorkspace(
         DashboardMobileCustomerSearchCard(
             state = state,
             actions = actions,
+            customers = customers,
             visibleCount = customers.size,
             totalCount = state.dashboard.customerPagination.totalItems.coerceAtLeast(state.dashboard.customers.size),
             onAddCustomer = onAddCustomer,
@@ -16089,6 +16162,7 @@ private fun DashboardMobileCustomerSummaryCard(
 private fun DashboardMobileCustomerSearchCard(
     state: OnboardingUiState,
     actions: OnboardingActions,
+    customers: List<OrmaCustomer>,
     visibleCount: Int,
     totalCount: Int,
     onAddCustomer: () -> Unit,
@@ -16097,48 +16171,91 @@ private fun DashboardMobileCustomerSearchCard(
     val filters = state.dashboard.filtersForScope(DashboardFilterScopeCustomers)
     val filtersActive = dashboardCustomerFilterSummary(state) != null
     val countText = if (filtersActive && totalCount > 0) "$visibleCount/$totalCount" else "$visibleCount CUSTOMERS"
+    val reachable = customers.count { it.hasCustomerContact() }
+    val withAddress = customers.count { it.hasCustomerLocation() }
+    val needsDetail = customers.count { !it.hasCustomerContact() || !it.hasCustomerLocation() }
+    val headline = when {
+        filtersActive -> "$visibleCount matching customers"
+        needsDetail > 0 -> "$needsDetail need details"
+        visibleCount > 0 -> "$visibleCount saved customers"
+        else -> "Start customer book"
+    }
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        DashboardCompactSearchField(
-            value = filters.query,
-            onValueChange = { updateDashboardSearchFilter(actions, DashboardFilterScopeCustomers, it) },
-            placeholder = "Name, phone, email, city",
-            modifier = Modifier.fillMaxWidth(),
-            shape = OrmaShapes.Field,
-        )
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            OrmaBadge(
-                text = countText,
-                tone = if (filtersActive) OrmaStatusTone.Warning else OrmaStatusTone.Info,
-            )
-            Spacer(modifier = Modifier.weight(1f))
-            DashboardToolbarHeaderActionButton(
-                text = if (filtersActive) "Reset" else if (state.dashboard.loading) "Syncing" else "Refresh",
-                onClick = if (filtersActive) onResetFilters else actions.onDashboardRefresh,
-                enabled = filtersActive || !state.dashboard.loading,
-            )
-        }
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+        DashboardMobileRecordCard {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top,
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(3.dp),
+                ) {
+                    Text(
+                        text = "Customer book",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = OrmaColors.TextPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = headline,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = OrmaColors.TextSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                OrmaBadge(
+                    text = countText,
+                    tone = if (filtersActive) OrmaStatusTone.Warning else if (needsDetail > 0) OrmaStatusTone.Warning else OrmaStatusTone.Info,
+                )
+            }
             DashboardWideActionButton(
                 text = "Add customer",
                 onClick = onAddCustomer,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.fillMaxWidth(),
                 primary = true,
                 enabled = !state.dashboard.loading,
             )
-        }
-        dashboardCustomerFilterSummary(state)?.let {
-            DashboardSalesActiveFilterSummary(text = it)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                OrmaBadge(text = "$reachable reachable", tone = if (reachable > 0) OrmaStatusTone.Success else OrmaStatusTone.Warning)
+                OrmaBadge(text = "$withAddress address", tone = OrmaStatusTone.Info)
+                OrmaBadge(
+                    text = if (needsDetail > 0) "$needsDetail need details" else "READY",
+                    tone = if (needsDetail > 0) OrmaStatusTone.Warning else OrmaStatusTone.Success,
+                )
+            }
+            DashboardCompactSearchField(
+                value = filters.query,
+                onValueChange = { updateDashboardSearchFilter(actions, DashboardFilterScopeCustomers, it) },
+                placeholder = "Name, phone, email, city",
+                modifier = Modifier.fillMaxWidth(),
+                shape = OrmaShapes.Field,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                DashboardToolbarHeaderActionButton(
+                    text = if (filtersActive) "Reset" else if (state.dashboard.loading) "Syncing" else "Refresh",
+                    onClick = if (filtersActive) onResetFilters else actions.onDashboardRefresh,
+                    enabled = filtersActive || !state.dashboard.loading,
+                )
+            }
+            dashboardCustomerFilterSummary(state)?.let {
+                DashboardSalesActiveFilterSummary(text = it)
+            }
         }
     }
 }
@@ -23195,6 +23312,9 @@ private fun DashboardMobileBookingDetailsContent(
             DashboardChecklistRow(text = "Add a default UPI payment method in Account to show the payment QR.")
         }
     }
+    if (order.balanceDueValue() > 0.0 || order.refundDueValue() > 0.0) {
+        BookingDetailsPaymentSettlementCard(order = order)
+    }
     BookingDetailsMobileNextActionCard(
         order = order,
         onStatusChange = onStatusChange,
@@ -23295,6 +23415,7 @@ private fun BookingDetailsMobileValueCard(
 ) {
     val partPaid = order.isPartPaidRecord()
     val due = order.balanceDueValue() > 0.0
+    val refundDue = order.refundDueValue() > 0.0
     val itemCount = order.itemCount.coerceAtLeast(order.items.size)
     val paymentSummary = buildList {
         add("Paid ${dashboardMoney(order.paidTotal, order.currency)}")
@@ -23321,6 +23442,8 @@ private fun BookingDetailsMobileValueCard(
                 Text(
                     text = if (partPaid) {
                         "${order.balanceDueText()} still payable."
+                    } else if (refundDue) {
+                        "${order.refundDueText()} return due."
                     } else if (due) {
                         "Collect balance before closing."
                     } else {
@@ -23364,7 +23487,11 @@ private fun BookingDetailsMobileValueCard(
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
-                        text = "$paymentSummary · ${if (due) "${order.balanceDueText()} due" else "settled"}",
+                        text = "$paymentSummary · ${when {
+                            due -> "${order.balanceDueText()} due"
+                            refundDue -> "${order.refundDueText()} refund"
+                            else -> "settled"
+                        }}",
                         style = MaterialTheme.typography.labelMedium,
                         color = OrmaColors.TextSecondary,
                         maxLines = 1,
@@ -23372,8 +23499,15 @@ private fun BookingDetailsMobileValueCard(
                     )
                 }
                 OrmaBadge(
-                    text = if (due) "DUE" else "PAID",
-                    tone = if (due) OrmaStatusTone.Warning else OrmaStatusTone.Success,
+                    text = when {
+                        due -> "DUE"
+                        refundDue -> "REFUND"
+                        else -> "PAID"
+                    },
+                    tone = when {
+                        due || refundDue -> OrmaStatusTone.Warning
+                        else -> OrmaStatusTone.Success
+                    },
                 )
             }
         }
@@ -23559,6 +23693,7 @@ private fun BookingDetailsSummaryCard(
     order: OrmaOrder,
 ) {
     val partPaid = order.isPartPaidRecord()
+    val refundDue = order.refundDueValue() > 0.0
     val upiMethod = state.dashboard.defaultUpiPaymentMethod()
     DashboardRecordCard {
         Row(
@@ -23593,14 +23728,18 @@ private fun BookingDetailsSummaryCard(
                 BookingMetric("Total", dashboardMoney(order.total, order.currency), "${order.itemCount} items"),
                 BookingMetric("Paid", dashboardMoney(order.paidTotal, order.currency), order.paymentMode.paymentModeLabel()),
                 BookingMetric(
-                    "Balance",
-                    order.balanceDueText(),
-                    if (order.balanceDueValue() > 0.0) "payable" else "settled",
+                    if (refundDue) "Refund" else "Balance",
+                    if (refundDue) order.refundDueText() else order.balanceDueText(),
+                    when {
+                        refundDue -> "return"
+                        order.balanceDueValue() > 0.0 -> "payable"
+                        else -> "settled"
+                    },
                 ),
             ),
         )
-        if (partPaid) {
-            BookingDetailsPartPaidBreakdown(order = order)
+        if (order.balanceDueValue() > 0.0 || refundDue) {
+            BookingDetailsPaymentSettlementCard(order = order)
         }
         if (order.balanceDueValue() > 0.0) {
             if (upiMethod != null) {
@@ -23624,6 +23763,9 @@ private fun BookingDetailsSummaryCard(
             text = when {
                 partPaid -> {
                     "Part paid: ${dashboardMoney(order.paidTotal, order.currency)} collected, ${order.balanceDueText()} balance due."
+                }
+                refundDue -> {
+                    "Refund due: return ${order.refundDueText()} because the paid amount is above the order total."
                 }
                 order.balanceDueValue() > 0.0 -> {
                     "Collect ${order.balanceDueText()} before closing this ${order.orderType.orderTypeLabel().lowercase()}."
@@ -23749,8 +23891,29 @@ private fun BookingDetailsUpiQrMeta(
 }
 
 @Composable
-private fun BookingDetailsPartPaidBreakdown(order: OrmaOrder) {
-    val colors = org.orma.project_90.designsystem.ormaStatusColors(OrmaStatusTone.Warning)
+private fun BookingDetailsPaymentSettlementCard(order: OrmaOrder) {
+    val dueValue = order.balanceDueValue()
+    val refundValue = order.refundDueValue()
+    val tone = when {
+        dueValue > 0.0 || refundValue > 0.0 -> OrmaStatusTone.Warning
+        else -> OrmaStatusTone.Success
+    }
+    val colors = org.orma.project_90.designsystem.ormaStatusColors(tone)
+    val title = when {
+        dueValue > 0.0 -> "Collect balance"
+        refundValue > 0.0 -> "Return balance"
+        else -> "Payment settled"
+    }
+    val body = when {
+        dueValue > 0.0 -> "The order total is higher than the paid amount."
+        refundValue > 0.0 -> "Paid amount is higher than the order total after edits."
+        else -> "Paid amount matches the order total."
+    }
+    val badgeText = when {
+        dueValue > 0.0 -> "BALANCE DUE"
+        refundValue > 0.0 -> "REFUND DUE"
+        else -> "SETTLED"
+    }
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = OrmaShapes.SmallCard,
@@ -23774,12 +23937,12 @@ private fun BookingDetailsPartPaidBreakdown(order: OrmaOrder) {
                     verticalArrangement = Arrangement.spacedBy(3.dp),
                 ) {
                     Text(
-                        text = "Part payment",
+                        text = title,
                         style = MaterialTheme.typography.titleSmall,
                         color = OrmaColors.TextPrimary,
                     )
                     Text(
-                        text = "This record is not fully settled yet.",
+                        text = body,
                         style = MaterialTheme.typography.bodyMedium,
                         color = OrmaColors.TextSecondary,
                         maxLines = 2,
@@ -23787,15 +23950,16 @@ private fun BookingDetailsPartPaidBreakdown(order: OrmaOrder) {
                     )
                 }
                 OrmaBadge(
-                    text = "BALANCE DUE",
-                    tone = OrmaStatusTone.Warning,
+                    text = badgeText,
+                    tone = tone,
                 )
             }
             OrmaKeyValueList(
-                rows = listOf(
+                rows = listOfNotNull(
                     "Order total" to dashboardMoney(order.total, order.currency),
                     "Paid amount" to dashboardMoney(order.paidTotal, order.currency),
-                    "Balance amount" to order.balanceDueText(),
+                    if (dueValue > 0.0) "Balance amount" to order.balanceDueText() else null,
+                    if (refundValue > 0.0) "Return amount" to order.refundDueText() else null,
                     "Payment mode" to order.paymentMode.paymentModeLabel(),
                 ),
             )
@@ -25578,6 +25742,18 @@ private fun DashboardCustomerRow(
                     color = OrmaColors.TextSecondary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (!customer.hasCustomerContact()) {
+                OrmaBadge(
+                    text = "DETAIL",
+                    tone = OrmaStatusTone.Warning,
+                )
+            } else {
+                OrmaFlatIcon(
+                    kind = OrmaFlatIconKind.ChevronRight,
+                    color = OrmaColors.TextTertiary,
+                    modifier = Modifier.size(16.dp),
                 )
             }
         }
@@ -30877,7 +31053,9 @@ private fun OrderFormSheet(
         }
         OrmaTextField(draft.paidTotal, { draft = draft.copy(paidTotal = it.moneyInput()) }, "Paid amount", placeholder = "0", keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
         if (attemptedSubmit) paidError?.let { FormValidationText(it) }
-        val balancePayable = (orderCartTotalValue(effectiveItems, !invoiceMode || taxEnabled) - draft.paidTotal.toDoubleOrNull().orZero()).coerceAtLeast(0.0)
+        val paymentDelta = orderCartTotalValue(effectiveItems, !invoiceMode || taxEnabled) - draft.paidTotal.toDoubleOrNull().orZero()
+        val balancePayable = paymentDelta.coerceAtLeast(0.0)
+        val refundPayable = (-paymentDelta).coerceAtLeast(0.0)
         OrmaKeyValueList(
             rows = buildList {
                 add("Total" to orderCartTotal(effectiveItems, draft.currency, !invoiceMode || taxEnabled))
@@ -30885,7 +31063,11 @@ private fun OrderFormSheet(
                     add("Offer savings" to dashboardMoney(offerDiscountTotal.toDashboardMoneyInput(), draft.currency))
                 }
                 add("Paid" to dashboardMoney(draft.paidTotal.ifBlank { "0" }, draft.currency))
-                add("Balance payable" to dashboardMoney(balancePayable.toDashboardMoneyInput(), draft.currency))
+                if (refundPayable > 0.0) {
+                    add("Refund due" to dashboardMoney(refundPayable.toDashboardMoneyInput(), draft.currency))
+                } else {
+                    add("Balance payable" to dashboardMoney(balancePayable.toDashboardMoneyInput(), draft.currency))
+                }
             },
         )
         if (!invoiceMode) {
@@ -31359,7 +31541,9 @@ private fun DashboardOrderCheckoutCard(
     onHoldAndNew: (() -> Unit)? = null,
     onDismiss: () -> Unit,
 ) {
-    val balancePayable = (orderCartTotalValue(draft.items) - draft.paidTotal.toDoubleOrNull().orZero()).coerceAtLeast(0.0)
+    val paymentDelta = orderCartTotalValue(draft.items) - draft.paidTotal.toDoubleOrNull().orZero()
+    val balancePayable = paymentDelta.coerceAtLeast(0.0)
+    val refundPayable = (-paymentDelta).coerceAtLeast(0.0)
     DashboardRecordCard {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -31484,7 +31668,11 @@ private fun DashboardOrderCheckoutCard(
                     add("Offer savings" to dashboardMoney(discountTotal.toDashboardMoneyInput(), draft.currency))
                 }
                 add("Paid" to dashboardMoney(draft.paidTotal.ifBlank { "0" }, draft.currency))
-                add("Balance payable" to dashboardMoney(balancePayable.toDashboardMoneyInput(), draft.currency))
+                if (refundPayable > 0.0) {
+                    add("Refund due" to dashboardMoney(refundPayable.toDashboardMoneyInput(), draft.currency))
+                } else {
+                    add("Balance payable" to dashboardMoney(balancePayable.toDashboardMoneyInput(), draft.currency))
+                }
             },
         )
         OrmaTextField(
@@ -34695,11 +34883,20 @@ private fun OrmaOrderDraft.requiresDeliveryLocation(): Boolean =
         customerCountry.isNotBlank() ||
         customerPostalCode.isNotBlank()
 
+private fun OrmaOrder.rawPaymentBalanceValue(): Double =
+    total.toDoubleOrNull().orZero() - paidTotal.toDoubleOrNull().orZero()
+
 private fun OrmaOrder.balanceDueValue(): Double =
-    (total.toDoubleOrNull().orZero() - paidTotal.toDoubleOrNull().orZero()).coerceAtLeast(0.0)
+    rawPaymentBalanceValue().coerceAtLeast(0.0)
 
 private fun OrmaOrder.balanceDueText(): String =
     dashboardMoney(balanceDueValue().toDashboardMoneyInput(), currency)
+
+private fun OrmaOrder.refundDueValue(): Double =
+    (-rawPaymentBalanceValue()).coerceAtLeast(0.0)
+
+private fun OrmaOrder.refundDueText(): String =
+    dashboardMoney(refundDueValue().toDashboardMoneyInput(), currency)
 
 private fun DashboardDataState.defaultUpiPaymentMethod(): OrmaWorkspacePaymentMethod? =
     paymentMethods.firstOrNull { it.isUsableUpiPaymentMethod() && it.isDefault }
@@ -34755,7 +34952,7 @@ private fun String.dashboardUrlQueryEscaped(): String =
     }
 
 private fun OrmaOrder.isPartPaidRecord(): Boolean =
-    status == "part_paid" ||
+    status.trim().lowercase() == "part_paid" ||
         (paidTotal.toDoubleOrNull().orZero() > 0.0 && balanceDueValue() > 0.0)
 
 private fun partPaidAmountError(amount: String, order: OrmaOrder): String? {
@@ -37047,6 +37244,7 @@ private fun DashboardMobileAccountContent(
     onOpenInvoices: (() -> Unit)?,
     onOpenMarketing: (() -> Unit)?,
 ) {
+    var showBusinessProfileSheet by rememberSaveable { mutableStateOf(false) }
     var showBusinessSettingsSheet by rememberSaveable { mutableStateOf(false) }
     var showPaymentSheet by rememberSaveable { mutableStateOf(false) }
     var editingPaymentMethodId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -37077,6 +37275,9 @@ private fun DashboardMobileAccountContent(
             identifier = state.identifier.trim().ifBlank { "Authenticated user" },
             roleLabel = roleLabel,
             notificationsEnabled = state.notificationsEnabled,
+            logoPreviewBytes = state.draft.logoPreviewBytes,
+            logoRemoteUrl = state.workspaceLogoUrl,
+            onClick = { showBusinessProfileSheet = true },
         )
 
         DashboardMobileAccountGroup(title = "Business") {
@@ -37350,6 +37551,18 @@ private fun DashboardMobileAccountContent(
         }
     }
 
+    if (showBusinessProfileSheet) {
+        DashboardMobileBusinessProfileSheet(
+            state = state,
+            workspaceName = workspaceName,
+            identifier = state.identifier.trim().ifBlank { "Authenticated user" },
+            roleLabel = roleLabel,
+            logoFileName = logoFileName,
+            coverFileName = coverFileName,
+            onDismiss = { showBusinessProfileSheet = false },
+        )
+    }
+
     if (canManageAccountSetup && showBusinessSettingsSheet) {
         DashboardAccountBusinessSettingsSheet(
             state = state,
@@ -37417,6 +37630,9 @@ private fun DashboardMobileAccountIdentityCard(
     identifier: String,
     roleLabel: String,
     notificationsEnabled: Boolean,
+    logoPreviewBytes: ByteArray = byteArrayOf(),
+    logoRemoteUrl: String = "",
+    onClick: (() -> Unit)? = null,
 ) {
     val roleBadge = when {
         roleLabel.contains("owner", ignoreCase = true) -> "OWNER"
@@ -37424,30 +37640,22 @@ private fun DashboardMobileAccountIdentityCard(
         roleLabel.contains("staff", ignoreCase = true) -> "STAFF"
         else -> roleLabel.uppercase().take(10)
     }
-    DashboardMobileRecordCard {
+    val cardModifier = if (onClick != null) {
+        Modifier.clickable(onClick = onClick)
+    } else {
+        Modifier
+    }
+    DashboardMobileRecordCard(modifier = cardModifier) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Surface(
-                modifier = Modifier.size(52.dp),
-                shape = OrmaShapes.SmallCard,
-                color = OrmaColors.Accent,
-                contentColor = OrmaColors.OnAccent,
-                tonalElevation = 0.dp,
-                shadowElevation = 0.dp,
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Text(
-                        text = dashboardWorkspaceInitials(workspaceName),
-                        style = MaterialTheme.typography.titleSmall,
-                        color = OrmaColors.ScreenBackground,
-                        maxLines = 1,
-                        overflow = TextOverflow.Clip,
-                    )
-                }
-            }
+            DashboardMobileBusinessAvatar(
+                workspaceName = workspaceName,
+                logoPreviewBytes = logoPreviewBytes,
+                logoRemoteUrl = logoRemoteUrl,
+            )
             Column(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(3.dp),
@@ -37471,7 +37679,111 @@ private fun DashboardMobileAccountIdentityCard(
                 text = roleBadge,
                 tone = if (notificationsEnabled) OrmaStatusTone.Success else OrmaStatusTone.Info,
             )
+            if (onClick != null) {
+                OrmaFlatIcon(
+                    kind = OrmaFlatIconKind.ChevronRight,
+                    color = OrmaColors.TextTertiary,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
         }
+    }
+}
+
+@Composable
+private fun DashboardMobileBusinessAvatar(
+    workspaceName: String,
+    logoPreviewBytes: ByteArray,
+    logoRemoteUrl: String,
+) {
+    val hasPreview = logoPreviewBytes.isNotEmpty()
+    val hasRemotePreview = logoRemoteUrl.isNotBlank()
+    Surface(
+        modifier = Modifier.size(52.dp),
+        shape = OrmaShapes.SmallCard,
+        color = if (hasPreview || hasRemotePreview) OrmaColors.ScreenBackground else OrmaColors.Accent,
+        contentColor = OrmaColors.OnAccent,
+        border = if (hasPreview || hasRemotePreview) BorderStroke(0.6.dp, OrmaColors.Hairline) else null,
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            when {
+                hasPreview -> OrmaLogoPreviewImage(
+                    bytes = logoPreviewBytes,
+                    contentDescription = "Business logo",
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(OrmaShapes.SmallCard),
+                )
+                hasRemotePreview -> OrmaRemoteImage(
+                    url = logoRemoteUrl,
+                    contentDescription = "Business logo",
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(OrmaShapes.SmallCard),
+                )
+                else -> Text(
+                    text = dashboardWorkspaceInitials(workspaceName),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = OrmaColors.ScreenBackground,
+                    maxLines = 1,
+                    overflow = TextOverflow.Clip,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DashboardMobileBusinessProfileSheet(
+    state: OnboardingUiState,
+    workspaceName: String,
+    identifier: String,
+    roleLabel: String,
+    logoFileName: String,
+    coverFileName: String,
+    onDismiss: () -> Unit,
+) {
+    val draft = state.draft
+    val address = listOf(
+        draft.addressLine,
+        draft.city,
+        draft.region,
+        draft.country,
+        draft.postalCode,
+    )
+        .mapNotNull { it.trim().takeIf(String::isNotBlank) }
+        .joinToString(", ")
+        .ifBlank { "Not added" }
+    DashboardFormSheet(
+        title = "Business profile",
+        body = workspaceName,
+        onDismiss = onDismiss,
+        wide = false,
+    ) {
+        DashboardMobileAccountIdentityCard(
+            workspaceName = workspaceName,
+            identifier = identifier,
+            roleLabel = roleLabel,
+            notificationsEnabled = state.notificationsEnabled,
+            logoPreviewBytes = draft.logoPreviewBytes,
+            logoRemoteUrl = state.workspaceLogoUrl,
+        )
+        OrmaKeyValueList(
+            rows = listOf(
+                "Business name" to workspaceName,
+                "Legal name" to draft.legalName.ifBlank { "Not added" },
+                "Signed in as" to identifier,
+                "Role" to roleLabel,
+                "Currency" to draft.currency.ifBlank { "INR" },
+                "Invoice series" to "${draft.invoicePrefix.ifBlank { "ORMA" }}-${draft.nextInvoiceNumber.ifBlank { "0001" }}",
+                draft.taxLabel.ifBlank { "GST/VAT" } to draft.taxNumber.ifBlank { if (draft.isTaxRegistered) "Not added" else "Not registered" },
+                "Address" to address,
+                "Logo" to if (logoFileName.isNotBlank()) "Uploaded" else "Not uploaded",
+                "Cover photo" to if (coverFileName.isNotBlank()) "Uploaded" else "Not uploaded",
+            ),
+        )
     }
 }
 

@@ -13,6 +13,10 @@
     <link rel="preload" href="fonts/google_sans_semibold.woff2" as="font" type="font/woff2" crossorigin>
     <link rel="preload" href="fonts/google_sans_bold.woff2" as="font" type="font/woff2" crossorigin>
     <link type="text/css" rel="stylesheet" href="styles.css">
+    <script>
+        window.OneSignalDeferred = window.OneSignalDeferred || [];
+    </script>
+    <script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
 </head>
 <body>
     <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 50 50" role="presentation">
@@ -56,9 +60,9 @@
                 appId: "1:469264683998:web:dc157cbbee2f29fe35834f",
                 vapidKey: "BHXITGfTtTAaUdxe6chNZbtVAEeOqGHFfNb1y7WkCBmmao8oOpSOXF6Z4M7EVPk7azzCs2b9wWFW4tnrVHYHbtQ"
             };
+            const oneSignalAppId = "60d2a2a5-e140-46ba-abca-aa2216043e03";
             let authBundlePromise = null;
-            let messagingBundlePromise = null;
-            let foregroundMessagingHandlerRegistered = false;
+            let oneSignalInitPromise = null;
 
             async function authBundle() {
                 if (!authBundlePromise) {
@@ -76,147 +80,6 @@
                     });
                 }
                 return authBundlePromise;
-            }
-
-            async function messagingBundle() {
-                if (!messagingBundlePromise) {
-                    messagingBundlePromise = Promise.all([
-                        import("https://www.gstatic.com/firebasejs/11.10.0/firebase-app.js"),
-                        import("https://www.gstatic.com/firebasejs/11.10.0/firebase-messaging.js")
-                    ]).then(async ([appModule, messagingModule]) => {
-                        if (typeof messagingModule.isSupported === "function") {
-                            const supported = await messagingModule.isSupported();
-                            if (!supported) {
-                                throw {
-                                    code: "WEB_MESSAGING_UNSUPPORTED",
-                                    message: "This browser cannot create Firebase web push tokens."
-                                };
-                            }
-                        }
-                        const app = appModule.getApps().length
-                            ? appModule.getApps()[0]
-                            : appModule.initializeApp(firebaseConfig);
-                        const messaging = messagingModule.getMessaging(app);
-                        return { messagingModule, messaging };
-                    });
-                }
-                return messagingBundlePromise;
-            }
-
-            function dispatchOrmaMessagingEvent(payload) {
-                if (typeof window === "undefined" || typeof window.dispatchEvent !== "function") {
-                    return;
-                }
-                window.dispatchEvent(new CustomEvent("orma:fcm-message", {
-                    detail: {
-                        payload: payload || {},
-                        data: payload && payload.data ? payload.data : {},
-                        notification: payload && payload.notification ? payload.notification : {}
-                    }
-                }));
-            }
-
-            if (typeof navigator !== "undefined" && navigator.serviceWorker && typeof navigator.serviceWorker.addEventListener === "function") {
-                navigator.serviceWorker.addEventListener("message", (event) => {
-                    const message = event && event.data ? event.data : {};
-                    if (message.type === "orma:fcm-message") {
-                        dispatchOrmaMessagingEvent(message.payload || {});
-                    }
-                });
-            }
-
-            function registerForegroundMessagingHandler(messagingModule, messaging) {
-                if (foregroundMessagingHandlerRegistered || typeof Notification === "undefined") {
-                    return;
-                }
-                foregroundMessagingHandlerRegistered = true;
-                messagingModule.onMessage(messaging, (payload) => {
-                    dispatchOrmaMessagingEvent(payload);
-                    if (Notification.permission !== "granted") {
-                        return;
-                    }
-                    const title = payload && payload.notification && payload.notification.title
-                        ? payload.notification.title
-                        : "ORMA";
-                    const body = payload && payload.notification && payload.notification.body
-                        ? payload.notification.body
-                        : "New workspace update";
-                    new Notification(title, {
-                        body,
-                        data: payload && payload.data ? payload.data : {},
-                        silent: false,
-                        renotify: true,
-                        tag: payload && payload.data && payload.data.orderId
-                            ? payload.data.orderId
-                            : "orma-workspace-alert"
-                    });
-                });
-            }
-
-            function webMessagingTokenError(error) {
-                const code = error && error.code ? error.code : "FIREBASE_WEB_MESSAGING_TOKEN_FAILED";
-                const message = error && error.message ? error.message : "";
-                if (
-                    isFirebasePushSubscriptionError(error) ||
-                    message.indexOf("missing required authentication credential") >= 0 ||
-                    message.indexOf("Expected OAuth 2 access token") >= 0
-                ) {
-                    return {
-                        errorTitle: "Browser push could not connect",
-                        errorMessage: "ORMA reset this browser's push subscription and tried again, but Firebase still rejected the registration. Check the Firebase Web Push key, Firebase Installations API, Cloud Messaging API, and API key domain restrictions for localhost and the deployed ORMA domain.",
-                        errorCode: code
-                    };
-                }
-                if (code === "messaging/permission-blocked") {
-                    return {
-                        errorTitle: "Notifications are blocked",
-                        errorMessage: "Allow notifications for this site in browser settings to receive ORMA workspace alerts.",
-                        errorCode: code
-                    };
-                }
-                if (code === "WEB_MESSAGING_UNSUPPORTED" || code === "messaging/unsupported-browser") {
-                    return {
-                        errorTitle: "Web notifications are not supported",
-                        errorMessage: message || "This browser does not support Firebase web push notifications.",
-                        errorCode: code
-                    };
-                }
-                return {
-                    errorTitle: "Web notifications are not connected",
-                    errorMessage: message || "ORMA could not create a browser notification token.",
-                    errorCode: code
-                };
-            }
-
-            function isFirebasePushSubscriptionError(error) {
-                const code = error && error.code ? error.code : "";
-                const message = error && error.message ? error.message : "";
-                return code === "messaging/token-subscribe-failed" ||
-                    code === "messaging/token-update-failed" ||
-                    message.indexOf("messaging/token-subscribe-failed") >= 0 ||
-                    message.indexOf("messaging/token-update-failed") >= 0;
-            }
-
-            async function resetFirebaseWebPushSubscription(messagingModule, messaging, serviceWorkerRegistration) {
-                try {
-                    if (messagingModule && typeof messagingModule.deleteToken === "function") {
-                        await messagingModule.deleteToken(messaging);
-                    }
-                } catch (_) {
-                    // Firebase can fail deleting a token that was never created. Continue with the browser reset.
-                }
-                try {
-                    const subscription = serviceWorkerRegistration &&
-                        serviceWorkerRegistration.pushManager &&
-                        typeof serviceWorkerRegistration.pushManager.getSubscription === "function"
-                        ? await serviceWorkerRegistration.pushManager.getSubscription()
-                        : null;
-                    if (subscription && typeof subscription.unsubscribe === "function") {
-                        await subscription.unsubscribe();
-                    }
-                } catch (_) {
-                    // Browsers can reject subscription cleanup for stale registrations; retry token creation anyway.
-                }
             }
 
             function currentUserWhenReady(auth, authModule, timeoutMs) {
@@ -266,6 +129,65 @@
                     displayName: existingUser.displayName || "",
                     providerId
                 };
+            }
+
+            function dispatchOrmaPushEvent(payload) {
+                if (typeof window === "undefined" || typeof window.dispatchEvent !== "function") {
+                    return;
+                }
+                window.dispatchEvent(new CustomEvent("orma:push-message", {
+                    detail: {
+                        payload: payload || {},
+                        data: payload && payload.data ? payload.data : {},
+                        notification: payload && payload.notification ? payload.notification : {}
+                    }
+                }));
+            }
+
+            function registerOneSignalForegroundHandler(OneSignal) {
+                if (
+                    !OneSignal ||
+                    !OneSignal.Notifications ||
+                    typeof OneSignal.Notifications.addEventListener !== "function" ||
+                    OneSignal.__ormaForegroundHandlerRegistered
+                ) {
+                    return;
+                }
+                OneSignal.__ormaForegroundHandlerRegistered = true;
+                OneSignal.Notifications.addEventListener("foregroundWillDisplay", function (event) {
+                    const notification = event && event.notification ? event.notification : {};
+                    const data = notification.additionalData || notification.data || {};
+                    dispatchOrmaPushEvent({
+                        data,
+                        notification: {
+                            title: notification.title || "ORMA",
+                            body: notification.body || "New workspace update"
+                        }
+                    });
+                });
+            }
+
+            function oneSignalReady() {
+                if (!oneSignalInitPromise) {
+                    oneSignalInitPromise = new Promise((resolve, reject) => {
+                        const deferred = window.OneSignalDeferred = window.OneSignalDeferred || [];
+                        deferred.push(async function (OneSignal) {
+                            try {
+                                await OneSignal.init({
+                                    appId: oneSignalAppId,
+                                    serviceWorkerParam: { scope: "/" },
+                                    serviceWorkerPath: "OneSignalSDKWorker.js",
+                                    notifyButton: { enable: false }
+                                });
+                                registerOneSignalForegroundHandler(OneSignal);
+                                resolve(OneSignal);
+                            } catch (error) {
+                                reject(error);
+                            }
+                        });
+                    });
+                }
+                return oneSignalInitPromise;
             }
 
             function safeDesktopCallback(rawValue) {
@@ -469,7 +391,7 @@
                         };
                     }
                 },
-                messagingToken: async function () {
+                messagingToken: async function (externalUserId) {
                     try {
                         if (typeof window === "undefined" || !("Notification" in window)) {
                             return {
@@ -480,6 +402,43 @@
                                 errorCode: "WEB_NOTIFICATION_UNSUPPORTED"
                             };
                         }
+                        if (!("serviceWorker" in navigator)) {
+                            return {
+                                token: "",
+                                deviceName: "",
+                                errorTitle: "Web notifications are not supported",
+                                errorMessage: "This browser does not support the service worker required for ORMA web notifications.",
+                                errorCode: "WEB_SERVICE_WORKER_UNSUPPORTED"
+                            };
+                        }
+                        const firebaseUserSession = await firebaseSession(false).catch(() => null);
+                        const oneSignalExternalUserId = String(
+                            externalUserId ||
+                            (firebaseUserSession && firebaseUserSession.uid) ||
+                            ""
+                        ).trim();
+                        if (!oneSignalExternalUserId) {
+                            return {
+                                token: "",
+                                deviceName: "",
+                                errorTitle: "Web notifications are not connected",
+                                errorMessage: "ORMA could not connect this browser to the signed-in OneSignal user. Sign in again and retry.",
+                                errorCode: "ONESIGNAL_EXTERNAL_USER_MISSING"
+                            };
+                        }
+                        const OneSignal = await oneSignalReady();
+                        if (OneSignal && typeof OneSignal.login === "function") {
+                            await OneSignal.login(oneSignalExternalUserId);
+                        }
+                        if (Notification.permission !== "granted") {
+                            if (
+                                OneSignal &&
+                                OneSignal.Notifications &&
+                                typeof OneSignal.Notifications.requestPermission === "function"
+                            ) {
+                                await OneSignal.Notifications.requestPermission();
+                            }
+                        }
                         if (Notification.permission !== "granted") {
                             return {
                                 token: "",
@@ -489,73 +448,19 @@
                                 errorCode: "WEB_NOTIFICATION_PERMISSION_NOT_GRANTED"
                             };
                         }
-                        const { messagingModule, messaging } = await messagingBundle();
-                        let serviceWorkerRegistration = null;
-                        if ("serviceWorker" in navigator) {
-                            serviceWorkerRegistration = await navigator.serviceWorker.register("/firebase-messaging-sw.js", { scope: "/" });
-                            if (serviceWorkerRegistration.update) {
-                                serviceWorkerRegistration.update().catch(() => undefined);
-                            }
-                            serviceWorkerRegistration = await navigator.serviceWorker.ready;
-                        } else {
-                            return {
-                                token: "",
-                                deviceName: "",
-                                errorTitle: "Web notifications are not supported",
-                                errorMessage: "This browser does not support the service worker required for ORMA web notifications.",
-                                errorCode: "WEB_SERVICE_WORKER_UNSUPPORTED"
-                            };
-                        }
-                        const vapidKey = window.OrmaFirebaseMessagingVapidKey || firebaseConfig.vapidKey || "";
-                        if (!vapidKey) {
-                            return {
-                                token: "",
-                                deviceName: "",
-                                errorTitle: "Web notifications are not configured",
-                                errorMessage: "Firebase Web Push certificate key is missing. Add the ORMA VAPID key before enabling web notifications.",
-                                errorCode: "FIREBASE_WEB_VAPID_KEY_MISSING"
-                            };
-                        }
-                        const tokenOptions = {};
-                        if (serviceWorkerRegistration) {
-                            tokenOptions.serviceWorkerRegistration = serviceWorkerRegistration;
-                        }
-                        tokenOptions.vapidKey = vapidKey;
-                        let token = "";
-                        try {
-                            token = await messagingModule.getToken(messaging, tokenOptions);
-                        } catch (error) {
-                            if (!isFirebasePushSubscriptionError(error)) {
-                                throw error;
-                            }
-                            await resetFirebaseWebPushSubscription(messagingModule, messaging, serviceWorkerRegistration);
-                            if (serviceWorkerRegistration && serviceWorkerRegistration.update) {
-                                await serviceWorkerRegistration.update().catch(() => undefined);
-                            }
-                            token = await messagingModule.getToken(messaging, tokenOptions);
-                        }
-                        if (!token) {
-                            return {
-                                token: "",
-                                deviceName: "",
-                                errorTitle: "Web notifications are not connected",
-                                errorMessage: "Firebase did not return a browser notification token. Try again after refreshing the page.",
-                                errorCode: "FIREBASE_WEB_TOKEN_EMPTY"
-                            };
-                        }
-                        registerForegroundMessagingHandler(messagingModule, messaging);
                         return {
-                            token: token,
+                            token: "onesignal-external:" + oneSignalExternalUserId,
                             deviceName: navigator.userAgent || "Web browser"
                         };
                     } catch (error) {
-                        const mapped = webMessagingTokenError(error);
                         return {
                             token: "",
                             deviceName: "",
-                            errorTitle: mapped.errorTitle,
-                            errorMessage: mapped.errorMessage,
-                            errorCode: mapped.errorCode
+                            errorTitle: "OneSignal is not connected",
+                            errorMessage: error && error.message
+                                ? error.message
+                                : "ORMA could not connect this browser to OneSignal.",
+                            errorCode: error && error.code ? error.code : "ONESIGNAL_WEB_TOKEN_FAILED"
                         };
                     }
                 },

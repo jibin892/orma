@@ -3,13 +3,13 @@ package org.orma.project_90.notifications
 import kotlin.js.Promise
 import kotlinx.coroutines.await
 
-actual suspend fun currentOrmaNotificationDeviceToken(): OrmaNotificationDeviceToken? {
-    val result = requestWebNotificationDeviceToken().await()
+actual suspend fun currentOrmaNotificationDeviceToken(externalUserId: String?): OrmaNotificationDeviceToken? {
+    val result = requestWebNotificationDeviceToken(externalUserId.orEmpty()).await()
     val token = result.token?.takeIf { it.isNotBlank() }
         ?: throw OrmaNotificationTokenException(
             title = result.errorTitle ?: "Web notifications are not connected",
             message = result.errorMessage
-                ?: "ORMA could not create a browser notification token. Allow notifications and confirm the Firebase Web Push certificate key is configured.",
+                ?: "ORMA could not connect this browser to OneSignal. Allow notifications and retry.",
             code = result.errorCode ?: "WEB_NOTIFICATION_TOKEN_MISSING",
         )
     return OrmaNotificationDeviceToken(
@@ -27,7 +27,7 @@ private external interface JsNotificationDeviceTokenResult {
     val errorCode: String?
 }
 
-private fun requestWebNotificationDeviceToken(): Promise<JsNotificationDeviceTokenResult> = js(
+private fun requestWebNotificationDeviceToken(externalUserId: String): Promise<JsNotificationDeviceTokenResult> = js(
     """
     new Promise(function(resolve) {
       const bridge = typeof window !== 'undefined' ? window.OrmaFirebaseGoogleAuth : null;
@@ -36,12 +36,12 @@ private fun requestWebNotificationDeviceToken(): Promise<JsNotificationDeviceTok
           token: null,
           deviceName: null,
           errorTitle: 'Web notifications are not connected',
-          errorMessage: 'The Firebase web messaging bridge is not available in this browser build.',
+          errorMessage: 'The OneSignal web notification bridge is not available in this browser build.',
           errorCode: 'WEB_MESSAGING_BRIDGE_MISSING'
         });
         return;
       }
-      bridge.messagingToken()
+      bridge.messagingToken(externalUserId)
         .then(function(result) {
           resolve({
             token: result && result.token ? result.token : null,

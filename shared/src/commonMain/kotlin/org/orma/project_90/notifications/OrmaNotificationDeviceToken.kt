@@ -12,4 +12,4 @@ class OrmaNotificationTokenException(
     val code: String? = null,
 ) : Exception(message)
 
-expect suspend fun currentOrmaNotificationDeviceToken(): OrmaNotificationDeviceToken?
+expect suspend fun currentOrmaNotificationDeviceToken(externalUserId: String? = null): OrmaNotificationDeviceToken?

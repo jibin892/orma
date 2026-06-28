@@ -45,6 +45,9 @@ Important variables:
 - `RUN_MIGRATIONS`: set to `true` to run Flyway migrations on startup
 - `FIREBASE_PROJECT_ID`: Firebase project ID
 - `FIREBASE_CREDENTIALS_PATH`: service account JSON path for local/server auth verification
+- `ONESIGNAL_APP_ID`: OneSignal app ID used by Android and web push
+- `ONESIGNAL_REST_API_KEY`: backend-only OneSignal REST API key for sending push notifications
+- `ONESIGNAL_NOTIFICATIONS_URL`: optional override, defaults to `https://api.onesignal.com/notifications`
 - `MEDIA_STORAGE_PROVIDER`: `cloudinary` for pilot uploads, or `firebase` if Firebase Storage is enabled
 - `CLOUDINARY_CLOUD_NAME`: Cloudinary cloud name
 - `CLOUDINARY_API_KEY`: Cloudinary API key

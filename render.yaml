@@ -26,6 +26,12 @@ services:
         value: /etc/secrets/firebase-adminsdk.json
       - key: FIREBASE_STORAGE_BUCKET
         value: orma-project-90.firebasestorage.app
+      - key: ONESIGNAL_APP_ID
+        value: 60d2a2a5-e140-46ba-abca-aa2216043e03
+      - key: ONESIGNAL_REST_API_KEY
+        sync: false
+      - key: ONESIGNAL_NOTIFICATIONS_URL
+        value: https://api.onesignal.com/notifications
       - key: GSTINCHECK_API_KEY
         sync: false
       - key: GSTINCHECK_BASE_URL

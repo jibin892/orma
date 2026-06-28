@@ -16,6 +16,7 @@ data class HealthResponse(
     val databaseConfigured: Boolean,
     val firebaseAuthConfigured: Boolean,
     val firebaseMessagingConfigured: Boolean,
+    val oneSignalPushConfigured: Boolean = false,
     val firebaseStorageConfigured: Boolean,
     val mediaStorageProvider: String,
     val mediaStorageConfigured: Boolean,
