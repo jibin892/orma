@@ -19458,6 +19458,7 @@ private fun DashboardMarketingContent(
                     onRefresh = actions.onLoadMetaWhatsAppTemplates,
                     onCreate = { selectedMarketingTab = DashboardMarketingTabCreateTemplate },
                     onSyncDefaults = actions.onSyncMetaWhatsAppTemplates,
+                    onSubmit = actions.onCreateMetaWhatsAppTemplate,
                 )
             }
             DashboardMarketingTabCreateTemplate -> {
@@ -20284,15 +20285,18 @@ private fun DashboardMarketingTemplateListWorkspace(
     onRefresh: () -> Unit,
     onCreate: () -> Unit,
     onSyncDefaults: () -> Unit,
+    onSubmit: (OrmaMetaWhatsAppTemplateDraft) -> Unit,
 ) {
     DashboardRecordCard {
         DashboardMetaTemplateManager(
+            state = state,
             templates = state.dashboard.metaWhatsAppTemplates,
             syncItems = state.dashboard.metaTemplateSyncItems,
             actionLoading = state.dashboard.metaActionLoading,
             onRefresh = onRefresh,
             onCreate = onCreate,
             onSyncDefaults = onSyncDefaults,
+            onSubmit = onSubmit,
             showDivider = false,
         )
     }
@@ -20661,12 +20665,14 @@ private fun DashboardMarketingChannelCard(
 
         if (setupComplete) {
             DashboardMetaTemplateManager(
+                state = state,
                 templates = state.dashboard.metaWhatsAppTemplates,
                 syncItems = state.dashboard.metaTemplateSyncItems,
                 actionLoading = state.dashboard.metaActionLoading,
                 onRefresh = actions.onLoadMetaWhatsAppTemplates,
                 onCreate = { showTemplateCreateSheet = true },
                 onSyncDefaults = actions.onSyncMetaWhatsAppTemplates,
+                onSubmit = actions.onCreateMetaWhatsAppTemplate,
             )
         }
 
@@ -20957,14 +20963,17 @@ private fun DashboardMetaSetupActions(
 
 @Composable
 private fun DashboardMetaTemplateManager(
+    state: OnboardingUiState,
     templates: List<OrmaMetaWhatsAppTemplate>,
     syncItems: List<OrmaMetaWhatsAppTemplateSyncItem>,
     actionLoading: Boolean,
     onRefresh: () -> Unit,
     onCreate: () -> Unit,
     onSyncDefaults: () -> Unit,
+    onSubmit: (OrmaMetaWhatsAppTemplateDraft) -> Unit,
     showDivider: Boolean = true,
 ) {
+    var editingTemplate by remember { mutableStateOf<OrmaMetaWhatsAppTemplate?>(null) }
     if (showDivider) {
         HorizontalDivider(color = OrmaColors.Hairline.copy(alpha = 0.55f))
     }
@@ -21008,7 +21017,12 @@ private fun DashboardMetaTemplateManager(
             .sortedWith(compareBy<OrmaMetaWhatsAppTemplate> { it.status }.thenBy { it.name })
             .take(12)
             .forEach { template ->
-                DashboardMetaTemplateRow(template = template)
+                DashboardMetaTemplateRow(
+                    template = template,
+                    actionLoading = actionLoading,
+                    onEdit = { editingTemplate = template },
+                    onResubmit = { onSubmit(template.toWhatsAppTemplateDraft()) },
+                )
             }
         if (templates.size > 12) {
             DashboardChecklistRow(text = "${templates.size - 12} more templates are available in WhatsApp Manager.")
@@ -21023,6 +21037,20 @@ private fun DashboardMetaTemplateManager(
         syncItems.take(6).forEach { item ->
             DashboardChecklistRow(text = "${item.name}: ${item.status.dashboardTitleCase()} - ${item.message}")
         }
+    }
+    editingTemplate?.let { template ->
+        MetaWhatsAppTemplateCreateSheet(
+            state = state,
+            onDismiss = { editingTemplate = null },
+            onSubmit = { draft ->
+                onSubmit(draft)
+                editingTemplate = null
+            },
+            initialDraft = template.toWhatsAppTemplateDraft(),
+            title = "Edit WhatsApp template",
+            body = "Update the body/category and resubmit it to Meta. Existing Meta templates keep the same name and language.",
+            primaryText = "Resubmit template",
+        )
     }
 }
 
@@ -21090,8 +21118,13 @@ private fun DashboardMetaTemplateActions(
 @Composable
 private fun DashboardMetaTemplateRow(
     template: OrmaMetaWhatsAppTemplate,
+    actionLoading: Boolean,
+    onEdit: () -> Unit,
+    onResubmit: () -> Unit,
 ) {
     val tone = template.status.dashboardTemplateTone()
+    val canSubmitTemplate = template.bodyText?.isNotBlank() == true
+    val showResubmit = template.status.dashboardTemplateCanResubmit()
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = OrmaShapes.SmallCard,
@@ -21143,6 +21176,24 @@ private fun DashboardMetaTemplateRow(
             template.rejectedReason?.takeIf { it.isNotBlank() }?.let { reason ->
                 DashboardChecklistRow(text = "Rejected reason: $reason")
             }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                OrmaTextButton(
+                    text = "Edit",
+                    onClick = onEdit,
+                    enabled = !actionLoading && canSubmitTemplate,
+                )
+                if (showResubmit) {
+                    OrmaTextButton(
+                        text = "Resubmit",
+                        onClick = onResubmit,
+                        enabled = !actionLoading && canSubmitTemplate,
+                    )
+                }
+            }
         }
     }
 }
@@ -21152,11 +21203,15 @@ private fun MetaWhatsAppTemplateCreateSheet(
     state: OnboardingUiState,
     onDismiss: () -> Unit,
     onSubmit: (OrmaMetaWhatsAppTemplateDraft) -> Unit,
+    initialDraft: OrmaMetaWhatsAppTemplateDraft? = null,
+    title: String = "Create WhatsApp template",
+    body: String = "Submit a template to the connected WhatsApp Business Account. Meta approval happens in WhatsApp Manager.",
+    primaryText: String = "Submit template",
 ) {
     val closeSheet = LocalSmoothSheetDismiss.current ?: onDismiss
     DashboardFormSheet(
-        title = "Create WhatsApp template",
-        body = "Submit a template to the connected WhatsApp Business Account. Meta approval happens in WhatsApp Manager.",
+        title = title,
+        body = body,
         onDismiss = onDismiss,
     ) {
         DashboardMetaTemplateCreateForm(
@@ -21164,6 +21219,8 @@ private fun MetaWhatsAppTemplateCreateSheet(
             onSubmit = onSubmit,
             secondaryText = "Cancel",
             onSecondary = closeSheet,
+            initialDraft = initialDraft,
+            primaryText = primaryText,
         )
     }
 }
@@ -21174,19 +21231,34 @@ private fun DashboardMetaTemplateCreateForm(
     onSubmit: (OrmaMetaWhatsAppTemplateDraft) -> Unit,
     secondaryText: String?,
     onSecondary: (() -> Unit)?,
+    initialDraft: OrmaMetaWhatsAppTemplateDraft? = null,
+    primaryText: String = "Submit template",
 ) {
-    var draft by remember {
-        mutableStateOf(
-            OrmaMetaWhatsAppTemplateDraft(
-                name = "orma_custom_update",
-                category = "UTILITY",
-                languageCode = "en_US",
-                bodyText = "Hi {{1}}, update for {{2}}: {{3}}.",
-                sampleParameters = listOf("Jibin Cherian", "ORD-123456", "confirmed"),
-            ),
+    val defaultDraft = remember(initialDraft) {
+        initialDraft ?: OrmaMetaWhatsAppTemplateDraft(
+            name = "orma_custom_update",
+            category = "UTILITY",
+            languageCode = "en_US",
+            bodyText = "Hi {{1}}, update for {{2}}: {{3}}.",
+            sampleParameters = listOf("Jibin Cherian", "ORD-123456", "confirmed"),
         )
     }
-    var sampleText by rememberSaveable { mutableStateOf(draft.sampleParameters.joinToString(", ")) }
+    var draft by remember(
+        defaultDraft.templateId,
+        defaultDraft.name,
+        defaultDraft.category,
+        defaultDraft.languageCode,
+        defaultDraft.bodyText,
+    ) {
+        mutableStateOf(defaultDraft)
+    }
+    var sampleText by rememberSaveable(
+        defaultDraft.templateId,
+        defaultDraft.name,
+        defaultDraft.bodyText,
+    ) {
+        mutableStateOf(defaultDraft.sampleParameters.joinToString(", "))
+    }
     OrmaTextField(
         value = draft.name,
         onValueChange = { value ->
@@ -21242,7 +21314,7 @@ private fun DashboardMetaTemplateCreateForm(
         tertiaryText = state.dashboard.metaConnection?.messagingStatus?.dashboardTitleCase() ?: "Messaging setup",
     )
     OrmaActionRow(
-        primaryText = if (state.dashboard.metaActionLoading) "Submitting..." else "Submit template",
+        primaryText = if (state.dashboard.metaActionLoading) "Submitting..." else primaryText,
         onPrimary = {
             onSubmit(
                 draft.copy(
@@ -21837,6 +21909,29 @@ private fun String.dashboardTemplateTone(): OrmaStatusTone =
         "pending", "in_review", "submitted" -> OrmaStatusTone.Warning
         else -> OrmaStatusTone.Info
     }
+
+private fun String.dashboardTemplateCanResubmit(): Boolean =
+    trim().lowercase() in setOf("pending", "in_review", "submitted", "rejected", "failed", "disabled", "paused")
+
+private fun OrmaMetaWhatsAppTemplate.toWhatsAppTemplateDraft(): OrmaMetaWhatsAppTemplateDraft =
+    OrmaMetaWhatsAppTemplateDraft(
+        templateId = id.orEmpty(),
+        name = name,
+        category = category.ifBlank { "UTILITY" }.uppercase(),
+        languageCode = languageCode.ifBlank { "en_US" },
+        bodyText = bodyText.orEmpty(),
+        sampleParameters = bodyText.orEmpty().dashboardTemplateSampleParameters(),
+    )
+
+private fun String.dashboardTemplateSampleParameters(): List<String> {
+    val count = Regex("""\{\{\s*(\d+)\s*}}""")
+        .findAll(this)
+        .mapNotNull { it.groupValues.getOrNull(1)?.toIntOrNull() }
+        .maxOrNull()
+        ?: return emptyList()
+    val defaults = listOf("Jibin Cherian", "ORD-123456", "INR 500.00", "confirmed", "upi://pay")
+    return (0 until count).map { index -> defaults.getOrElse(index) { "Sample ${index + 1}" } }
+}
 
 private fun String.dashboardTitleCase(): String =
     split("_", "-", " ")

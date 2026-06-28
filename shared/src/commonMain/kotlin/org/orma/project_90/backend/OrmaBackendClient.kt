@@ -897,6 +897,7 @@ data class OrmaMetaWhatsAppTemplate(
 )
 
 data class OrmaMetaWhatsAppTemplateDraft(
+    val templateId: String = "",
     val name: String = "",
     val category: String = "UTILITY",
     val languageCode: String = "en_US",
@@ -1937,6 +1938,7 @@ class OrmaBackendClient(
                     url = config.url("/integrations/meta/whatsapp/templates"),
                     bearerToken = idToken,
                     body = buildJsonObject(
+                        "templateId" to JsonValue.StringValue(draft.templateId.blankToNull()),
                         "name" to JsonValue.StringValue(draft.name),
                         "category" to JsonValue.StringValue(draft.category),
                         "languageCode" to JsonValue.StringValue(draft.languageCode.blankToNull()),

@@ -318,6 +318,9 @@ class MetaIntegrationRepository(
 
         val templateName = request.name.cleanMetaTemplateName()
         val bodyText = request.bodyText.cleanMetaTemplateBody()
+        val templateId = request.templateId
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
         if (templateName.length < 3 || bodyText.length < 10) {
             return@withContext MetaWhatsAppTemplateCreateResponse(
                 created = false,
@@ -335,11 +338,19 @@ class MetaIntegrationRepository(
         )
 
         try {
-            val result = graphClient.createWhatsAppTemplate(
-                accessToken = accessToken,
-                whatsappBusinessAccountId = whatsappBusinessAccountId,
-                template = graphRequest,
-            )
+            val result = if (templateId != null) {
+                graphClient.updateWhatsAppTemplate(
+                    accessToken = accessToken,
+                    templateId = templateId,
+                    template = graphRequest,
+                )
+            } else {
+                graphClient.createWhatsAppTemplate(
+                    accessToken = accessToken,
+                    whatsappBusinessAccountId = whatsappBusinessAccountId,
+                    template = graphRequest,
+                )
+            }
             dataSource.connection.use { connection ->
                 connection.updateMetaMessagingStatus(context.workspaceId, "templates_submitted", null)
             }
@@ -347,14 +358,18 @@ class MetaIntegrationRepository(
                 created = true,
                 status = result.status?.lowercase()?.takeIf { it.isNotBlank() } ?: "submitted",
                 template = MetaWhatsAppCreatedTemplateResponse(
-                    id = result.id,
+                    id = result.id ?: templateId,
                     name = graphRequest.name,
                     status = result.status?.lowercase()?.takeIf { it.isNotBlank() } ?: "submitted",
                     category = graphRequest.category,
                     languageCode = graphRequest.languageCode,
                     bodyText = graphRequest.bodyText,
                 ),
-                message = "Template submitted to Meta for approval.",
+                message = if (templateId != null) {
+                    "Template resubmitted to Meta for approval."
+                } else {
+                    "Template submitted to Meta for approval."
+                },
             )
         } catch (error: MetaGraphException) {
             val publicMessage = error.publicMetaMessage()

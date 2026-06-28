@@ -151,40 +151,27 @@ class MetaGraphClient(
             put("name", template.name)
             put("category", template.category)
             put("language", template.languageCode)
-            put(
-                "components",
-                buildJsonArray {
-                    add(
-                        buildJsonObject {
-                            put("type", "BODY")
-                            put("text", template.bodyText)
-                            if (template.sampleParameters.isNotEmpty()) {
-                                put(
-                                    "example",
-                                    buildJsonObject {
-                                        put(
-                                            "body_text",
-                                            buildJsonArray {
-                                                add(
-                                                    buildJsonArray {
-                                                        template.sampleParameters.forEach { value ->
-                                                            add(JsonPrimitive(value))
-                                                        }
-                                                    },
-                                                )
-                                            },
-                                        )
-                                    },
-                                )
-                            }
-                        },
-                    )
-                },
-            )
+            put("components", template.toComponentsJson())
         }
         val response = graphPostJson("$whatsappBusinessAccountId/message_templates", accessToken, payload).parseJsonObject()
         return MetaGraphTemplateResult(
             id = response["id"]?.jsonPrimitive?.contentOrNull,
+            status = response["status"]?.jsonPrimitive?.contentOrNull,
+        )
+    }
+
+    fun updateWhatsAppTemplate(
+        accessToken: String,
+        templateId: String,
+        template: MetaGraphWhatsAppTemplateRequest,
+    ): MetaGraphTemplateResult {
+        val payload = buildJsonObject {
+            put("category", template.category)
+            put("components", template.toComponentsJson())
+        }
+        val response = graphPostJson(templateId, accessToken, payload).parseJsonObject()
+        return MetaGraphTemplateResult(
+            id = response["id"]?.jsonPrimitive?.contentOrNull ?: templateId,
             status = response["status"]?.jsonPrimitive?.contentOrNull,
         )
     }
@@ -246,6 +233,35 @@ class MetaGraphClient(
     private fun graphBaseUrl(): String =
         "https://graph.facebook.com/${config.metaGraphApiVersion}"
 }
+
+private fun MetaGraphWhatsAppTemplateRequest.toComponentsJson(): JsonArray =
+    buildJsonArray {
+        add(
+            buildJsonObject {
+                put("type", "BODY")
+                put("text", bodyText)
+                if (sampleParameters.isNotEmpty()) {
+                    put(
+                        "example",
+                        buildJsonObject {
+                            put(
+                                "body_text",
+                                buildJsonArray {
+                                    add(
+                                        buildJsonArray {
+                                            sampleParameters.forEach { value ->
+                                                add(JsonPrimitive(value))
+                                            }
+                                        },
+                                    )
+                                },
+                            )
+                        },
+                    )
+                }
+            },
+        )
+    }
 
 data class MetaAccessToken(
     val accessToken: String,

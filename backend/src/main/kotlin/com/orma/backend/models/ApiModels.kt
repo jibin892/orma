@@ -1096,6 +1096,7 @@ data class MetaWhatsAppCreatedTemplateListResponse(
 
 @Serializable
 data class MetaWhatsAppTemplateCreateRequest(
+    val templateId: String? = null,
     val name: String,
     val category: String = "UTILITY",
     val languageCode: String? = null,
