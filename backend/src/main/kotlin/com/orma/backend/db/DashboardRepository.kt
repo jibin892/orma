@@ -1974,6 +1974,20 @@ class DashboardRepository(
             component.stockQuantity.decimalOrZero() >= required
         }
 
+    private fun ProductVariantResponse.publicCatalogAvailabilityQuantity(): BigDecimal? {
+        if (components.isEmpty()) return null
+        val trackedComponents = components.filter {
+            it.status.cleanCatalogStatus() == "active" &&
+                it.itemType.cleanItemType() == "product" &&
+                it.trackStock
+        }
+        if (trackedComponents.isEmpty()) return BigDecimal("99")
+        return trackedComponents.minOf { component ->
+            val quantity = component.quantity.decimalOrZero().takeIf { it > BigDecimal.ZERO } ?: BigDecimal.ONE
+            component.stockQuantity.decimalOrZero().divide(quantity, 0, RoundingMode.DOWN)
+        }.coerceAtLeast(BigDecimal.ZERO)
+    }
+
     private fun Connection.publicOrderProduct(
         workspaceId: String,
         productId: String,
@@ -3911,9 +3925,26 @@ class DashboardRepository(
             publicOnly = true,
         )
         val variantsWithComponentsByProduct = variantsByProduct.mapValues { (_, variants) ->
-            variants.map { variant -> variant.copy(components = componentsByVariant[variant.id].orEmpty()) }
+            variants.map { variant ->
+                val withComponents = variant.copy(components = componentsByVariant[variant.id].orEmpty())
+                withComponents.publicCatalogAvailabilityQuantity()?.let { availableQuantity ->
+                    withComponents.copy(stockQuantity = availableQuantity.decimalString())
+                } ?: withComponents
+            }
         }
-        return products.map { product -> product.copy(variants = variantsWithComponentsByProduct[product.id].orEmpty()) }
+        return products.map { product ->
+            val variants = variantsWithComponentsByProduct[product.id].orEmpty()
+            product.copy(
+                inStock = product.inStock || variants.any { variant ->
+                    variant.status == "active" && when {
+                        variant.components.isNotEmpty() -> variant.components.packageComponentsAvailable(BigDecimal.ONE)
+                        product.itemType.cleanItemType() == "product" && product.trackStock -> variant.stockQuantity.decimalOrZero() > BigDecimal.ZERO
+                        else -> true
+                    }
+                },
+                variants = variants,
+            )
+        }
     }
 
     private fun Connection.loadProductVariantComponents(
