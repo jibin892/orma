@@ -13,10 +13,25 @@
     <link rel="preload" href="fonts/google_sans_semibold.woff2" as="font" type="font/woff2" crossorigin>
     <link rel="preload" href="fonts/google_sans_bold.woff2" as="font" type="font/woff2" crossorigin>
     <link type="text/css" rel="stylesheet" href="styles.css">
+    <script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
     <script>
         window.OneSignalDeferred = window.OneSignalDeferred || [];
+        window.OrmaOneSignalReady = window.OrmaOneSignalReady || new Promise((resolve, reject) => {
+            window.OneSignalDeferred.push(async function (OneSignal) {
+                try {
+                    await OneSignal.init({
+                        appId: "60d2a2a5-e140-46ba-abca-aa2216043e03",
+                        serviceWorkerParam: { scope: "/" },
+                        serviceWorkerPath: "OneSignalSDKWorker.js",
+                        notifyButton: { enable: false }
+                    });
+                    resolve(OneSignal);
+                } catch (error) {
+                    reject(error);
+                }
+            });
+        });
     </script>
-    <script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
 </head>
 <body>
     <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 50 50" role="presentation">
@@ -60,9 +75,7 @@
                 appId: "1:469264683998:web:dc157cbbee2f29fe35834f",
                 vapidKey: "BHXITGfTtTAaUdxe6chNZbtVAEeOqGHFfNb1y7WkCBmmao8oOpSOXF6Z4M7EVPk7azzCs2b9wWFW4tnrVHYHbtQ"
             };
-            const oneSignalAppId = "60d2a2a5-e140-46ba-abca-aa2216043e03";
             let authBundlePromise = null;
-            let oneSignalInitPromise = null;
 
             async function authBundle() {
                 if (!authBundlePromise) {
@@ -168,26 +181,14 @@
             }
 
             function oneSignalReady() {
-                if (!oneSignalInitPromise) {
-                    oneSignalInitPromise = new Promise((resolve, reject) => {
-                        const deferred = window.OneSignalDeferred = window.OneSignalDeferred || [];
-                        deferred.push(async function (OneSignal) {
-                            try {
-                                await OneSignal.init({
-                                    appId: oneSignalAppId,
-                                    serviceWorkerParam: { scope: "/" },
-                                    serviceWorkerPath: "OneSignalSDKWorker.js",
-                                    notifyButton: { enable: false }
-                                });
-                                registerOneSignalForegroundHandler(OneSignal);
-                                resolve(OneSignal);
-                            } catch (error) {
-                                reject(error);
-                            }
-                        });
-                    });
+                const ready = window.OrmaOneSignalReady;
+                if (!ready || typeof ready.then !== "function") {
+                    return Promise.reject(new Error("OneSignal web SDK did not initialize."));
                 }
-                return oneSignalInitPromise;
+                return ready.then((OneSignal) => {
+                    registerOneSignalForegroundHandler(OneSignal);
+                    return OneSignal;
+                });
             }
 
             function safeDesktopCallback(rawValue) {
