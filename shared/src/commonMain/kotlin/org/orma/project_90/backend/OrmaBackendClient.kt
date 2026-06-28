@@ -460,6 +460,20 @@ data class OrmaPublicCatalogOrderItemDraft(
     val quantity: String,
 )
 
+internal fun ormaClientRequestId(prefix: String): String {
+    val safePrefix = prefix
+        .lowercase()
+        .filter { it.isLetterOrDigit() || it == '-' || it == '_' }
+        .ifBlank { "request" }
+        .take(24)
+    val timestamp = ormaCurrentIsoDate()
+        .filter { it.isLetterOrDigit() }
+        .take(20)
+        .ifBlank { "now" }
+    val random = Random.nextLong(0, Long.MAX_VALUE).toString(36)
+    return "$safePrefix-$timestamp-$random"
+}
+
 data class OrmaPublicCatalogOrderReceipt(
     val message: String,
     val order: OrmaOrder,
@@ -1942,6 +1956,7 @@ class OrmaBackendClient(
                         "fulfillmentType" to JsonValue.StringValue(draft.fulfillmentType),
                         "scheduledAt" to JsonValue.StringValue(draft.scheduledAt.blankToNull()),
                         "paymentMode" to JsonValue.StringValue(draft.paymentMode),
+                        "clientRequestId" to JsonValue.StringValue(draft.clientRequestId.blankToNull()),
                         "items" to JsonValue.RawValue(itemsJson),
                     ),
                 )
@@ -2938,6 +2953,7 @@ private fun OrmaOrderDraft.toOrderRequestJson(): String {
         "notes" to JsonValue.StringValue(notes.blankToNull()),
         "fulfillmentType" to JsonValue.StringValue(fulfillmentType),
         "paymentMode" to JsonValue.StringValue(paymentMode),
+        "clientRequestId" to JsonValue.StringValue(clientRequestId.blankToNull()),
         "items" to JsonValue.RawValue(itemsJson),
         "sessions" to JsonValue.RawValue(sessionsJson),
     )

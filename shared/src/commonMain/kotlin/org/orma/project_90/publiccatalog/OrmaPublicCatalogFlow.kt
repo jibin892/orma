@@ -54,6 +54,7 @@ import org.orma.project_90.backend.OrmaPublicCatalogOrderReceipt
 import org.orma.project_90.backend.OrmaPublicCatalogProduct
 import org.orma.project_90.backend.OrmaProductVariant
 import org.orma.project_90.backend.createOrmaBackendClient
+import org.orma.project_90.backend.ormaClientRequestId
 import org.orma.project_90.designsystem.OrmaAdaptiveSurface
 import org.orma.project_90.designsystem.OrmaBadge
 import org.orma.project_90.designsystem.OrmaBrandMark
@@ -97,6 +98,7 @@ fun OrmaPublicCatalogFlow(
     var fulfillmentType by remember(workspaceId) { mutableStateOf("take_away") }
     var scheduledAt by remember(workspaceId) { mutableStateOf("") }
     var paymentMode by remember(workspaceId) { mutableStateOf("pay_on_spot") }
+    var checkoutRequestId by remember(workspaceId) { mutableStateOf(ormaClientRequestId("catalog")) }
 
     fun updateQuantity(cartKey: String, quantity: Int) {
         val productId = cartKey.publicCatalogCartProductId()
@@ -201,6 +203,7 @@ fun OrmaPublicCatalogFlow(
                 submitting = true
                 error = null
                 val draft = OrmaPublicCatalogOrderDraft(
+                    clientRequestId = checkoutRequestId,
                     customerName = customerName.trim(),
                     phoneNumber = phoneNumber.trim(),
                     notes = notes.trim(),
@@ -253,11 +256,13 @@ fun OrmaPublicCatalogFlow(
                 onQuantityChange = ::updateQuantity,
                 onClearSelection = {
                     quantities = emptyMap()
+                    checkoutRequestId = ormaClientRequestId("catalog")
                     error = null
                 },
                 onNewOrder = {
                     receipt = null
                     quantities = emptyMap()
+                    checkoutRequestId = ormaClientRequestId("catalog")
                     notes = ""
                     scheduledAt = ""
                     error = null
@@ -300,11 +305,13 @@ fun OrmaPublicCatalogFlow(
                 onQuantityChange = ::updateQuantity,
                 onClearSelection = {
                     quantities = emptyMap()
+                    checkoutRequestId = ormaClientRequestId("catalog")
                     error = null
                 },
                 onNewOrder = {
                     receipt = null
                     quantities = emptyMap()
+                    checkoutRequestId = ormaClientRequestId("catalog")
                     notes = ""
                     scheduledAt = ""
                     error = null
