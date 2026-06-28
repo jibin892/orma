@@ -42,6 +42,8 @@ import com.orma.backend.models.ProductRequest
 import com.orma.backend.models.ProductResponse
 import com.orma.backend.models.ProductVariantAddonRequest
 import com.orma.backend.models.ProductVariantAddonResponse
+import com.orma.backend.models.ProductVariantComponentRequest
+import com.orma.backend.models.ProductVariantComponentResponse
 import com.orma.backend.models.ProductVariantResponse
 import com.orma.backend.models.StockAdjustmentRequest
 import com.orma.backend.models.StockMovementResponse
@@ -3669,13 +3671,14 @@ class DashboardRepository(
                 }
                 val includedQuantity = variant.includedQuantity.coerceAtLeast(1).coerceAtMost(999)
                 val addonsJson = variant.addons.cleanVariantAddons().let(DashboardRepositoryJson::encodeToString)
-                prepareStatement(
+                val variantId = prepareStatement(
                     """
                     insert into product_variants (
                         workspace_id, product_id, name, sku, barcode, selling_price, cost_price,
                         stock_quantity, duration_minutes, included_quantity, addons_json, sort_order, status, updated_at
                     )
                     values (?::uuid, ?::uuid, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, now())
+                    returning id::text
                     """.trimIndent(),
                 ).use { statement ->
                     statement.setString(1, access.workspaceId)
@@ -3695,9 +3698,113 @@ class DashboardRepository(
                     statement.setString(11, addonsJson)
                     statement.setInt(12, index)
                     statement.setString(13, variant.status.cleanCatalogStatus())
+                    statement.executeQuery().use { result ->
+                        result.next()
+                        result.getString("id")
+                    }
+                }
+                insertProductVariantComponents(
+                    access = access,
+                    packageVariantId = variantId,
+                    parentItemType = request.itemType.cleanItemType(),
+                    components = variant.components,
+                )
+            }
+    }
+
+    private fun Connection.insertProductVariantComponents(
+        access: DashboardWorkspaceAccess,
+        packageVariantId: String,
+        parentItemType: String,
+        components: List<ProductVariantComponentRequest>,
+    ) {
+        components
+            .take(40)
+            .mapNotNull { component ->
+                val productId = component.productId.cleanUuidOrNull() ?: return@mapNotNull null
+                val variantId = component.variantId.cleanUuidOrNull()
+                val quantity = component.quantity.decimalOrZero()
+                    .takeIf { it > BigDecimal.ZERO }
+                    ?.coerceAtMost(BigDecimal("999"))
+                    ?: BigDecimal.ONE
+                val resolved = resolvePackageComponent(
+                    workspaceId = access.workspaceId,
+                    productId = productId,
+                    variantId = variantId,
+                    expectedItemType = parentItemType,
+                ) ?: return@mapNotNull null
+                resolved.copy(quantity = quantity, status = component.status.cleanCatalogStatus())
+            }
+            .forEachIndexed { index, component ->
+                prepareStatement(
+                    """
+                    insert into product_variant_components (
+                        workspace_id, package_variant_id, component_product_id, component_variant_id,
+                        quantity, sort_order, status, updated_at
+                    )
+                    values (?::uuid, ?::uuid, ?::uuid, ?::uuid, ?, ?, ?, now())
+                    """.trimIndent(),
+                ).use { statement ->
+                    statement.setString(1, access.workspaceId)
+                    statement.setString(2, packageVariantId)
+                    statement.setString(3, component.productId)
+                    statement.setNullableUuid(4, component.variantId)
+                    statement.setBigDecimal(5, component.quantity.scaled())
+                    statement.setInt(6, index)
+                    statement.setString(7, component.status)
                     statement.executeUpdate()
                 }
             }
+    }
+
+    private fun Connection.resolvePackageComponent(
+        workspaceId: String,
+        productId: String,
+        variantId: String?,
+        expectedItemType: String,
+    ): ResolvedPackageComponent? {
+        val sql = if (variantId == null) {
+            """
+            select p.id::text as product_id, null::text as variant_id
+            from products p
+            where p.workspace_id = ?::uuid
+                and p.id = ?::uuid
+                and p.item_type = ?
+                and p.status = 'active'
+            limit 1
+            """.trimIndent()
+        } else {
+            """
+            select p.id::text as product_id, pv.id::text as variant_id
+            from products p
+            join product_variants pv on pv.product_id = p.id and pv.workspace_id = p.workspace_id
+            where p.workspace_id = ?::uuid
+                and p.id = ?::uuid
+                and p.item_type = ?
+                and p.status = 'active'
+                and pv.id = ?::uuid
+                and pv.status = 'active'
+            limit 1
+            """.trimIndent()
+        }
+        return prepareStatement(sql).use { statement ->
+            statement.setString(1, workspaceId)
+            statement.setString(2, productId)
+            statement.setString(3, expectedItemType)
+            if (variantId != null) statement.setString(4, variantId)
+            statement.executeQuery().use { result ->
+                if (!result.next()) {
+                    null
+                } else {
+                    ResolvedPackageComponent(
+                        productId = result.getString("product_id"),
+                        variantId = result.getString("variant_id"),
+                        quantity = BigDecimal.ONE,
+                        status = "active",
+                    )
+                }
+            }
+        }
     }
 
     private fun Connection.attachProductVariants(products: List<ProductResponse>): List<ProductResponse> {
@@ -3735,7 +3842,14 @@ class DashboardRepository(
                 }
             }
         }
-        return products.map { product -> product.copy(variants = variantsByProduct[product.id].orEmpty()) }
+        val componentsByVariant = loadProductVariantComponents(
+            variantIds = variantsByProduct.values.flatten().map { it.id },
+            publicOnly = false,
+        )
+        val variantsWithComponentsByProduct = variantsByProduct.mapValues { (_, variants) ->
+            variants.map { variant -> variant.copy(components = componentsByVariant[variant.id].orEmpty()) }
+        }
+        return products.map { product -> product.copy(variants = variantsWithComponentsByProduct[product.id].orEmpty()) }
     }
 
     private fun Connection.attachPublicCatalogVariants(
@@ -3775,7 +3889,84 @@ class DashboardRepository(
                 }
             }
         }
-        return products.map { product -> product.copy(variants = variantsByProduct[product.id].orEmpty()) }
+        val componentsByVariant = loadProductVariantComponents(
+            variantIds = variantsByProduct.values.flatten().map { it.id },
+            publicOnly = true,
+        )
+        val variantsWithComponentsByProduct = variantsByProduct.mapValues { (_, variants) ->
+            variants.map { variant -> variant.copy(components = componentsByVariant[variant.id].orEmpty()) }
+        }
+        return products.map { product -> product.copy(variants = variantsWithComponentsByProduct[product.id].orEmpty()) }
+    }
+
+    private fun Connection.loadProductVariantComponents(
+        variantIds: List<String>,
+        publicOnly: Boolean,
+    ): Map<String, List<ProductVariantComponentResponse>> {
+        if (variantIds.isEmpty()) return emptyMap()
+        val cleanVariantIds = variantIds.distinct()
+        val placeholders = cleanVariantIds.joinToString(", ") { "?::uuid" }
+        val statusClause = if (publicOnly) {
+            "pvc.status = 'active' and p.status = 'active' and (pv.id is null or pv.status = 'active')"
+        } else {
+            "pvc.status <> 'archived' and p.status <> 'archived' and (pv.id is null or pv.status <> 'archived')"
+        }
+        val componentsByVariant = mutableMapOf<String, MutableList<ProductVariantComponentResponse>>()
+        prepareStatement(
+            """
+            select
+                pvc.package_variant_id::text,
+                pvc.component_product_id::text,
+                p.name as product_name,
+                p.item_type,
+                p.unit,
+                p.selling_price as product_selling_price,
+                p.duration_minutes as product_duration_minutes,
+                pvc.component_variant_id::text,
+                pv.name as variant_name,
+                pv.selling_price as variant_selling_price,
+                pv.duration_minutes as variant_duration_minutes,
+                pvc.quantity,
+                pvc.status
+            from product_variant_components pvc
+            join products p on p.id = pvc.component_product_id and p.workspace_id = pvc.workspace_id
+            left join product_variants pv on pv.id = pvc.component_variant_id and pv.workspace_id = pvc.workspace_id
+            where pvc.package_variant_id in ($placeholders)
+                and $statusClause
+            order by pvc.package_variant_id, pvc.sort_order asc, p.name asc
+            """.trimIndent(),
+        ).use { statement ->
+            cleanVariantIds.forEachIndexed { index, variantId ->
+                statement.setString(index + 1, variantId)
+            }
+            statement.executeQuery().use { result ->
+                while (result.next()) {
+                    val packageVariantId = result.getString("package_variant_id")
+                    val variantPrice = result.getBigDecimal("variant_selling_price")
+                    val sellingPrice = if (result.wasNull()) {
+                        result.getBigDecimal("product_selling_price")
+                    } else {
+                        variantPrice
+                    }
+                    componentsByVariant.getOrPut(packageVariantId) { mutableListOf() }.add(
+                        ProductVariantComponentResponse(
+                            productId = result.getString("component_product_id"),
+                            productName = result.getString("product_name"),
+                            itemType = result.getString("item_type").cleanItemType(),
+                            variantId = result.getString("component_variant_id"),
+                            variantName = result.getString("variant_name"),
+                            quantity = result.getBigDecimal("quantity").decimalString(),
+                            unit = result.getString("unit") ?: "pcs",
+                            sellingPrice = sellingPrice.moneyString(),
+                            durationMinutes = result.getNullableInt("variant_duration_minutes")
+                                ?: result.getNullableInt("product_duration_minutes"),
+                            status = result.getString("status").cleanCatalogStatus(),
+                        ),
+                    )
+                }
+            }
+        }
+        return componentsByVariant
     }
 
     private fun Connection.adjustProductStock(
@@ -4464,15 +4655,12 @@ class DashboardRepository(
 
         if (inventoryWasApplied) {
             oldItems.forEach { item ->
-                item.productId?.let { productId ->
-                    applyOrderInventoryMovement(
-                        access = access,
-                        productId = productId,
-                        variantId = item.variantId,
-                        quantityDelta = item.quantity.decimalOrZero(),
-                        note = "Order $orderNumber edited",
-                    )
-                }
+                applyOrderInventoryMovement(
+                    access = access,
+                    item = item,
+                    quantityDelta = item.quantity.decimalOrZero(),
+                    note = "Order $orderNumber edited",
+                )
             }
         }
 
@@ -4605,15 +4793,12 @@ class DashboardRepository(
         }
         if (shouldApplyInventory) {
             listOrderItems(orderId).forEach { item ->
-                item.productId?.let { productId ->
-                    applyOrderInventoryMovement(
-                        access = access,
-                        productId = productId,
-                        variantId = item.variantId,
-                        quantityDelta = item.quantity.decimalOrZero().negate(),
-                        note = "Order status: $status",
-                    )
-                }
+                applyOrderInventoryMovement(
+                    access = access,
+                    item = item,
+                    quantityDelta = item.quantity.decimalOrZero().negate(),
+                    note = "Order status: $status",
+                )
             }
         }
         return getOrder(access.workspaceId, orderId, includeItems = true)
@@ -4779,6 +4964,10 @@ class DashboardRepository(
         quantityDelta: BigDecimal,
         note: String,
     ) {
+        if (item.components.isNotEmpty()) {
+            applyPackageComponentInventoryMovement(access, item.components, quantityDelta, note)
+            return
+        }
         val productId = item.productId ?: return
         applyOrderInventoryMovement(
             access = access,
@@ -4787,6 +4976,46 @@ class DashboardRepository(
             quantityDelta = quantityDelta,
             note = note,
         )
+    }
+
+    private fun Connection.applyOrderInventoryMovement(
+        access: DashboardWorkspaceAccess,
+        item: OrderItemResponse,
+        quantityDelta: BigDecimal,
+        note: String,
+    ) {
+        val components = item.variantId
+            ?.let { loadCatalogPackageComponents(access.workspaceId, listOf(it))[it] }
+            .orEmpty()
+        if (components.isNotEmpty()) {
+            applyPackageComponentInventoryMovement(access, components, quantityDelta, note)
+            return
+        }
+        val productId = item.productId ?: return
+        applyOrderInventoryMovement(
+            access = access,
+            productId = productId,
+            variantId = item.variantId,
+            quantityDelta = quantityDelta,
+            note = note,
+        )
+    }
+
+    private fun Connection.applyPackageComponentInventoryMovement(
+        access: DashboardWorkspaceAccess,
+        components: List<PreparedPackageComponent>,
+        quantityDelta: BigDecimal,
+        note: String,
+    ) {
+        components
+            .filter { it.itemType == "product" && it.trackStock }
+            .forEach { component ->
+                val componentQuantityDelta = quantityDelta.multiply(component.quantity).scaled()
+                applyOrderStockMovement(access, component.productId, componentQuantityDelta, note)
+                component.variantId?.let { componentVariantId ->
+                    applyVariantStockMovement(access, componentVariantId, componentQuantityDelta)
+                }
+            }
     }
 
     private fun Connection.applyOrderInventoryMovement(
@@ -5446,6 +5675,7 @@ class DashboardRepository(
         if (variantIds.isNotEmpty()) {
             val variantPlaceholders = variantIds.joinToString(", ") { "?::uuid" }
             val variants = mutableMapOf<String, CatalogVariant>()
+            val componentsByVariant = loadCatalogPackageComponents(workspaceId, variantIds)
             prepareStatement(
                 """
                 select id::text, product_id::text, name, included_quantity
@@ -5463,6 +5693,7 @@ class DashboardRepository(
                             productId = result.getString("product_id"),
                             name = result.getString("name"),
                             includedQuantity = result.getInt("included_quantity").coerceAtLeast(1),
+                            components = componentsByVariant[result.getString("id")].orEmpty(),
                         )
                     }
                 }
@@ -5478,6 +5709,7 @@ class DashboardRepository(
                 }
                 item.variantName = variant.name
                 item.includedQuantity = variant.includedQuantity
+                item.components = variant.components
             }
         }
         val wrongType = products.values.firstOrNull { (itemType, _) -> itemType != expectedItemType } ?: return
@@ -5485,6 +5717,64 @@ class DashboardRepository(
             code = "order_item_type_mismatch",
             publicMessage = orderType.orderCatalogMismatchMessage(wrongType.second),
         )
+    }
+
+    private fun Connection.loadCatalogPackageComponents(
+        workspaceId: String,
+        variantIds: List<String>,
+    ): Map<String, List<PreparedPackageComponent>> {
+        if (variantIds.isEmpty()) return emptyMap()
+        val cleanVariantIds = variantIds.distinct()
+        val placeholders = cleanVariantIds.joinToString(", ") { "?::uuid" }
+        val componentsByVariant = mutableMapOf<String, MutableList<PreparedPackageComponent>>()
+        prepareStatement(
+            """
+            select
+                pvc.package_variant_id::text,
+                pvc.component_product_id::text,
+                p.name as product_name,
+                p.item_type,
+                p.unit,
+                p.track_stock,
+                pvc.component_variant_id::text,
+                pv.name as variant_name,
+                pvc.quantity
+            from product_variant_components pvc
+            join products p on p.id = pvc.component_product_id and p.workspace_id = pvc.workspace_id
+            left join product_variants pv on pv.id = pvc.component_variant_id and pv.workspace_id = pvc.workspace_id
+            where pvc.workspace_id = ?::uuid
+                and pvc.package_variant_id in ($placeholders)
+                and pvc.status = 'active'
+                and p.status = 'active'
+                and (pv.id is null or pv.status = 'active')
+            order by pvc.package_variant_id, pvc.sort_order asc, p.name asc
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setString(1, workspaceId)
+            cleanVariantIds.forEachIndexed { index, variantId ->
+                statement.setString(index + 2, variantId)
+            }
+            statement.executeQuery().use { result ->
+                while (result.next()) {
+                    val packageVariantId = result.getString("package_variant_id")
+                    componentsByVariant.getOrPut(packageVariantId) { mutableListOf() }.add(
+                        PreparedPackageComponent(
+                            productId = result.getString("component_product_id"),
+                            productName = result.getString("product_name"),
+                            itemType = result.getString("item_type").cleanItemType(),
+                            unit = result.getString("unit") ?: "pcs",
+                            trackStock = result.getBoolean("track_stock"),
+                            variantId = result.getString("component_variant_id"),
+                            variantName = result.getString("variant_name"),
+                            quantity = result.getBigDecimal("quantity")
+                                .takeIf { it > BigDecimal.ZERO }
+                                ?: BigDecimal.ONE,
+                        ),
+                    )
+                }
+            }
+        }
+        return componentsByVariant
     }
 
     private fun OrderSessionRequest.toPreparedOrderSession(
@@ -5515,11 +5805,49 @@ class DashboardRepository(
         var sequence = 1
         return buildList {
             this@generatedOrderSessions.forEach { inserted ->
+                val componentSessions = inserted.item.components
+                    .filter { it.itemType in setOf("appointment", "service") }
+                if (componentSessions.isNotEmpty()) {
+                    componentSessions.forEach { component ->
+                        val sessionCount = component.packageComponentSessionCount(inserted.item.quantity).coerceAtLeast(1)
+                        val lineTitle = buildList {
+                            add(component.productName)
+                            component.variantName?.cleanOptional()?.let(::add)
+                        }.joinToString(" - ").ifBlank {
+                            inserted.item.variantName?.cleanOptional()
+                                ?: inserted.item.description.cleanOptional()
+                                ?: orderType.dashboardLabel()
+                        }
+                        repeat(sessionCount) { index ->
+                            val scheduledAt = fallbackScheduledAt?.cleanOptional()?.takeIf { sequence == 1 }
+                            val title = if (sessionCount == 1) {
+                                lineTitle
+                            } else {
+                                "$lineTitle session ${index + 1} of $sessionCount"
+                            }.take(120)
+                            add(
+                                PreparedOrderSession(
+                                    orderItemId = inserted.orderItemId,
+                                    sequenceNumber = sequence,
+                                    title = title,
+                                    scheduledAt = scheduledAt,
+                                    status = if (scheduledAt == null) "pending_schedule" else "scheduled",
+                                    addonTotal = BigDecimal.ZERO,
+                                    paidTotal = BigDecimal.ZERO,
+                                    notes = "Included in ${inserted.item.variantName ?: inserted.item.description}",
+                                ),
+                            )
+                            sequence += 1
+                        }
+                    }
+                    return@forEach
+                }
                 val sessionCount = inserted.item.packageSessionCount().coerceAtLeast(1)
                 val lineTitle = inserted.item.variantName?.cleanOptional()
                     ?: inserted.item.description.cleanOptional()
                     ?: orderType.dashboardLabel()
                 repeat(sessionCount) { index ->
+                    val scheduledAt = fallbackScheduledAt?.cleanOptional()?.takeIf { sequence == 1 }
                     val title = if (sessionCount == 1) {
                         lineTitle
                     } else {
@@ -5530,8 +5858,8 @@ class DashboardRepository(
                             orderItemId = inserted.orderItemId,
                             sequenceNumber = sequence,
                             title = title,
-                            scheduledAt = fallbackScheduledAt?.cleanOptional()?.takeIf { sequence == 1 },
-                            status = "scheduled",
+                            scheduledAt = scheduledAt,
+                            status = if (scheduledAt == null) "pending_schedule" else "scheduled",
                             addonTotal = BigDecimal.ZERO,
                             paidTotal = BigDecimal.ZERO,
                             notes = if (inserted.item.includedQuantity > 1) {
@@ -5546,6 +5874,12 @@ class DashboardRepository(
             }
         }
     }
+
+    private fun PreparedPackageComponent.packageComponentSessionCount(lineQuantity: BigDecimal): Int =
+        quantity.multiply(lineQuantity)
+            .setScale(0, RoundingMode.HALF_UP)
+            .toInt()
+            .coerceAtLeast(1)
 
     private fun PreparedOrderItem.packageSessionCount(): Int {
         val lineQuantity = runCatching {
@@ -6518,6 +6852,7 @@ class DashboardRepository(
         val variantId: String?,
         var variantName: String?,
         var includedQuantity: Int = 1,
+        var components: List<PreparedPackageComponent> = emptyList(),
         val description: String,
         val quantity: BigDecimal,
         val unitPrice: BigDecimal,
@@ -6543,10 +6878,29 @@ class DashboardRepository(
         val notes: String?,
     )
 
+    private data class ResolvedPackageComponent(
+        val productId: String,
+        val variantId: String?,
+        val quantity: BigDecimal,
+        val status: String,
+    )
+
+    private data class PreparedPackageComponent(
+        val productId: String,
+        val productName: String,
+        val itemType: String,
+        val unit: String,
+        val trackStock: Boolean,
+        val variantId: String?,
+        val variantName: String?,
+        val quantity: BigDecimal,
+    )
+
     private data class CatalogVariant(
         val productId: String,
         val name: String,
         val includedQuantity: Int,
+        val components: List<PreparedPackageComponent>,
     )
 
     private data class CurrentOrderStatus(
@@ -6568,7 +6922,7 @@ class DashboardRepository(
         val FullPaymentStatuses = setOf("paid", "completed")
         val AllowedItemTypes = setOf("product", "service", "appointment")
         val AllowedOrderTypes = setOf("sale", "service", "appointment")
-        val AllowedOrderSessionStatuses = setOf("scheduled", "in_progress", "completed", "cancelled", "no_show")
+        val AllowedOrderSessionStatuses = setOf("pending_schedule", "scheduled", "in_progress", "completed", "cancelled", "no_show")
         val AllowedCatalogStatusInputs = setOf(
             "active",
             "inactive",

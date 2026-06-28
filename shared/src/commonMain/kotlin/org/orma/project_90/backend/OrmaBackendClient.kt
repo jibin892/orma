@@ -290,6 +290,7 @@ data class OrmaProductVariant(
     val durationMinutes: Int? = null,
     val includedQuantity: Int = 1,
     val addons: List<OrmaProductVariantAddon> = emptyList(),
+    val components: List<OrmaProductVariantComponent> = emptyList(),
     val status: String = "active",
 )
 
@@ -297,6 +298,19 @@ data class OrmaProductVariantAddon(
     val name: String = "",
     val sellingPrice: String = "0.00",
     val costPrice: String = "0.00",
+    val durationMinutes: Int? = null,
+    val status: String = "active",
+)
+
+data class OrmaProductVariantComponent(
+    val productId: String = "",
+    val productName: String = "",
+    val itemType: String = "product",
+    val variantId: String? = null,
+    val variantName: String? = null,
+    val quantity: String = "1",
+    val unit: String = "pcs",
+    val sellingPrice: String = "0.00",
     val durationMinutes: Int? = null,
     val status: String = "active",
 )
@@ -312,6 +326,7 @@ data class OrmaProductVariantDraft(
     val durationMinutes: String = "",
     val includedQuantity: String = "",
     val addons: List<OrmaProductVariantAddonDraft> = emptyList(),
+    val components: List<OrmaProductVariantComponentDraft> = emptyList(),
     val status: String = "active",
 )
 
@@ -320,6 +335,13 @@ data class OrmaProductVariantAddonDraft(
     val sellingPrice: String = "",
     val costPrice: String = "",
     val durationMinutes: String = "",
+    val status: String = "active",
+)
+
+data class OrmaProductVariantComponentDraft(
+    val productId: String = "",
+    val variantId: String = "",
+    val quantity: String = "",
     val status: String = "active",
 )
 
@@ -622,6 +644,7 @@ data class OrmaSupplierDraft(
 )
 
 data class OrmaProductDraft(
+    val clientRequestId: String = ormaClientRequestId("catalog-item"),
     val name: String = "",
     val itemType: String = "product",
     val categoryId: String = "",
@@ -2441,6 +2464,7 @@ private fun String.toProductVariant(): OrmaProductVariant =
         durationMinutes = jsonInt("durationMinutes"),
         includedQuantity = (jsonInt("includedQuantity") ?: 1).coerceAtLeast(1),
         addons = jsonObjectsInArray("addons").map { it.toProductVariantAddon() },
+        components = jsonObjectsInArray("components").map { it.toProductVariantComponent() },
         status = jsonString("status") ?: "active",
     )
 
@@ -2449,6 +2473,20 @@ private fun String.toProductVariantAddon(): OrmaProductVariantAddon =
         name = jsonString("name").orEmpty(),
         sellingPrice = jsonDecimalString("sellingPrice") ?: "0.00",
         costPrice = jsonDecimalString("costPrice") ?: "0.00",
+        durationMinutes = jsonInt("durationMinutes"),
+        status = jsonString("status") ?: "active",
+    )
+
+private fun String.toProductVariantComponent(): OrmaProductVariantComponent =
+    OrmaProductVariantComponent(
+        productId = jsonString("productId").orEmpty(),
+        productName = jsonString("productName").orEmpty(),
+        itemType = jsonString("itemType") ?: "product",
+        variantId = jsonString("variantId"),
+        variantName = jsonString("variantName"),
+        quantity = jsonDecimalString("quantity") ?: "1",
+        unit = jsonString("unit") ?: "pcs",
+        sellingPrice = jsonDecimalString("sellingPrice") ?: "0.00",
         durationMinutes = jsonInt("durationMinutes"),
         status = jsonString("status") ?: "active",
     )
@@ -2851,6 +2889,16 @@ private fun OrmaProductDraft.toProductRequestJson(): String {
                         "status" to JsonValue.StringValue(addon.status.ifBlank { "active" }),
                     )
                 }
+            val componentsJson = variant.components
+                .filter { it.productId.isNotBlank() }
+                .joinToString(prefix = "[", postfix = "]") { component ->
+                    buildJsonObject(
+                        "productId" to JsonValue.StringValue(component.productId.blankToNull()),
+                        "variantId" to JsonValue.StringValue(component.variantId.blankToNull()),
+                        "quantity" to JsonValue.StringValue(component.quantity.blankToZero(default = "1")),
+                        "status" to JsonValue.StringValue(component.status.ifBlank { "active" }),
+                    )
+                }
             buildJsonObject(
                 "id" to JsonValue.StringValue(variant.id.blankToNull()),
                 "name" to JsonValue.StringValue(variant.name),
@@ -2862,10 +2910,12 @@ private fun OrmaProductDraft.toProductRequestJson(): String {
                 "durationMinutes" to JsonValue.IntValue(variant.durationMinutes.intValueOrNull()),
                 "includedQuantity" to JsonValue.IntValue(variant.includedQuantity.intValueOrNull() ?: 1),
                 "addons" to JsonValue.RawValue(addonsJson),
+                "components" to JsonValue.RawValue(componentsJson),
                 "status" to JsonValue.StringValue(variant.status.ifBlank { "active" }),
             )
         }
     return buildJsonObject(
+        "clientRequestId" to JsonValue.StringValue(clientRequestId.blankToNull()),
         "name" to JsonValue.StringValue(name),
         "itemType" to JsonValue.StringValue(itemType),
         "categoryId" to JsonValue.StringValue(categoryId.blankToNull()),

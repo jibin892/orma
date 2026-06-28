@@ -533,6 +533,7 @@ data class ProductVariantRequest(
     val durationMinutes: Int? = null,
     val includedQuantity: Int = 1,
     val addons: List<ProductVariantAddonRequest> = emptyList(),
+    val components: List<ProductVariantComponentRequest> = emptyList(),
     val status: String = "active",
 )
 
@@ -542,6 +543,14 @@ data class ProductVariantAddonRequest(
     val sellingPrice: String? = null,
     val costPrice: String? = null,
     val durationMinutes: Int? = null,
+    val status: String = "active",
+)
+
+@Serializable
+data class ProductVariantComponentRequest(
+    val productId: String,
+    val variantId: String? = null,
+    val quantity: String = "1",
     val status: String = "active",
 )
 
@@ -558,6 +567,7 @@ data class ProductVariantResponse(
     val durationMinutes: Int? = null,
     val includedQuantity: Int = 1,
     val addons: List<ProductVariantAddonResponse> = emptyList(),
+    val components: List<ProductVariantComponentResponse> = emptyList(),
     val status: String,
 )
 
@@ -566,6 +576,20 @@ data class ProductVariantAddonResponse(
     val name: String,
     val sellingPrice: String = "0.00",
     val costPrice: String = "0.00",
+    val durationMinutes: Int? = null,
+    val status: String = "active",
+)
+
+@Serializable
+data class ProductVariantComponentResponse(
+    val productId: String,
+    val productName: String,
+    val itemType: String = "product",
+    val variantId: String? = null,
+    val variantName: String? = null,
+    val quantity: String = "1",
+    val unit: String = "pcs",
+    val sellingPrice: String = "0.00",
     val durationMinutes: Int? = null,
     val status: String = "active",
 )
