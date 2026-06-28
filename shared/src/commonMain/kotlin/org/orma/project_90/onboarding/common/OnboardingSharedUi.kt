@@ -18535,8 +18535,8 @@ private fun DashboardPackageKpiStrip(
     val activePackages = packageRecords.count { it.variant.status.normalizedCatalogAvailabilityStatus() == "active" }
     val productPacks = packageRecords.count { it.product.itemType == "product" }
     val sessionPackages = packageRecords.count { it.product.itemType != "product" }
-    val withAddons = packageRecords.count { record ->
-        record.variant.addons.any { it.status.normalizedCatalogAvailabilityStatus() == "active" }
+    val withComponents = packageRecords.count { record ->
+        record.variant.components.any { it.status.normalizedCatalogAvailabilityStatus() == "active" }
     }
     DashboardFocusMetricStrip(
         metrics = listOf(
@@ -18565,10 +18565,10 @@ private fun DashboardPackageKpiStrip(
                 tone = OrmaStatusTone.Info,
             ),
             DashboardFocusMetric(
-                label = "Add-ons",
-                value = withAddons.toString(),
+                label = "Built from",
+                value = withComponents.toString(),
                 detail = "${products.size} parent items",
-                tone = if (withAddons > 0) OrmaStatusTone.Warning else OrmaStatusTone.Info,
+                tone = if (withComponents > 0) OrmaStatusTone.Warning else OrmaStatusTone.Info,
             ),
         ),
     )
@@ -18598,7 +18598,7 @@ private fun DashboardPackageRecordsSurface(
         ) {
             DashboardRecordsSurfaceHeader(
                 title = "Package records",
-                body = "Manage product packs, service levels, appointment sessions, prices, and add-ons.",
+                body = "Manage product packs, service levels, appointment sessions, included items, and prices.",
                 badgeText = if (state.dashboard.loading) "SYNC" else "${packageRecords.size} SHOWN",
             )
             if (packageRecords.isEmpty()) {
@@ -18834,7 +18834,7 @@ private fun DashboardWidePackageRow(
             )
             DashboardWideCell(
                 primary = dashboardMoney(record.packageSellingPrice(), record.product.currency),
-                secondary = record.packageAddonLine(),
+                secondary = record.packageComponentLine(),
                 modifier = Modifier.weight(0.82f),
             )
             Box(
@@ -18901,7 +18901,7 @@ private fun DashboardPackageRow(
                 "Included" to record.variant.packageIncludedLabel(record.product.itemType, record.product.unit),
                 "Price" to dashboardMoney(record.packageSellingPrice(), record.product.currency),
                 "Stock / time" to record.packageTimingOrStockLine().orEmpty().ifBlank { "Not set" },
-                "Add-ons" to record.packageAddonLine().orEmpty().ifBlank { "None" },
+                "Included items" to record.packageComponentLine().orEmpty().ifBlank { "Base option only" },
             ),
         )
         OrmaSecondaryButton(
@@ -28119,6 +28119,182 @@ private fun ProductOptionsEditor(
     }
 }
 
+@Composable
+private fun PackageComponentsEditor(
+    itemType: String,
+    unit: String,
+    components: List<OrmaProductVariantComponentDraft>,
+    componentCandidates: List<OrmaProduct>,
+    onComponentsChange: (List<OrmaProductVariantComponentDraft>) -> Unit,
+) {
+    val normalizedItemType = itemType.normalizedSellableItemType()
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = when (normalizedItemType) {
+                "appointment" -> "Included appointment sessions"
+                "service" -> "Included service sessions"
+                else -> "Included combo items"
+            },
+            style = MaterialTheme.typography.labelLarge,
+            color = OrmaColors.TextPrimary,
+        )
+        if (componentCandidates.isEmpty()) {
+            DashboardChecklistRow(
+                text = when (normalizedItemType) {
+                    "appointment" -> "Add appointment catalog items first, then include them in this package."
+                    "service" -> "Add service catalog items first, then include them in this package."
+                    else -> "Add products or product variants first, then include them in this combo."
+                },
+            )
+        } else if (components.isEmpty()) {
+            DashboardChecklistRow(
+                text = when (normalizedItemType) {
+                    "appointment" -> "Optional. Add existing appointments to create a multi-session booking package."
+                    "service" -> "Optional. Add existing services to create a service combo or recurring package."
+                    else -> "Optional. Add existing products or variants to create a combo package."
+                },
+            )
+        }
+        components.forEachIndexed { componentIndex, component ->
+            val selectedProduct = componentCandidates.firstOrNull { it.id == component.productId }
+            val variantOptions = selectedProduct?.variants
+                ?.filter { it.status.normalizedCatalogAvailabilityStatus() == "active" }
+                .orEmpty()
+            val selectedVariant = variantOptions.firstOrNull { it.id == component.variantId }
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = OrmaShapes.StandardCell,
+                color = Color.White,
+                contentColor = OrmaColors.TextPrimary,
+                border = BorderStroke(0.6.dp, OrmaColors.Hairline),
+                tonalElevation = 0.dp,
+                shadowElevation = 0.dp,
+            ) {
+                Column(
+                    modifier = Modifier.padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "Included ${componentIndex + 1}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = OrmaColors.TextSecondary,
+                        )
+                        OrmaTextButton(
+                            text = "Remove",
+                            onClick = {
+                                onComponentsChange(components.filterIndexed { index, _ -> index != componentIndex })
+                            },
+                        )
+                    }
+                    DashboardDropdownPicker(
+                        label = when (normalizedItemType) {
+                            "appointment" -> "Appointment"
+                            "service" -> "Service"
+                            else -> "Product"
+                        },
+                        selected = selectedProduct,
+                        placeholder = "Choose saved ${normalizedItemType.sellableItemTypeLabel().lowercase()}",
+                        options = componentCandidates,
+                        optionLabel = { product ->
+                            buildString {
+                                append(product.name)
+                                product.categoryName?.takeIf { it.isNotBlank() }?.let {
+                                    append(" · ")
+                                    append(it)
+                                }
+                            }
+                        },
+                        onSelected = { product ->
+                            onComponentsChange(components.mapIndexed { index, old ->
+                                if (index == componentIndex) {
+                                    old.copy(productId = product.id, variantId = "")
+                                } else {
+                                    old
+                                }
+                            })
+                        },
+                    )
+                    if (variantOptions.isNotEmpty()) {
+                        DashboardDropdownPicker(
+                            label = when (normalizedItemType) {
+                                "appointment" -> "Appointment option"
+                                "service" -> "Service option"
+                                else -> "Product variant"
+                            },
+                            selected = selectedVariant,
+                            placeholder = "Use base item",
+                            options = variantOptions,
+                            optionLabel = { variant ->
+                                buildString {
+                                    append(variant.name)
+                                    variant.packageDetailLabel(selectedProduct?.itemType ?: itemType, selectedProduct?.unit ?: unit)?.let {
+                                        append(" · ")
+                                        append(it)
+                                    }
+                                }
+                            },
+                            onSelected = { variant ->
+                                onComponentsChange(components.mapIndexed { index, old ->
+                                    if (index == componentIndex) old.copy(variantId = variant.id) else old
+                                })
+                            },
+                            onClear = if (component.variantId.isNotBlank()) {
+                                {
+                                    onComponentsChange(components.mapIndexed { index, old ->
+                                        if (index == componentIndex) old.copy(variantId = "") else old
+                                    })
+                                }
+                            } else {
+                                null
+                            },
+                        )
+                    }
+                    OrmaTextField(
+                        value = component.quantity,
+                        onValueChange = { value ->
+                            onComponentsChange(components.mapIndexed { index, old ->
+                                if (index == componentIndex) {
+                                    old.copy(quantity = value.moneyInput().take(8))
+                                } else {
+                                    old
+                                }
+                            })
+                        },
+                        label = if (normalizedItemType == "product") "Quantity in combo" else "Sessions included",
+                        placeholder = if (normalizedItemType == "product") "1 ${unit.ifBlank { "pcs" }}" else "1 session",
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    )
+                }
+            }
+        }
+        OrmaTextButton(
+            text = when (normalizedItemType) {
+                "appointment" -> "Add appointment session"
+                "service" -> "Add service session"
+                else -> "Add included item"
+            },
+            onClick = {
+                onComponentsChange(
+                    components + OrmaProductVariantComponentDraft(
+                        quantity = "1",
+                        status = "active",
+                    ),
+                )
+            },
+            enabled = componentCandidates.isNotEmpty(),
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
 private data class OptionEditorCopy(
     val title: String,
     val body: String,
@@ -28195,6 +28371,18 @@ private fun String.optionEditorCopy(): OptionEditorCopy =
             addAction = "Add product variant",
         )
     }
+
+private fun List<OrmaProduct>.packageComponentCandidates(
+    itemType: String,
+    currentProductId: String,
+): List<OrmaProduct> {
+    val normalizedItemType = itemType.normalizedSellableItemType()
+    return filter { product ->
+        product.id != currentProductId &&
+            product.itemType.normalizedSellableItemType() == normalizedItemType &&
+            product.status.normalizedCatalogAvailabilityStatus() == "active"
+    }.sortedWith(compareBy({ it.name.lowercase() }, { it.id }))
+}
 
 private fun String.packageTypeLabel(): String =
     when (trim().lowercase()) {
@@ -28297,6 +28485,14 @@ private fun OrmaProduct.toProductDraft(): OrmaProductDraft =
                         status = addon.status,
                     )
                 },
+                components = variant.components.map { component ->
+                    OrmaProductVariantComponentDraft(
+                        productId = component.productId,
+                        variantId = component.variantId.orEmpty(),
+                        quantity = component.quantity.blankWhenOneForProductForm(),
+                        status = component.status,
+                    )
+                },
                 status = variant.status,
             )
         },
@@ -28305,6 +28501,9 @@ private fun OrmaProduct.toProductDraft(): OrmaProductDraft =
 
 private fun String.blankWhenZeroForProductForm(): String =
     takeUnless { trim().toDoubleOrNull() == 0.0 }.orEmpty()
+
+private fun String.blankWhenOneForProductForm(): String =
+    takeUnless { trim().toDoubleOrNull() == 1.0 }.orEmpty()
 
 @Composable
 private fun ProductImageSheet(
@@ -30893,6 +31092,13 @@ private fun String.sellableItemTypeLabel(): String =
         "service" -> "Service"
         "appointment" -> "Appointment"
         else -> "Product"
+    }
+
+private fun String.normalizedSellableItemType(): String =
+    when (trim().lowercase()) {
+        "service", "services" -> "service"
+        "appointment", "appointments", "booking", "bookings" -> "appointment"
+        else -> "product"
     }
 
 private fun String.categoryScopeLabel(): String =
@@ -33827,6 +34033,13 @@ private fun filteredDashboardProducts(
                     variant.barcode.orEmpty(),
                     variant.status,
                     variant.addons.joinToString(" ") { addon -> addon.name },
+                    variant.components.joinToString(" ") { component ->
+                        listOf(
+                            component.productName,
+                            component.variantName.orEmpty(),
+                            component.itemType,
+                        ).joinToString(" ")
+                    },
                 ).joinToString(" ")
             },
         ).joinToString(" ").containsAllDashboardTokens(tokens)
