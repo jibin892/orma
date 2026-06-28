@@ -3376,25 +3376,81 @@ class DashboardRepository(
         access: DashboardWorkspaceAccess,
         request: ProductRequest,
     ): ProductResponse {
+        val clientRequestId = request.clientRequestId.cleanClientRequestId()
+        if (clientRequestId != null) {
+            lockProductClientRequest(access.workspaceId, clientRequestId)
+            getProductByClientRequestId(access.workspaceId, clientRequestId)?.let { existingProduct ->
+                return existingProduct
+            }
+        }
         val categoryId = resolveProductCategoryId(access, request)
         val supplierId = resolveSupplierId(access, request.supplierId)
         val sql = """
             insert into products (
                 workspace_id, supplier_id, category_id, name, item_type, sku, barcode, description, unit,
                 selling_price, cost_price, currency, tax_rate, prices_include_tax,
-                stock_quantity, reorder_level, track_stock, duration_minutes, booking_required, expiry_date, status, updated_at
+                stock_quantity, reorder_level, track_stock, duration_minutes, booking_required, expiry_date, status,
+                client_request_id, updated_at
             )
-            values (?::uuid, ?::uuid, ?::uuid, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::date, ?, now())
+            values (?::uuid, ?::uuid, ?::uuid, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::date, ?, ?, now())
             returning *, null::text as supplier_name, null::text as category_name, null::text as image_storage_path
         """.trimIndent()
         return prepareStatement(sql).use { statement ->
             statement.setString(1, access.workspaceId)
             statement.bindProductRequest(access, request, supplierId, categoryId, startIndex = 2)
+            statement.setNullableString(22, clientRequestId)
             statement.executeQuery().use { result ->
                 result.next()
                 val product = result.toProductResponse()
                 replaceProductVariants(access, product.id, request)
                 attachProductVariants(listOf(product)).first()
+            }
+        }
+    }
+
+    private fun Connection.lockProductClientRequest(
+        workspaceId: String,
+        clientRequestId: String,
+    ) {
+        prepareStatement("select pg_advisory_xact_lock(hashtext(?), hashtext(?))").use { statement ->
+            statement.setString(1, workspaceId)
+            statement.setString(2, "product:$clientRequestId")
+            statement.execute()
+        }
+    }
+
+    private fun Connection.getProductByClientRequestId(
+        workspaceId: String,
+        clientRequestId: String,
+    ): ProductResponse? {
+        val sql = """
+            select p.*, s.name as supplier_name, pc.name as category_name,
+                (
+                    select pi.storage_path
+                    from product_images pi
+                    where pi.workspace_id = p.workspace_id
+                      and pi.product_id = p.id::text
+                      and pi.status = 'active'
+                    order by pi.sort_order asc, pi.created_at desc
+                    limit 1
+                ) as image_storage_path
+            from products p
+            left join suppliers s on s.id = p.supplier_id
+            left join product_categories pc on pc.id = p.category_id
+            where p.workspace_id = ?::uuid
+              and p.client_request_id = ?
+              and p.status <> 'archived'
+            limit 1
+        """.trimIndent()
+        return prepareStatement(sql).use { statement ->
+            statement.setString(1, workspaceId)
+            statement.setString(2, clientRequestId)
+            statement.executeQuery().use { result ->
+                if (result.next()) {
+                    attachProductVariants(listOf(result.toProductResponse())).firstOrNull()
+                } else {
+                    null
+                }
             }
         }
     }

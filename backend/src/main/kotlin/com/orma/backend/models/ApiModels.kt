@@ -496,6 +496,7 @@ data class ProductExportResponse(
 
 @Serializable
 data class ProductRequest(
+    val clientRequestId: String? = null,
     val name: String,
     val itemType: String = "product",
     val categoryId: String? = null,
