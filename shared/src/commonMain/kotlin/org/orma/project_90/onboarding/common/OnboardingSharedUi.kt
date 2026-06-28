@@ -210,6 +210,9 @@ import org.orma.project_90.designsystem.OrmaSwitchRow
 import org.orma.project_90.designsystem.OrmaTextButton
 import org.orma.project_90.designsystem.OrmaTextField
 import org.orma.project_90.designsystem.OrmaUploadImageIcon
+import org.orma.project_90.devices.OrmaHardwareConnectorDevice
+import org.orma.project_90.devices.OrmaHardwareConnectorSnapshot
+import org.orma.project_90.devices.rememberOrmaHardwareConnectorSnapshot
 import org.orma.project_90.documents.OrmaOrderDocumentExporter
 import org.orma.project_90.documents.OrmaPrintTarget
 import org.orma.project_90.documents.rememberOrmaOrderDocumentExporter
@@ -34975,6 +34978,7 @@ private fun DashboardMobileAccountContent(
     var showPaymentSheet by rememberSaveable { mutableStateOf(false) }
     var editingPaymentMethodId by rememberSaveable { mutableStateOf<String?>(null) }
     var showPrinterSheet by rememberSaveable { mutableStateOf(false) }
+    var showBarcodeConnectorSheet by rememberSaveable { mutableStateOf(false) }
     var editingPrinterId by rememberSaveable { mutableStateOf<String?>(null) }
     val editingPaymentMethod = state.dashboard.paymentMethods.firstOrNull { it.id == editingPaymentMethodId }
     val defaultPaymentMethod = state.dashboard.paymentMethods.firstOrNull { it.isDefault }
@@ -34983,6 +34987,7 @@ private fun DashboardMobileAccountContent(
     val defaultPrinter = state.dashboard.printers.firstOrNull { it.isDefaultReceipt }
         ?: state.dashboard.printers.firstOrNull()
     val exporter = rememberOrmaOrderDocumentExporter()
+    val connectorSnapshot = rememberOrmaHardwareConnectorSnapshot()
     val workspaceName = state.workspaceName.ifBlank { state.draft.businessName.ifBlank { "ORMA workspace" } }
     val logoFileName = state.workspaceLogoFileName
         .ifBlank { state.draft.logoFileName }
@@ -35146,6 +35151,24 @@ private fun DashboardMobileAccountContent(
             if (canManageAccountSetup) {
                 DashboardMobileAccountRow(
                     icon = DashboardNavIconKind.Printing,
+                    title = "Connected device",
+                    body = connectorSnapshot.printDevices.connectorSummary(connectorSnapshot.printFallback),
+                    badgeText = if (connectorSnapshot.printDevices.isNotEmpty()) "DETECTED" else "CHECK",
+                    badgeTone = if (connectorSnapshot.printDevices.isNotEmpty()) OrmaStatusTone.Success else OrmaStatusTone.Info,
+                    maxBodyLines = 2,
+                )
+                DashboardMobileAccountRow(
+                    icon = DashboardNavIconKind.Products,
+                    title = "Barcode connector",
+                    body = connectorSnapshot.barcodeDevices.connectorSummary(connectorSnapshot.barcodeFallback),
+                    trailingText = "Setup",
+                    badgeText = if (connectorSnapshot.barcodeDevices.isNotEmpty()) "LISTENING" else "SETUP",
+                    badgeTone = if (connectorSnapshot.barcodeDevices.isNotEmpty()) OrmaStatusTone.Success else OrmaStatusTone.Info,
+                    maxBodyLines = 2,
+                    onClick = { showBarcodeConnectorSheet = true },
+                )
+                DashboardMobileAccountRow(
+                    icon = DashboardNavIconKind.Printing,
                     title = "Printers",
                     body = defaultPrinter?.let { "${it.name} / ${it.connectionType.printerConnectionLabel()}" }
                         ?: "Add receipt, bill, and barcode printers.",
@@ -35304,6 +35327,13 @@ private fun DashboardMobileAccountContent(
                 showPrinterSheet = false
                 editingPrinterId = null
             },
+        )
+    }
+
+    if (canManageAccountSetup && showBarcodeConnectorSheet) {
+        BarcodeConnectorSheet(
+            snapshot = connectorSnapshot,
+            onDismiss = { showBarcodeConnectorSheet = false },
         )
     }
 }
@@ -36483,9 +36513,11 @@ private fun DashboardAccountPrinterCard(
     actions: OnboardingActions,
 ) {
     var showPrinterSheet by rememberSaveable { mutableStateOf(false) }
+    var showBarcodeConnectorSheet by rememberSaveable { mutableStateOf(false) }
     var editingPrinterId by rememberSaveable { mutableStateOf<String?>(null) }
     val editingPrinter = state.dashboard.printers.firstOrNull { it.id == editingPrinterId }
     val exporter = rememberOrmaOrderDocumentExporter()
+    val connectorSnapshot = rememberOrmaHardwareConnectorSnapshot()
     DashboardRecordCard {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -36520,6 +36552,10 @@ private fun DashboardAccountPrinterCard(
                 enabled = !state.dashboard.actionLoading,
             )
         }
+        DashboardDeviceConnectorPanel(
+            snapshot = connectorSnapshot,
+            onOpenBarcodeConnector = { showBarcodeConnectorSheet = true },
+        )
         DashboardPrinterDeviceCoveragePanel()
         if (state.dashboard.printers.isEmpty()) {
             Row(
@@ -36636,7 +36672,186 @@ private fun DashboardAccountPrinterCard(
             },
         )
     }
+
+    if (showBarcodeConnectorSheet) {
+        BarcodeConnectorSheet(
+            snapshot = connectorSnapshot,
+            onDismiss = { showBarcodeConnectorSheet = false },
+        )
+    }
 }
+
+@Composable
+private fun DashboardDeviceConnectorPanel(
+    snapshot: OrmaHardwareConnectorSnapshot,
+    onOpenBarcodeConnector: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = OrmaShapes.StandardCell,
+        color = OrmaColors.ScreenBackground,
+        contentColor = OrmaColors.TextPrimary,
+        border = BorderStroke(0.6.dp, OrmaColors.Hairline),
+        tonalElevation = 0.dp,
+        shadowElevation = OrmaElevation.None,
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top,
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        text = "Connected on this device",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = OrmaColors.TextPrimary,
+                    )
+                    Text(
+                        text = snapshot.platformName,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = OrmaColors.TextTertiary,
+                    )
+                }
+                OrmaBadge(
+                    text = if (snapshot.printDevices.isNotEmpty() || snapshot.barcodeDevices.isNotEmpty()) "DETECTED" else "CHECK",
+                    tone = if (snapshot.printDevices.isNotEmpty() || snapshot.barcodeDevices.isNotEmpty()) {
+                        OrmaStatusTone.Success
+                    } else {
+                        OrmaStatusTone.Info
+                    },
+                )
+            }
+            OrmaKeyValueList(
+                rows = listOf(
+                    "Print device" to snapshot.printDevices.connectorSummary(snapshot.printFallback),
+                    "Barcode scanner" to snapshot.barcodeDevices.connectorSummary(snapshot.barcodeFallback),
+                ),
+            )
+            snapshot.printDevices.take(3).forEach { device ->
+                DashboardConnectorDeviceRow(device = device)
+            }
+            OrmaSecondaryButton(
+                text = "Barcode connector",
+                onClick = onOpenBarcodeConnector,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
+}
+
+@Composable
+private fun DashboardConnectorDeviceRow(device: OrmaHardwareConnectorDevice) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = OrmaShapes.StandardCell,
+        color = OrmaColors.CellBackground,
+        contentColor = OrmaColors.TextPrimary,
+        border = BorderStroke(0.6.dp, OrmaColors.Hairline.copy(alpha = 0.7f)),
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            DashboardNavIcon(
+                kind = DashboardNavIconKind.Printing,
+                color = OrmaColors.IconPrimary,
+                modifier = Modifier.size(18.dp),
+            )
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(
+                    text = device.name,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = OrmaColors.TextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = listOf(device.connectorType, device.address.orEmpty())
+                        .filter { it.isNotBlank() }
+                        .joinToString(" / "),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = OrmaColors.TextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            OrmaBadge(
+                text = device.status.uppercase().take(18),
+                tone = if (device.status.contains("permission", ignoreCase = true)) {
+                    OrmaStatusTone.Warning
+                } else {
+                    OrmaStatusTone.Success
+                },
+            )
+        }
+    }
+}
+
+@Composable
+private fun BarcodeConnectorSheet(
+    snapshot: OrmaHardwareConnectorSnapshot,
+    onDismiss: () -> Unit,
+) {
+    DashboardFormSheet(
+        title = "Barcode connector",
+        body = "Connect a USB or Bluetooth barcode scanner in keyboard mode. ORMA listens for scanner input on Sales, Create sale, and Products.",
+        onDismiss = onDismiss,
+    ) {
+        OrmaKeyValueList(
+            rows = listOf(
+                "Current device" to snapshot.platformName,
+                "Scanner status" to snapshot.barcodeDevices.connectorSummary(snapshot.barcodeFallback),
+                "Sales screen" to "Scan once to add the product; scan again to increase quantity.",
+                "Products screen" to "Scan opens the matching product details.",
+            ),
+        )
+        if (snapshot.barcodeDevices.isNotEmpty()) {
+            snapshot.barcodeDevices.forEach { device ->
+                DashboardConnectorDeviceRow(device = device)
+            }
+        } else {
+            Text(
+                text = snapshot.barcodeFallback.ifBlank {
+                    "No scanner detected yet. Most barcode scanners work as keyboard input after pairing or USB connection."
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                color = OrmaColors.TextSecondary,
+            )
+        }
+        OrmaActionRow(
+            primaryText = "Done",
+            onPrimary = LocalSmoothSheetDismiss.current ?: onDismiss,
+            secondaryText = "Cancel",
+            onSecondary = LocalSmoothSheetDismiss.current ?: onDismiss,
+        )
+    }
+}
+
+private fun List<OrmaHardwareConnectorDevice>.connectorSummary(fallback: String): String =
+    if (isEmpty()) {
+        fallback.ifBlank { "Not detected" }
+    } else {
+        take(3).joinToString(", ") { device ->
+            listOf(device.name, device.status.takeIf { it.isNotBlank() })
+                .filterNotNull()
+                .joinToString(" - ")
+        }.let { summary ->
+            if (size > 3) "$summary +${size - 3} more" else summary
+        }
+    }
 
 @Composable
 private fun DashboardPrinterDeviceCoveragePanel() {
