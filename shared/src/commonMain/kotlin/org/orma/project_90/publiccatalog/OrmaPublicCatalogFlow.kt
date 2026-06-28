@@ -359,7 +359,9 @@ private fun PublicCatalogMobile(
 ) {
     val scrollState = rememberScrollState()
     var checkoutOpen by remember(catalog?.workspace?.id) { mutableStateOf(false) }
+    var variantPickerProductId by remember(catalog?.workspace?.id) { mutableStateOf<String?>(null) }
     val showFloatingCart = selectedItems.isNotEmpty() || receipt != null
+    val variantPickerProduct = catalog?.products.orEmpty().firstOrNull { it.id == variantPickerProductId }
 
     LaunchedEffect(selectedItems.isEmpty(), receipt) {
         if (selectedItems.isEmpty() && receipt == null) {
@@ -398,6 +400,10 @@ private fun PublicCatalogMobile(
                     visibleProducts = visibleProducts,
                     onQuantityChange = onQuantityChange,
                     onCategoryChange = onCategoryChange,
+                    onVariantPickerOpen = { productId ->
+                        checkoutOpen = false
+                        variantPickerProductId = productId
+                    },
                 )
             }
             Spacer(modifier = Modifier.height(if (showFloatingCart) 104.dp else 6.dp))
@@ -452,6 +458,20 @@ private fun PublicCatalogMobile(
                     onSubmit = onSubmit,
                 )
             }
+        }
+        variantPickerProduct?.let { product ->
+            PublicCatalogVariantPickerSheet(
+                compact = true,
+                product = product,
+                variantQuantities = product.publicCatalogActiveVariants().associate { variant ->
+                    variant.id to (quantities[product.publicCatalogCartKey(variant.id)] ?: 0)
+                },
+                activeCartType = selectedCartItemType,
+                onDismiss = { variantPickerProductId = null },
+                onVariantQuantityChange = { variantId, quantity ->
+                    onQuantityChange(product.publicCatalogCartKey(variantId), quantity)
+                },
+            )
         }
     }
 }
@@ -554,7 +574,9 @@ private fun PublicCatalogWide(
 ) {
     val wideScrollState = rememberScrollState()
     var checkoutOpen by remember(catalog?.workspace?.id) { mutableStateOf(false) }
+    var variantPickerProductId by remember(catalog?.workspace?.id) { mutableStateOf<String?>(null) }
     val showFloatingCart = selectedItems.isNotEmpty() || receipt != null
+    val variantPickerProduct = catalog?.products.orEmpty().firstOrNull { it.id == variantPickerProductId }
 
     LaunchedEffect(selectedItems.isEmpty(), receipt) {
         if (selectedItems.isEmpty() && receipt == null) {
@@ -600,6 +622,10 @@ private fun PublicCatalogWide(
                         visibleProducts = visibleProducts,
                         onQuantityChange = onQuantityChange,
                         onCategoryChange = onCategoryChange,
+                        onVariantPickerOpen = { productId ->
+                            checkoutOpen = false
+                            variantPickerProductId = productId
+                        },
                     )
                 }
                 Spacer(modifier = Modifier.height(if (showFloatingCart && !sidePanelOpen) 86.dp else 0.dp))
@@ -655,6 +681,20 @@ private fun PublicCatalogWide(
                     .padding(18.dp),
                 onClick = {
                     checkoutOpen = true
+                },
+            )
+        }
+        variantPickerProduct?.let { product ->
+            PublicCatalogVariantPickerSheet(
+                compact = false,
+                product = product,
+                variantQuantities = product.publicCatalogActiveVariants().associate { variant ->
+                    variant.id to (quantities[product.publicCatalogCartKey(variant.id)] ?: 0)
+                },
+                activeCartType = selectedCartItemType,
+                onDismiss = { variantPickerProductId = null },
+                onVariantQuantityChange = { variantId, quantity ->
+                    onQuantityChange(product.publicCatalogCartKey(variantId), quantity)
                 },
             )
         }
@@ -1333,6 +1373,7 @@ private fun PublicCatalogProducts(
     visibleProducts: List<OrmaPublicCatalogProduct>,
     onQuantityChange: (String, Int) -> Unit,
     onCategoryChange: (String) -> Unit,
+    onVariantPickerOpen: (String) -> Unit,
 ) {
     var searchQuery by remember(catalog?.workspace?.id) { mutableStateOf("") }
     var selectedTypeFilter by remember(catalog?.workspace?.id) { mutableStateOf("all") }
@@ -1399,7 +1440,12 @@ private fun PublicCatalogProducts(
                             quantities = quantities,
                             activeCartType = selectedCartItemType,
                             onApplyOffer = { productId ->
-                                onQuantityChange(productId, (quantities[productId] ?: 0).coerceAtLeast(1))
+                                val product = searchedProducts.firstOrNull { it.id == productId }
+                                if (product?.publicCatalogActiveVariants().orEmpty().isNotEmpty()) {
+                                    onVariantPickerOpen(productId)
+                                } else {
+                                    onQuantityChange(productId, (quantities[productId] ?: 0).coerceAtLeast(1))
+                                }
                             },
                         )
                         if (searchedProducts.isEmpty()) {
@@ -1434,6 +1480,7 @@ private fun PublicCatalogProducts(
                                   quantities = quantities,
                                   activeCartType = selectedCartItemType,
                                   onQuantityChange = onQuantityChange,
+                                  onVariantPickerOpen = onVariantPickerOpen,
                               )
                           }
                         }
@@ -1720,6 +1767,7 @@ private fun PublicCatalogProductGrid(
     quantities: Map<String, Int>,
     activeCartType: String?,
     onQuantityChange: (String, Int) -> Unit,
+    onVariantPickerOpen: (String) -> Unit,
 ) {
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
         val columns = when {
@@ -1747,9 +1795,7 @@ private fun PublicCatalogProductGrid(
                             },
                             activeCartType = activeCartType,
                             onQuantityChange = { onQuantityChange(parentKey, it) },
-                            onVariantQuantityChange = { variantId, quantity ->
-                                onQuantityChange(product.publicCatalogCartKey(variantId), quantity)
-                            },
+                            onVariantPickerOpen = { onVariantPickerOpen(product.id) },
                             modifier = Modifier.weight(1f),
                         )
                     }
@@ -2241,17 +2287,23 @@ private fun PublicCatalogProductTile(
     variantQuantities: Map<String, Int>,
     activeCartType: String?,
     onQuantityChange: (Int) -> Unit,
-    onVariantQuantityChange: (String, Int) -> Unit,
+    onVariantPickerOpen: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val selected = quantity > 0 || variantQuantities.any { it.value > 0 }
+    val activeVariants = product.publicCatalogActiveVariants()
+    val hasVariants = activeVariants.isNotEmpty()
+    val selectedVariantCount = variantQuantities.values.sum()
+    val selected = quantity > 0 || selectedVariantCount > 0
     val productType = product.itemType.publicCatalogNormalizedItemType()
     val lockedByType = activeCartType != null && activeCartType != productType && !selected
     val enabled = product.inStock && !lockedByType
+    val tileEnabled = enabled || selected
     val maxQuantity = product.publicCatalogMaxSelectableQuantity()
     val actionLabel = when {
         !product.inStock -> "Unavailable"
         lockedByType -> "Clear ${activeCartType.publicCatalogItemTypeLabel().lowercase()} cart"
+        hasVariants && selectedVariantCount > 0 -> "$selectedVariantCount selected"
+        hasVariants -> "Choose option"
         selected -> "Selected"
         productType == "appointment" -> "Book"
         productType == "service" -> "Request"
@@ -2260,8 +2312,10 @@ private fun PublicCatalogProductTile(
     Surface(
         modifier = modifier
             .fillMaxWidth()
-            .clickable(enabled = enabled) {
-                if (product.variants.isEmpty()) {
+            .clickable(enabled = tileEnabled) {
+                if (hasVariants) {
+                    onVariantPickerOpen()
+                } else {
                     onQuantityChange(if (quantity == 0) 1 else quantity)
                 }
             },
@@ -2356,78 +2410,28 @@ private fun PublicCatalogProductTile(
                     )
                 }
             }
-            if (product.variants.isNotEmpty()) {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    product.variants.filter { it.status == "active" }.forEach { variant ->
-                        val variantQuantity = variantQuantities[variant.id] ?: 0
-                        val variantMaxQuantity = product.publicCatalogMaxSelectableQuantity(variant)
-                        Surface(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable(enabled = enabled && variantMaxQuantity > 0) {
-                                    onVariantQuantityChange(variant.id, if (variantQuantity == 0) 1 else variantQuantity)
-                                },
-                            shape = OrmaShapes.Capsule,
-                            color = if (variantQuantity > 0) OrmaColors.Accent.copy(alpha = 0.10f) else OrmaColors.ScreenBackground,
-                            contentColor = OrmaColors.TextPrimary,
-                            border = BorderStroke(0.6.dp, OrmaColors.Hairline),
-                            tonalElevation = 0.dp,
-                            shadowElevation = 0.dp,
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                    Text(
-                                        text = variant.name.ifBlank { "Option" },
-                                        style = MaterialTheme.typography.labelLarge,
-                                        color = OrmaColors.TextPrimary,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                    Text(
-                                        text = buildString {
-                                            append(product.currency)
-                                            append(" ")
-                                            append(product.customerPriceFor(variant))
-                                            variant.publicCatalogPackageDetail(product.itemType, product.unit)?.let {
-                                                append(" · ")
-                                                append(it)
-                                            }
-                                        },
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = OrmaColors.TextSecondary,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                    if (variant.addons.isNotEmpty()) {
-                                        Text(
-                                            text = "${variant.addons.size} add-ons available",
-                                            style = MaterialTheme.typography.labelMedium,
-                                            color = OrmaColors.Success,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
-                                    }
-                                }
-                                QuantityStepper(
-                                    quantity = variantQuantity,
-                                    enabled = enabled && variantMaxQuantity > 0,
-                                    maxQuantity = variantMaxQuantity,
-                                    onQuantityChange = { onVariantQuantityChange(variant.id, it) },
-                                )
-                            }
-                        }
-                    }
-                }
+            if (hasVariants) {
+                PublicCatalogVariantSummary(
+                    product = product,
+                    activeVariants = activeVariants,
+                    selectedCount = selectedVariantCount,
+                    enabled = enabled || selected,
+                    onClick = onVariantPickerOpen,
+                )
             }
             Surface(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(enabled = tileEnabled) {
+                        if (hasVariants) {
+                            onVariantPickerOpen()
+                        } else {
+                            onQuantityChange(if (quantity == 0) 1 else quantity)
+                        }
+                    },
                 shape = OrmaShapes.Capsule,
-                color = if (enabled || selected) OrmaColors.Accent.copy(alpha = 0.08f) else OrmaColors.CellBackground,
-                contentColor = if (enabled || selected) OrmaColors.Accent else OrmaColors.TextTertiary,
+                color = if (enabled || selected) OrmaColors.Accent else OrmaColors.CellBackground,
+                contentColor = if (enabled || selected) OrmaColors.OnAccent else OrmaColors.TextTertiary,
                 tonalElevation = 0.dp,
                 shadowElevation = 0.dp,
             ) {
@@ -2440,6 +2444,252 @@ private fun PublicCatalogProductTile(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun PublicCatalogVariantSummary(
+    product: OrmaPublicCatalogProduct,
+    activeVariants: List<OrmaProductVariant>,
+    selectedCount: Int,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = enabled, onClick = onClick),
+        shape = OrmaShapes.StandardCell,
+        color = OrmaColors.ScreenBackground,
+        contentColor = OrmaColors.TextPrimary,
+        border = BorderStroke(0.6.dp, OrmaColors.Hairline),
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(
+                    text = if (selectedCount > 0) "$selectedCount option${if (selectedCount == 1) "" else "s"} selected" else "${activeVariants.size} options available",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = OrmaColors.TextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = activeVariants.take(3).joinToString(", ") { it.name.ifBlank { "Option" } },
+                    style = MaterialTheme.typography.labelMedium,
+                    color = OrmaColors.TextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            OrmaBadge(
+                text = product.itemType.publicCatalogItemTypeLabel().uppercase(),
+                tone = OrmaStatusTone.Info,
+            )
+        }
+    }
+}
+
+@Composable
+private fun PublicCatalogVariantPickerSheet(
+    compact: Boolean,
+    product: OrmaPublicCatalogProduct,
+    variantQuantities: Map<String, Int>,
+    activeCartType: String?,
+    onDismiss: () -> Unit,
+    onVariantQuantityChange: (String, Int) -> Unit,
+) {
+    val sheetScrollState = rememberScrollState()
+    val activeVariants = product.publicCatalogActiveVariants()
+    val productType = product.itemType.publicCatalogNormalizedItemType()
+    val selectedCount = variantQuantities.values.sum()
+    val lockedByType = activeCartType != null && activeCartType != productType && selectedCount == 0
+    val enabled = product.inStock && !lockedByType
+    Box(modifier = Modifier.fillMaxSize()) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.28f))
+                .clickable(onClick = onDismiss),
+        )
+        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+            val sheetModifier = if (compact) {
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 10.dp)
+                    .heightIn(max = maxHeight - 20.dp)
+            } else {
+                Modifier
+                    .align(Alignment.CenterEnd)
+                    .fillMaxHeight()
+                    .fillMaxWidth(0.38f)
+                    .widthIn(min = 430.dp, max = 560.dp)
+                    .padding(start = 18.dp, top = 18.dp, end = 18.dp, bottom = 18.dp)
+            }
+            Surface(
+                modifier = sheetModifier,
+                shape = OrmaShapes.PremiumCard,
+                color = OrmaColors.CardBackground,
+                border = BorderStroke(0.8.dp, OrmaColors.Hairline),
+                tonalElevation = 0.dp,
+                shadowElevation = 0.dp,
+            ) {
+                Column(
+                    modifier = Modifier
+                        .padding(18.dp)
+                        .verticalScroll(sheetScrollState),
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        PublicCatalogProductMedia(product = product, selected = selectedCount > 0)
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(3.dp),
+                        ) {
+                            Text(
+                                text = product.name.ifBlank { "Item" },
+                                style = MaterialTheme.typography.titleMedium,
+                                color = OrmaColors.TextPrimary,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                text = when {
+                                    lockedByType -> "Clear the ${activeCartType.orEmpty().publicCatalogItemTypeLabel().lowercase()} cart to choose this."
+                                    activeVariants.isEmpty() -> "No active options are available."
+                                    else -> "Choose the option to add."
+                                },
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = OrmaColors.TextSecondary,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        OrmaLightButton(
+                            text = "Close",
+                            onClick = onDismiss,
+                            modifier = Modifier.widthIn(min = 92.dp, max = 116.dp),
+                        )
+                    }
+                    if (activeVariants.isEmpty()) {
+                        PublicCatalogEmpty(
+                            title = "No options",
+                            body = "This item does not have active options right now.",
+                        )
+                    } else {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            activeVariants.forEach { variant ->
+                                val variantQuantity = variantQuantities[variant.id] ?: 0
+                                val variantMaxQuantity = product.publicCatalogMaxSelectableQuantity(variant)
+                                PublicCatalogVariantPickerRow(
+                                    product = product,
+                                    variant = variant,
+                                    quantity = variantQuantity,
+                                    enabled = enabled && variantMaxQuantity > 0,
+                                    maxQuantity = variantMaxQuantity,
+                                    onQuantityChange = { onVariantQuantityChange(variant.id, it) },
+                                )
+                            }
+                        }
+                    }
+                    OrmaFullButton(
+                        text = if (selectedCount > 0) "Done ($selectedCount selected)" else "Done",
+                        onClick = onDismiss,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PublicCatalogVariantPickerRow(
+    product: OrmaPublicCatalogProduct,
+    variant: OrmaProductVariant,
+    quantity: Int,
+    enabled: Boolean,
+    maxQuantity: Int,
+    onQuantityChange: (Int) -> Unit,
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = enabled) {
+                onQuantityChange(if (quantity == 0) 1 else quantity)
+            },
+        shape = OrmaShapes.StandardCell,
+        color = if (quantity > 0) OrmaColors.Accent.copy(alpha = 0.08f) else OrmaColors.ScreenBackground,
+        contentColor = OrmaColors.TextPrimary,
+        border = BorderStroke(
+            width = if (quantity > 0) 1.1.dp else 0.7.dp,
+            color = if (quantity > 0) OrmaColors.Accent.copy(alpha = 0.36f) else OrmaColors.Hairline,
+        ),
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    text = variant.name.ifBlank { "Option" },
+                    style = MaterialTheme.typography.titleSmall,
+                    color = OrmaColors.TextPrimary,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = buildString {
+                        append(product.currency)
+                        append(" ")
+                        append(product.customerPriceFor(variant))
+                        variant.publicCatalogPackageDetail(product.itemType, product.unit)?.let {
+                            append(" · ")
+                            append(it)
+                        }
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = OrmaColors.TextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (variant.addons.isNotEmpty()) {
+                    Text(
+                        text = "${variant.addons.size} add-ons available",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = OrmaColors.Success,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            QuantityStepper(
+                quantity = quantity,
+                enabled = enabled,
+                maxQuantity = maxQuantity,
+                onQuantityChange = onQuantityChange,
+            )
         }
     }
 }
@@ -3316,6 +3566,9 @@ private fun OrmaProductVariant.publicCatalogPackageDetail(itemType: String, unit
         else -> "$count ${unit.ifBlank { "items" }}"
     }
 }
+
+private fun OrmaPublicCatalogProduct.publicCatalogActiveVariants(): List<OrmaProductVariant> =
+    variants.filter { it.status.trim().lowercase() == "active" }
 
 private fun String.publicCatalogNormalizedItemType(): String =
     when (trim().lowercase()) {

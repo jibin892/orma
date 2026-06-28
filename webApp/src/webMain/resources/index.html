@@ -143,7 +143,12 @@
                         : "New workspace update";
                     new Notification(title, {
                         body,
-                        data: payload && payload.data ? payload.data : {}
+                        data: payload && payload.data ? payload.data : {},
+                        silent: false,
+                        renotify: true,
+                        tag: payload && payload.data && payload.data.orderId
+                            ? payload.data.orderId
+                            : "orma-workspace-alert"
                     });
                 });
             }

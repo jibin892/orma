@@ -20,11 +20,16 @@ private object DesktopNotificationBridge {
         val cleanTitle = title.takeIf { it.isNotBlank() } ?: "ORMA"
         val cleanBody = body.takeIf { it.isNotBlank() } ?: "New workspace update"
         val icon = trayIcon
+        playDefaultSound()
         if (icon != null) {
             icon.displayMessage(cleanTitle, cleanBody, TrayIcon.MessageType.INFO)
         } else {
-            runCatching { Toolkit.getDefaultToolkit().beep() }
+            // Sound was already played; there is no native tray surface to show.
         }
+    }
+
+    private fun playDefaultSound() {
+        runCatching { Toolkit.getDefaultToolkit().beep() }
     }
 
     private fun createTrayIcon(): TrayIcon? {

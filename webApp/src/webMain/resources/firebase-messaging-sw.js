@@ -27,7 +27,10 @@ messaging.onBackgroundMessage((payload) => {
   const title = payload.notification?.title || "ORMA";
   const options = {
     body: payload.notification?.body || "New workspace update",
-    data: payload.data || {}
+    data: payload.data || {},
+    silent: false,
+    renotify: true,
+    tag: payload.data?.orderId || payload.data?.type || "orma-workspace-alert"
   };
   postOrmaMessageToWindows(payload);
   self.registration.showNotification(title, options);

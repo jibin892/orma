@@ -1,5 +1,9 @@
 package com.orma.backend.notifications
 
+import com.google.firebase.messaging.AndroidConfig
+import com.google.firebase.messaging.AndroidNotification
+import com.google.firebase.messaging.ApnsConfig
+import com.google.firebase.messaging.Aps
 import com.google.firebase.messaging.FirebaseMessaging
 import com.google.firebase.messaging.Message
 import com.google.firebase.messaging.Notification
@@ -50,6 +54,7 @@ class OrderNotificationService(
             "orderType" to context.orderType,
             "workspaceId" to context.workspaceId,
         )
+        val deliveryPayload = payload + ("sound" to "default")
         val tokens = dataSource.connection.use { connection ->
             connection.activeNotificationTokens(context.workspaceId)
         }
@@ -83,7 +88,27 @@ class OrderNotificationService(
                         .setBody(body)
                         .build(),
                 )
-                .putAllData(payload)
+                .setAndroidConfig(
+                    AndroidConfig.builder()
+                        .setPriority(AndroidConfig.Priority.HIGH)
+                        .setNotification(
+                            AndroidNotification.builder()
+                                .setChannelId("orma_workspace_alerts")
+                                .setSound("default")
+                                .build(),
+                        )
+                        .build(),
+                )
+                .setApnsConfig(
+                    ApnsConfig.builder()
+                        .setAps(
+                            Aps.builder()
+                                .setSound("default")
+                                .build(),
+                        )
+                        .build(),
+                )
+                .putAllData(deliveryPayload)
                 .build()
             runCatching {
                 messaging.send(message)

@@ -27060,11 +27060,12 @@ private fun ProductEditorScreen(
                         },
                     )
                 } else {
-                    OrmaTextButton(
-                        text = "Add custom unit",
-                        onClick = { customUnitVisible = true },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        OrmaTextButton(
+                            text = "Add custom unit",
+                            onClick = { customUnitVisible = true },
+                        )
+                    }
                 }
             }
         }
@@ -36169,7 +36170,7 @@ private fun DashboardAccountLogoCard(
     val draft = state.draft
     val logoFileName = state.workspaceLogoFileName
         .ifBlank { draft.logoFileName }
-        .ifBlank { state.workspaceLogoUrl }
+    val logoRemoteUrl = state.workspaceLogoUrl
     val coverFileName = state.workspaceCoverFileName.ifBlank { state.workspaceCoverUrl }
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -36199,8 +36200,9 @@ private fun DashboardAccountLogoCard(
         LogoUploadCard(
             initials = businessInitial(draft),
             fileName = logoFileName,
+            remoteUrl = logoRemoteUrl,
             previewBytes = draft.logoPreviewBytes,
-            selected = logoFileName.isNotBlank() || draft.logoPreviewBytes.isNotEmpty(),
+            selected = logoFileName.isNotBlank() || logoRemoteUrl.isNotBlank() || draft.logoPreviewBytes.isNotEmpty(),
             uploading = state.logoUploadLoading,
             onClick = actions.onLogoUploadRequest,
         )
@@ -37347,6 +37349,7 @@ private fun LogoForm(state: OnboardingUiState, actions: OnboardingActions) {
     LogoUploadCard(
         initials = businessInitial(draft),
         fileName = draft.logoFileName,
+        remoteUrl = "",
         previewBytes = draft.logoPreviewBytes,
         selected = logoSelected,
         uploading = state.logoUploadLoading,
@@ -37374,6 +37377,7 @@ private fun LogoForm(state: OnboardingUiState, actions: OnboardingActions) {
 private fun LogoUploadCard(
     initials: String,
     fileName: String,
+    remoteUrl: String,
     previewBytes: ByteArray,
     selected: Boolean,
     uploading: Boolean,
@@ -37412,6 +37416,7 @@ private fun LogoUploadCard(
                     ) {
                         LogoPreviewTile(
                             initials = initials,
+                            remoteUrl = remoteUrl,
                             previewBytes = previewBytes,
                             selected = selected,
                         )
@@ -37436,6 +37441,7 @@ private fun LogoUploadCard(
                 ) {
                     LogoPreviewTile(
                         initials = initials,
+                        remoteUrl = remoteUrl,
                         previewBytes = previewBytes,
                         selected = selected,
                     )
@@ -37573,14 +37579,16 @@ private fun CoverUploadCard(
 @Composable
 private fun LogoPreviewTile(
     initials: String,
+    remoteUrl: String = "",
     previewBytes: ByteArray,
     selected: Boolean,
 ) {
     val hasPreview = previewBytes.isNotEmpty()
+    val hasRemotePreview = remoteUrl.isNotBlank()
     Surface(
         modifier = Modifier.size(72.dp),
         shape = RoundedCornerShape(22.dp),
-        color = if (hasPreview) OrmaColors.ScreenBackground else if (selected) OrmaColors.Accent else OrmaColors.ScreenBackground,
+        color = if (hasPreview || hasRemotePreview) OrmaColors.ScreenBackground else if (selected) OrmaColors.Accent else OrmaColors.ScreenBackground,
         contentColor = if (selected) OrmaColors.OnAccent else OrmaColors.Accent,
         border = BorderStroke(
             width = 1.dp,
@@ -37603,13 +37611,22 @@ private fun LogoPreviewTile(
                             .clip(RoundedCornerShape(22.dp)),
                     )
                 }
+                hasRemotePreview -> {
+                    OrmaRemoteImage(
+                        url = remoteUrl,
+                        contentDescription = "Business logo preview",
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .clip(RoundedCornerShape(22.dp)),
+                    )
+                }
                 selected -> {
-                Text(
-                    text = initials.ifBlank { "O" },
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                )
+                    Text(
+                        text = initials.ifBlank { "O" },
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                    )
                 }
                 else -> {
                     OrmaUploadImageIcon(
@@ -37692,7 +37709,7 @@ private fun LogoUploadActionPill(
 }
 
 private fun displayLogoFileName(fileName: String): String =
-    fileName.substringAfterLast('/').ifBlank { fileName }
+    fileName.substringAfterLast('/').ifBlank { "Saved image" }
 
 @Composable
 private fun InvoiceSettingsForm(state: OnboardingUiState, actions: OnboardingActions) {

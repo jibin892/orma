@@ -92,6 +92,7 @@ import org.orma.project_90.notifications.showOrmaNativeNotification
 fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
     var state by remember { mutableStateOf(OnboardingUiState(authLoadingKind = AuthLoadingKind.RestoringSession)) }
     var desktopKnownNotificationIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var desktopNotificationSeeded by remember { mutableStateOf(false) }
     val authGateway = remember { createOrmaAuthGateway() }
     val backendClient = remember { createOrmaBackendClient() }
     val scope = rememberCoroutineScope()
@@ -796,8 +797,9 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
     ) {
         if (!isOrmaDesktopRuntime()) return
         val nextIds = notifications.mapNotNull { it.id.takeIf(String::isNotBlank) }.toSet()
-        if (!notifyNewEvents || desktopKnownNotificationIds.isEmpty()) {
+        if (!notifyNewEvents || !desktopNotificationSeeded) {
             desktopKnownNotificationIds = nextIds
+            desktopNotificationSeeded = true
             return
         }
         val newNotifications = notifications
@@ -1105,7 +1107,7 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
         when (val result = backendClient.listDashboardNotifications(idToken, limit = 20)) {
             is OrmaBackendResult.Success -> {
                 val events = result.value
-                val notifyNewEvents = snapshot.dashboard.hasLoaded && knownBefore.isNotEmpty()
+                val notifyNewEvents = snapshot.dashboard.hasLoaded && desktopNotificationSeeded
                 val newOrderEvent = notifyNewEvents && events.any { notification ->
                     notification.id.isNotBlank() &&
                         notification.id !in knownBefore &&
@@ -2299,6 +2301,11 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
         ) {
             refreshDashboard()
         }
+    }
+
+    LaunchedEffect(state.workspaceId) {
+        desktopKnownNotificationIds = emptySet()
+        desktopNotificationSeeded = false
     }
 
     LaunchedEffect(state.step, state.workspaceId, state.notificationsEnabled) {
