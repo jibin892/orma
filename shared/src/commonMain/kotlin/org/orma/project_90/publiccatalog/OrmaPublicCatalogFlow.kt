@@ -44,6 +44,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.orma.project_90.auth.OrmaAuthResult
 import org.orma.project_90.auth.OrmaAuthSession
@@ -121,6 +122,7 @@ fun OrmaPublicCatalogFlow(
     var customerOrderDetailLoading by remember(workspaceId) { mutableStateOf(false) }
     var customerOrderDetailRefreshing by remember(workspaceId) { mutableStateOf(false) }
     var customerOrderDetailError by remember(workspaceId) { mutableStateOf<String?>(null) }
+    var customerStatusNotice by remember(workspaceId) { mutableStateOf<PublicCatalogCustomerStatusNotice?>(null) }
 
     fun updateQuantity(cartKey: String, quantity: Int) {
         val productId = cartKey.publicCatalogCartProductId()
@@ -156,12 +158,39 @@ fun OrmaPublicCatalogFlow(
         }
         if (refreshReceipt && orderReceipt != null) {
             when (val result = client.loadPublicCatalogOrderStatus(workspaceId, orderReceipt.order.id)) {
-                is OrmaBackendResult.Success -> receipt = result.value
+                is OrmaBackendResult.Success -> {
+                    result.value.order.publicCatalogCustomerStatusNotice(orderReceipt.order)?.let { notice ->
+                        customerStatusNotice = notice
+                    }
+                    receipt = result.value
+                    customerOrderDetailReceipt = customerOrderDetailReceipt.publicCatalogReplaceReceipt(result.value)
+                    customerOrders = customerOrders.publicCatalogReplaceOrder(result.value.order)
+                }
                 is OrmaBackendResult.Failure -> error = result.publicCatalogMessage(load = true)
             }
         }
         loading = false
         statusRefreshing = false
+    }
+
+    suspend fun refreshCurrentReceiptStatus(showRefreshing: Boolean) {
+        val currentReceipt = receipt ?: return
+        if (showRefreshing) statusRefreshing = true
+        if (showRefreshing) error = null
+        when (val result = client.loadPublicCatalogOrderStatus(workspaceId, currentReceipt.order.id)) {
+            is OrmaBackendResult.Success -> {
+                result.value.order.publicCatalogCustomerStatusNotice(currentReceipt.order)?.let { notice ->
+                    customerStatusNotice = notice
+                }
+                receipt = result.value
+                customerOrderDetailReceipt = customerOrderDetailReceipt.publicCatalogReplaceReceipt(result.value)
+                customerOrders = customerOrders.publicCatalogReplaceOrder(result.value.order)
+            }
+            is OrmaBackendResult.Failure -> {
+                if (showRefreshing) error = result.publicCatalogMessage(load = true)
+            }
+        }
+        if (showRefreshing) statusRefreshing = false
     }
 
     fun applyCustomerSession(session: OrmaAuthSession) {
@@ -177,19 +206,32 @@ fun OrmaPublicCatalogFlow(
         }
     }
 
-    suspend fun loadCustomerOrderHistory(session: OrmaAuthSession) {
-        customerOrdersLoading = true
+    suspend fun loadCustomerOrderHistory(
+        session: OrmaAuthSession,
+        showLoading: Boolean = true,
+        detectStatusUpdates: Boolean = false,
+    ) {
+        val previousOrders = customerOrders.associateBy { it.id }
+        if (showLoading) customerOrdersLoading = true
         when (val result = client.loadPublicCatalogCustomerOrders(workspaceId, session.idToken)) {
             is OrmaBackendResult.Success -> {
-                customerOrders = result.value.items
+                val nextOrders = result.value.items
+                if (detectStatusUpdates) {
+                    nextOrders.publicCatalogCustomerStatusNotice(previousOrders)?.let { notice ->
+                        customerStatusNotice = notice
+                    }
+                }
+                customerOrders = nextOrders
                 customerAuthError = null
             }
             is OrmaBackendResult.Failure -> {
-                customerOrders = emptyList()
-                customerAuthError = result.publicCatalogMessage(load = true)
+                if (showLoading) {
+                    customerOrders = emptyList()
+                    customerAuthError = result.publicCatalogMessage(load = true)
+                }
             }
         }
-        customerOrdersLoading = false
+        if (showLoading) customerOrdersLoading = false
     }
 
     suspend fun loadCustomerOrderDetail(orderId: String, refresh: Boolean) {
@@ -202,10 +244,12 @@ fun OrmaPublicCatalogFlow(
         customerOrderDetailError = null
         when (val result = client.loadPublicCatalogOrderStatus(workspaceId, orderId)) {
             is OrmaBackendResult.Success -> {
-                customerOrderDetailReceipt = result.value
-                customerOrders = customerOrders.map { order ->
-                    if (order.id == result.value.order.id) result.value.order else order
+                result.value.order.publicCatalogCustomerStatusNotice(customerOrderDetailReceipt?.order)?.let { notice ->
+                    customerStatusNotice = notice
                 }
+                customerOrderDetailReceipt = result.value
+                receipt = receipt.publicCatalogReplaceReceipt(result.value)
+                customerOrders = customerOrders.publicCatalogReplaceOrder(result.value.order)
                 customerAuthError = null
             }
             is OrmaBackendResult.Failure -> {
@@ -241,6 +285,16 @@ fun OrmaPublicCatalogFlow(
         loadCatalogAndReceiptStatus(refreshReceipt = false)
     }
 
+    LaunchedEffect(receipt?.order?.id) {
+        val activeOrderId = receipt?.order?.id?.takeIf { it.isNotBlank() } ?: return@LaunchedEffect
+        while (true) {
+            delay(15_000)
+            val currentOrder = receipt?.order ?: break
+            if (currentOrder.id != activeOrderId || !currentOrder.status.publicCatalogShouldPollForCustomerStatus()) break
+            refreshCurrentReceiptStatus(showRefreshing = false)
+        }
+    }
+
     LaunchedEffect(workspaceId) {
         customerAuthBusy = true
         when (val restored = authGateway.restoreSession()) {
@@ -256,6 +310,19 @@ fun OrmaPublicCatalogFlow(
             null -> Unit
         }
         customerAuthBusy = false
+    }
+
+    LaunchedEffect(customerSession?.idToken) {
+        val activeSession = customerSession ?: return@LaunchedEffect
+        while (true) {
+            delay(30_000)
+            if (customerSession?.idToken != activeSession.idToken) break
+            loadCustomerOrderHistory(
+                session = activeSession,
+                showLoading = false,
+                detectStatusUpdates = true,
+            )
+        }
     }
 
     OrmaAdaptiveSurface(modifier = modifier) {
@@ -334,6 +401,7 @@ fun OrmaPublicCatalogFlow(
                 when (val result = client.submitPublicCatalogOrder(workspaceId, draft, customerSession?.idToken)) {
                     is OrmaBackendResult.Success -> {
                         receipt = result.value
+                        customerStatusNotice = null
                         customerSession?.let { loadCustomerOrderHistory(it) }
                     }
                     is OrmaBackendResult.Failure -> error = result.publicCatalogMessage(load = false)
@@ -438,10 +506,15 @@ fun OrmaPublicCatalogFlow(
                 total = total,
                 submitting = submitting,
                 statusRefreshing = statusRefreshing,
+                customerStatusNotice = customerStatusNotice,
                 submitEnabled = submitEnabled,
                 onRetry = {
                     scope.launch {
-                        loadCatalogAndReceiptStatus(refreshReceipt = true)
+                        if (receipt != null) {
+                            refreshCurrentReceiptStatus(showRefreshing = true)
+                        } else {
+                            loadCatalogAndReceiptStatus(refreshReceipt = false)
+                        }
                     }
                 },
                 onQuantityChange = ::updateQuantity,
@@ -452,6 +525,7 @@ fun OrmaPublicCatalogFlow(
                 },
                 onNewOrder = {
                     receipt = null
+                    customerStatusNotice = null
                     quantities = emptyMap()
                     checkoutRequestId = ormaClientRequestId("catalog")
                     notes = ""
@@ -512,10 +586,15 @@ fun OrmaPublicCatalogFlow(
                 total = total,
                 submitting = submitting,
                 statusRefreshing = statusRefreshing,
+                customerStatusNotice = customerStatusNotice,
                 submitEnabled = submitEnabled,
                 onRetry = {
                     scope.launch {
-                        loadCatalogAndReceiptStatus(refreshReceipt = true)
+                        if (receipt != null) {
+                            refreshCurrentReceiptStatus(showRefreshing = true)
+                        } else {
+                            loadCatalogAndReceiptStatus(refreshReceipt = false)
+                        }
                     }
                 },
                 onQuantityChange = ::updateQuantity,
@@ -526,6 +605,7 @@ fun OrmaPublicCatalogFlow(
                 },
                 onNewOrder = {
                     receipt = null
+                    customerStatusNotice = null
                     quantities = emptyMap()
                     checkoutRequestId = ormaClientRequestId("catalog")
                     notes = ""
@@ -586,6 +666,7 @@ private fun PublicCatalogMobile(
     customerOrderDetailRefreshing: Boolean,
     customerOrderDetailError: String?,
     customerProfileOpen: Boolean,
+    customerStatusNotice: PublicCatalogCustomerStatusNotice?,
     selectedItems: List<PublicCatalogSelection>,
     selectedFlow: String,
     total: Double,
@@ -631,6 +712,7 @@ private fun PublicCatalogMobile(
             detailLoading = customerOrderDetailLoading,
             detailRefreshing = customerOrderDetailRefreshing,
             detailError = customerOrderDetailError,
+            customerStatusNotice = customerStatusNotice,
             compact = true,
             onBack = onCustomerProfileClose,
             onOrderOpen = onCustomerOrderOpen,
@@ -668,6 +750,7 @@ private fun PublicCatalogMobile(
                 loading = loading,
                 compact = true,
                 customerAccountState = customerAccountState,
+                customerStatusNotice = customerStatusNotice,
                 onProfileClick = onCustomerProfileOpen,
             )
             PublicCatalogProductsCard {
@@ -723,6 +806,7 @@ private fun PublicCatalogMobile(
                     total = total,
                     submitting = submitting,
                     statusRefreshing = statusRefreshing,
+                    customerStatusNotice = customerStatusNotice,
                     submitEnabled = submitEnabled,
                     onRetry = onRetry,
                     onClearSelection = onClearSelection,
@@ -841,6 +925,7 @@ private fun PublicCatalogWide(
     customerOrderDetailRefreshing: Boolean,
     customerOrderDetailError: String?,
     customerProfileOpen: Boolean,
+    customerStatusNotice: PublicCatalogCustomerStatusNotice?,
     selectedItems: List<PublicCatalogSelection>,
     selectedFlow: String,
     total: Double,
@@ -893,6 +978,7 @@ private fun PublicCatalogWide(
                 detailLoading = customerOrderDetailLoading,
                 detailRefreshing = customerOrderDetailRefreshing,
                 detailError = customerOrderDetailError,
+                customerStatusNotice = customerStatusNotice,
                 compact = false,
                 onBack = onCustomerProfileClose,
                 onOrderOpen = onCustomerOrderOpen,
@@ -935,6 +1021,7 @@ private fun PublicCatalogWide(
                     loading = loading,
                     compact = false,
                     customerAccountState = customerAccountState,
+                    customerStatusNotice = customerStatusNotice,
                     onProfileClick = onCustomerProfileOpen,
                 )
                 PublicCatalogProductsCard {
@@ -978,6 +1065,7 @@ private fun PublicCatalogWide(
                         total = total,
                         submitting = submitting,
                         statusRefreshing = statusRefreshing,
+                        customerStatusNotice = customerStatusNotice,
                         submitEnabled = submitEnabled,
                         onRetry = onRetry,
                         onClearSelection = onClearSelection,
@@ -1195,6 +1283,7 @@ private fun PublicCatalogCheckoutTopBar(
     loading: Boolean,
     compact: Boolean,
     customerAccountState: PublicCatalogCustomerAccountState,
+    customerStatusNotice: PublicCatalogCustomerStatusNotice?,
     onProfileClick: () -> Unit,
 ) {
     val businessName = catalog?.workspace?.businessName?.ifBlank { "ORMA checkout" } ?: "ORMA checkout"
@@ -1237,25 +1326,36 @@ private fun PublicCatalogCheckoutTopBar(
                             )
                         }
                     }
+                    customerStatusNotice?.let { notice ->
+                        PublicCatalogCustomerStatusNoticeCard(notice = notice)
+                    }
                 }
             } else {
-                Row(
+                Column(
                     modifier = Modifier.padding(18.dp),
-                    horizontalArrangement = Arrangement.spacedBy(18.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    PublicCatalogCheckoutBusinessLine(
-                        businessName = businessName,
-                        location = location,
-                        logoUrl = logoUrl,
-                        loading = loading,
-                        modifier = Modifier.weight(1f),
-                    )
-                    if (customerAccountState.session != null) {
-                        PublicCatalogProfileAvatar(
-                            modifier = Modifier.size(52.dp),
-                            onClick = onProfileClick,
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(18.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        PublicCatalogCheckoutBusinessLine(
+                            businessName = businessName,
+                            location = location,
+                            logoUrl = logoUrl,
+                            loading = loading,
+                            modifier = Modifier.weight(1f),
                         )
+                        if (customerAccountState.session != null) {
+                            PublicCatalogProfileAvatar(
+                                modifier = Modifier.size(52.dp),
+                                onClick = onProfileClick,
+                            )
+                        }
+                    }
+                    customerStatusNotice?.let { notice ->
+                        PublicCatalogCustomerStatusNoticeCard(notice = notice)
                     }
                 }
             }
@@ -2278,6 +2378,7 @@ private fun PublicCatalogCheckout(
     total: Double,
     submitting: Boolean,
     statusRefreshing: Boolean,
+    customerStatusNotice: PublicCatalogCustomerStatusNotice?,
     submitEnabled: Boolean,
     onRetry: () -> Unit,
     onClearSelection: () -> Unit,
@@ -2325,6 +2426,7 @@ private fun PublicCatalogCheckout(
             PublicCatalogSuccess(
                 receipt = receipt,
                 refreshing = statusRefreshing,
+                customerStatusNotice = customerStatusNotice,
                 onRefresh = onRetry,
                 onNewOrder = onNewOrder,
             )
@@ -2694,6 +2796,7 @@ private fun PublicCatalogCustomerProfileScreen(
     detailLoading: Boolean,
     detailRefreshing: Boolean,
     detailError: String?,
+    customerStatusNotice: PublicCatalogCustomerStatusNotice?,
     compact: Boolean,
     onBack: () -> Unit,
     onOrderOpen: (OrmaOrder) -> Unit,
@@ -2782,6 +2885,9 @@ private fun PublicCatalogCustomerProfileScreen(
                     modifier = Modifier.weight(1f),
                     enabled = !state.authBusy,
                 )
+            }
+            customerStatusNotice?.let { notice ->
+                PublicCatalogCustomerStatusNoticeCard(notice = notice)
             }
             if (showingDetail) {
                 PublicCatalogCustomerOrderDetail(
@@ -4547,12 +4653,18 @@ private fun PublicCatalogSummaryLine(
 private fun PublicCatalogSuccess(
     receipt: OrmaPublicCatalogOrderReceipt,
     refreshing: Boolean,
+    customerStatusNotice: PublicCatalogCustomerStatusNotice?,
     onRefresh: () -> Unit,
     onNewOrder: () -> Unit,
 ) {
     val order = receipt.order
     val balanceDue = order.publicCatalogBalanceDueValue()
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        customerStatusNotice
+            ?.takeIf { it.orderId == order.id }
+            ?.let { notice ->
+                PublicCatalogCustomerStatusNoticeCard(notice = notice)
+            }
         PublicCatalogMessageCard(
             title = order.publicCatalogStatusTitle(),
             body = receipt.message.ifBlank { order.publicCatalogStatusBody() },
@@ -4701,6 +4813,78 @@ private fun OrmaOrder.publicCatalogStatusTone(): OrmaStatusTone =
         else -> OrmaStatusTone.Neutral
     }
 
+private fun OrmaOrder.publicCatalogCustomerStatusNotice(previous: OrmaOrder?): PublicCatalogCustomerStatusNotice? {
+    val oldStatus = previous?.status?.trim()?.lowercase().orEmpty()
+    val nextStatus = status.trim().lowercase()
+    val oldPaid = previous?.paidTotal.orEmpty()
+    val oldSchedule = previous?.scheduledAt.orEmpty()
+    if (
+        previous == null ||
+        (oldStatus == nextStatus && oldPaid == paidTotal && oldSchedule == scheduledAt.orEmpty())
+    ) {
+        return null
+    }
+    return PublicCatalogCustomerStatusNotice(
+        orderId = id,
+        orderNumber = orderNumber.ifBlank { id },
+        title = publicCatalogCustomerUpdateTitle(),
+        body = publicCatalogCustomerUpdateBody(),
+        tone = publicCatalogStatusTone(),
+    )
+}
+
+private fun List<OrmaOrder>.publicCatalogCustomerStatusNotice(
+    previousOrders: Map<String, OrmaOrder>,
+): PublicCatalogCustomerStatusNotice? =
+    firstNotNullOfOrNull { order ->
+        order.publicCatalogCustomerStatusNotice(previousOrders[order.id])
+    }
+
+private fun OrmaPublicCatalogOrderReceipt?.publicCatalogReplaceReceipt(
+    next: OrmaPublicCatalogOrderReceipt,
+): OrmaPublicCatalogOrderReceipt? =
+    when {
+        this == null -> null
+        order.id == next.order.id -> next
+        else -> this
+    }
+
+private fun List<OrmaOrder>.publicCatalogReplaceOrder(next: OrmaOrder): List<OrmaOrder> =
+    if (none { it.id == next.id }) this else map { order -> if (order.id == next.id) next else order }
+
+private fun String.publicCatalogShouldPollForCustomerStatus(): Boolean =
+    trim().lowercase() !in setOf("completed", "cancelled", "canceled", "rejected", "rejected_or_cancelled", "failed")
+
+private fun OrmaOrder.publicCatalogCustomerUpdateTitle(): String =
+    when (status.trim().lowercase()) {
+        "confirmed" -> "${orderType.publicCatalogWorkTitle()} confirmed"
+        "part_paid" -> "Payment update received"
+        "paid" -> "Payment marked as paid"
+        "completed" -> "${orderType.publicCatalogWorkTitle()} completed"
+        "cancelled", "canceled", "rejected", "rejected_or_cancelled" -> "${orderType.publicCatalogWorkTitle()} cancelled"
+        else -> "Status updated"
+    }
+
+private fun OrmaOrder.publicCatalogCustomerUpdateBody(): String {
+    val reference = orderNumber.ifBlank { id }
+    val balance = publicCatalogBalanceDueValue()
+    val statusLine = when (status.trim().lowercase()) {
+        "confirmed" -> "The business accepted $reference and will prepare the next step."
+        "part_paid" -> "The business recorded a partial payment for $reference."
+        "paid" -> "The business marked payment as received for $reference."
+        "completed" -> "$reference is completed."
+        "cancelled", "canceled", "rejected", "rejected_or_cancelled" -> "The business rejected or cancelled $reference."
+        else -> "$reference is now ${publicCatalogStatusLabel().lowercase()}."
+    }
+    val balanceLine = if (balance > 0.0 && status.trim().lowercase() in setOf("confirmed", "part_paid")) {
+        " Balance due: ${publicCatalogBalanceDueText()}."
+    } else {
+        ""
+    }
+    val timeLine = scheduledAt?.takeIf { it.isNotBlank() }?.let { " Preferred time: $it." }.orEmpty()
+    return "$statusLine$balanceLine$timeLine"
+}
+
 private fun OrmaOrder.publicCatalogStatusFilterKey(): String =
     status.trim().lowercase().ifBlank { "pending" }
 
@@ -4783,6 +4967,65 @@ private fun String.publicCatalogWorkTitle(): String =
         "service" -> "Service request"
         else -> "Order"
     }
+
+@Composable
+private fun PublicCatalogCustomerStatusNoticeCard(
+    notice: PublicCatalogCustomerStatusNotice,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = OrmaShapes.SmallCard,
+        color = when (notice.tone) {
+            OrmaStatusTone.Danger -> OrmaColors.Error.copy(alpha = 0.08f)
+            OrmaStatusTone.Success -> OrmaColors.Success.copy(alpha = 0.08f)
+            OrmaStatusTone.Warning -> OrmaColors.Warning.copy(alpha = 0.10f)
+            else -> OrmaColors.Accent.copy(alpha = 0.06f)
+        },
+        border = BorderStroke(
+            width = 0.8.dp,
+            color = when (notice.tone) {
+                OrmaStatusTone.Danger -> OrmaColors.Error.copy(alpha = 0.24f)
+                OrmaStatusTone.Success -> OrmaColors.Success.copy(alpha = 0.24f)
+                OrmaStatusTone.Warning -> OrmaColors.Warning.copy(alpha = 0.28f)
+                else -> OrmaColors.Hairline
+            },
+        ),
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = notice.title,
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = OrmaColors.TextPrimary,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                OrmaBadge(
+                    text = notice.orderNumber,
+                    tone = notice.tone,
+                )
+            }
+            Text(
+                text = notice.body,
+                style = MaterialTheme.typography.bodyMedium,
+                color = OrmaColors.TextSecondary,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
 
 @Composable
 private fun PublicCatalogMessageCard(
@@ -4901,6 +5144,14 @@ private data class PublicCatalogCustomerAccountActions(
     val onGoogleSignIn: () -> Unit,
     val onRefreshOrders: () -> Unit,
     val onLogout: () -> Unit,
+)
+
+private data class PublicCatalogCustomerStatusNotice(
+    val orderId: String,
+    val orderNumber: String,
+    val title: String,
+    val body: String,
+    val tone: OrmaStatusTone,
 )
 
 private data class PublicCatalogOrderStatusFilterOption(
