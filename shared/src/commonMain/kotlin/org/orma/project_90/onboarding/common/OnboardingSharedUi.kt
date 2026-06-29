@@ -8601,7 +8601,7 @@ private fun DashboardMobileSaleCard(
     onStatusClick: () -> Unit,
 ) {
     val itemSummary = order.items
-        .mapNotNull { it.productName ?: it.description.takeIf { description -> description.isNotBlank() } }
+        .map { it.bookingLineItemTitle() }
         .take(2)
         .joinToString(", ")
         .ifBlank { "${order.itemCount.coerceAtLeast(order.items.size)} item${if (order.itemCount == 1) "" else "s"}" }
@@ -11244,6 +11244,7 @@ private fun DashboardRecordsSurfaceHeader(
     body: String,
     badgeText: String,
     badgeTone: OrmaStatusTone = OrmaStatusTone.Info,
+    trailingContent: (@Composable () -> Unit)? = null,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -11267,10 +11268,16 @@ private fun DashboardRecordsSurfaceHeader(
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        OrmaBadge(
-            text = badgeText,
-            tone = badgeTone,
-        )
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            trailingContent?.invoke()
+            OrmaBadge(
+                text = badgeText,
+                tone = badgeTone,
+            )
+        }
     }
 }
 
@@ -19692,19 +19699,18 @@ private fun DashboardProductRecordsSurface(
                 title = if (selectedItemType == "all") "Catalog records" else "${activeItemType.sellableItemTypeLabel()} records",
                 body = "Manage prices, stock, images, categories, and selling readiness from one catalog table.",
                 badgeText = dashboardLoadingAwareShownBadge(state.dashboard.loading, products.size, productPagination),
+                trailingContent = if (showCategoryFilter) {
+                    {
+                        DashboardCatalogCategoryFilter(
+                            state = state,
+                            actions = actions,
+                            modifier = Modifier.widthIn(min = 240.dp, max = 320.dp),
+                        )
+                    }
+                } else {
+                    null
+                },
             )
-            if (showCategoryFilter) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
-                ) {
-                    DashboardCatalogCategoryFilter(
-                        state = state,
-                        actions = actions,
-                        modifier = Modifier.widthIn(min = 260.dp, max = 360.dp),
-                    )
-                }
-            }
             if (products.isEmpty()) {
                 if (state.dashboard.loading) {
                     DashboardRecordRowsSkeleton(rowCount = 5, columns = 4, showAvatar = true)
@@ -24019,9 +24025,26 @@ private fun BookingDetailsMobileEssentialsCard(
 }
 
 private fun OrmaOrderItem.bookingLineItemTitle(): String =
-    productName?.takeIf { it.isNotBlank() }
+    variantName?.takeIf { it.isNotBlank() }
+        ?: productName?.takeIf { it.isNotBlank() }
         ?: description.takeIf { it.isNotBlank() }
         ?: "Line item"
+
+private fun OrmaOrderItem.bookingLineItemContext(): String? {
+    val bookedTitle = bookingLineItemTitle()
+    return productName
+        ?.takeIf { it.isNotBlank() && it != bookedTitle }
+        ?: description.takeIf { it.isNotBlank() && it != bookedTitle && it != productName }
+}
+
+private fun OrmaOrderItem.bookingLineItemDescriptionForDraft(): String =
+    when {
+        !variantName.isNullOrBlank() && !productName.isNullOrBlank() -> "$productName - $variantName"
+        description.isNotBlank() -> description
+        !productName.isNullOrBlank() -> productName
+        !variantName.isNullOrBlank() -> variantName
+        else -> "Line item"
+    }
 
 @Composable
 private fun BookingDetailsSummaryCard(
@@ -24515,6 +24538,11 @@ private fun BookingLineItemRow(
     item: OrmaOrderItem,
     currency: String,
 ) {
+    val quantityPriceText = "${orderQuantityText(item.quantity.toDoubleOrNull().orZero())} x ${dashboardMoney(item.unitPrice, currency)} · Tax ${item.taxRate.ifBlank { "0" }}%"
+    val secondaryText = listOfNotNull(
+        item.bookingLineItemContext(),
+        quantityPriceText,
+    ).joinToString(" · ")
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -24535,14 +24563,14 @@ private fun BookingLineItemRow(
             verticalArrangement = Arrangement.spacedBy(3.dp),
         ) {
             Text(
-                text = item.productName ?: item.description.ifBlank { "Line item ${index + 1}" },
+                text = item.bookingLineItemTitle().ifBlank { "Line item ${index + 1}" },
                 style = MaterialTheme.typography.labelLarge,
                 color = OrmaColors.TextPrimary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                text = "${orderQuantityText(item.quantity.toDoubleOrNull().orZero())} x ${dashboardMoney(item.unitPrice, currency)} · Tax ${item.taxRate.ifBlank { "0" }}%",
+                text = secondaryText,
                 style = MaterialTheme.typography.bodyMedium,
                 color = OrmaColors.TextSecondary,
                 maxLines = 1,
@@ -26523,7 +26551,7 @@ private fun CustomerBookingHistoryRow(
     val exporter = rememberOrmaOrderDocumentExporter()
     var documentStatus by rememberSaveable(order.id) { mutableStateOf<String?>(null) }
     val itemSummary = order.items
-        .mapNotNull { it.productName ?: it.description.takeIf { description -> description.isNotBlank() } }
+        .map { it.bookingLineItemTitle() }
         .take(2)
         .joinToString(", ")
         .ifBlank { "${order.itemCount} item${if (order.itemCount == 1) "" else "s"}" }
@@ -27010,7 +27038,7 @@ private fun DashboardOrderRow(
     onStatusChange: ((String) -> Unit)?,
 ) {
     val itemSummary = order.items
-        .mapNotNull { it.productName ?: it.description.takeIf { description -> description.isNotBlank() } }
+        .map { it.bookingLineItemTitle() }
         .take(3)
         .joinToString(", ")
         .ifBlank { "${order.itemCount} item${if (order.itemCount == 1) "" else "s"}" }
@@ -35450,7 +35478,7 @@ private fun OrmaOrderItem.toOrderItemDraft(): OrmaOrderItemDraft =
     OrmaOrderItemDraft(
         productId = productId.orEmpty(),
         variantId = variantId.orEmpty(),
-        description = productName ?: description,
+        description = bookingLineItemDescriptionForDraft(),
         quantity = quantity.ifBlank { "1" },
         unitPrice = unitPrice.ifBlank { "0" },
         taxRate = taxRate.ifBlank { "0" },
@@ -39094,7 +39122,7 @@ private fun dashboardNotificationPlatformCopy(enabled: Boolean): String {
     return when {
         enabled -> "This device is registered for workspace alerts."
         isOrmaWebDownloadSurface() -> "Enable browser notifications to receive catalog orders and refresh the open sales queue."
-        platform.contains("android") -> "Enable Android notifications to receive catalog orders on this device."
+        platform.contains("android") -> "Enable OneSignal Android notifications to receive catalog orders on this device."
         platform.contains("desktop") || platform.contains("jvm") -> "Enable desktop alerts for catalog orders while this app is open."
         platform.contains("ios") -> "Enable iOS notifications to receive catalog orders on this device. APNs capability and backend APNs credentials must be configured for delivery."
         else -> "Enable notifications to receive catalog orders and workspace alerts on supported devices."
@@ -39105,7 +39133,7 @@ private fun dashboardNotificationDeliveryLabel(): String {
     val platform = getPlatform().name.lowercase()
     return when {
         isOrmaWebDownloadSurface() -> "Web push"
-        platform.contains("android") -> "Firebase Android"
+        platform.contains("android") -> "OneSignal Android"
         platform.contains("desktop") || platform.contains("jvm") -> "Desktop app"
         platform.contains("ios") -> "Not connected"
         else -> "Supported devices"

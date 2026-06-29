@@ -182,7 +182,6 @@ class OrderNotificationService(
             put("headings", buildJsonObject { put("en", title) })
             put("contents", buildJsonObject { put("en", body) })
             put("data", buildJsonObject { payload.forEach { (key, value) -> put(key, value) } })
-            put("android_channel_id", "orma_workspace_alerts")
             put("ios_sound", "default")
             put("priority", 10)
         }.toString()

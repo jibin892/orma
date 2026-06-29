@@ -813,6 +813,7 @@ private fun PublicCatalogMobile(
                     submitEnabled = submitEnabled,
                     onRetry = onRetry,
                     onClearSelection = onClearSelection,
+                    onQuantityChange = onQuantityChange,
                     onNewOrder = {
                         checkoutOpen = false
                         onNewOrder()
@@ -1072,6 +1073,7 @@ private fun PublicCatalogWide(
                         submitEnabled = submitEnabled,
                         onRetry = onRetry,
                         onClearSelection = onClearSelection,
+                        onQuantityChange = onQuantityChange,
                         onNewOrder = {
                             checkoutOpen = false
                             onNewOrder()
@@ -2422,6 +2424,7 @@ private fun PublicCatalogCheckout(
     submitEnabled: Boolean,
     onRetry: () -> Unit,
     onClearSelection: () -> Unit,
+    onQuantityChange: (String, Int) -> Unit,
     onNewOrder: () -> Unit,
     onCustomerNameChange: (String) -> Unit,
     onPhoneChange: (String) -> Unit,
@@ -2496,6 +2499,7 @@ private fun PublicCatalogCheckout(
                 total = total,
                 offerSavings = offerSavings,
                 onClearSelection = onClearSelection,
+                onQuantityChange = onQuantityChange,
             )
             if (selectedItems.isEmpty()) {
                 error?.takeIf(String::isNotBlank)?.let {
@@ -3537,6 +3541,11 @@ private fun PublicCatalogOrderItemRow(
     item: OrmaOrderItem,
     currency: String,
 ) {
+    val itemTitle = item.publicCatalogBookedItemTitle()
+    val itemMeta = listOfNotNull(
+        item.publicCatalogBookedItemContext(),
+        "${item.quantity} x ${currency.ifBlank { "INR" }} ${item.unitPrice}",
+    ).joinToString(" · ")
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = OrmaShapes.StandardCell,
@@ -3556,10 +3565,7 @@ private fun PublicCatalogOrderItemRow(
                 verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 Text(
-                    text = listOfNotNull(
-                        item.productName?.takeIf { it.isNotBlank() } ?: item.description.takeIf { it.isNotBlank() },
-                        item.variantName?.takeIf { it.isNotBlank() },
-                    ).joinToString(" - ").ifBlank { "Item" },
+                    text = itemTitle,
                     style = MaterialTheme.typography.labelLarge,
                     color = OrmaColors.TextPrimary,
                     fontWeight = FontWeight.SemiBold,
@@ -3567,7 +3573,7 @@ private fun PublicCatalogOrderItemRow(
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    text = "${item.quantity} x ${currency.ifBlank { "INR" }} ${item.unitPrice}",
+                    text = itemMeta,
                     style = MaterialTheme.typography.bodySmall,
                     color = OrmaColors.TextSecondary,
                     maxLines = 1,
@@ -4367,6 +4373,7 @@ private fun PublicCatalogSelectionSummary(
     total: Double,
     offerSavings: Double,
     onClearSelection: () -> Unit,
+    onQuantityChange: (String, Int) -> Unit,
 ) {
     val itemCount = selectedItems.sumOf { it.quantity }
     val currency = catalog?.workspace?.currency ?: selectedItems.firstOrNull()?.product?.currency.orEmpty()
@@ -4437,6 +4444,9 @@ private fun PublicCatalogSelectionSummary(
                 selectedItems.forEach { selection ->
                     PublicCatalogSummaryLine(
                         selection = selection,
+                        onQuantityChange = { quantity ->
+                            onQuantityChange(selection.product.publicCatalogCartKey(selection.variant?.id), quantity)
+                        },
                     )
                 }
                 if (offerSavings > 0.0) {
@@ -4605,60 +4615,110 @@ private fun PublicCatalogAppliedOffersCard(
 @Composable
 private fun PublicCatalogSummaryLine(
     selection: PublicCatalogSelection,
+    onQuantityChange: (Int) -> Unit,
 ) {
-    Row(
+    val maxQuantity = selection.product.publicCatalogMaxSelectableQuantity(selection.variant).coerceAtLeast(selection.quantity)
+    Surface(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.CenterVertically,
+        shape = OrmaShapes.SmallCard,
+        color = OrmaColors.CardBackground,
+        border = BorderStroke(0.7.dp, OrmaColors.Hairline.copy(alpha = 0.82f)),
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
     ) {
-        Surface(
-            modifier = Modifier.size(42.dp),
-            shape = OrmaShapes.SmallCard,
-            color = OrmaColors.CardBackground,
-            contentColor = OrmaColors.Accent,
-            tonalElevation = 0.dp,
-            shadowElevation = 0.dp,
+        Column(
+            modifier = Modifier.padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            selection.product.imageUrl?.takeIf { it.isNotBlank() }?.let { imageUrl ->
-                OrmaRemoteImage(
-                    url = imageUrl,
-                    contentDescription = selection.product.name,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            } ?: Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center,
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
+                Surface(
+                    modifier = Modifier.size(42.dp),
+                    shape = OrmaShapes.SmallCard,
+                    color = OrmaColors.CellBackground,
+                    contentColor = OrmaColors.Accent,
+                    tonalElevation = 0.dp,
+                    shadowElevation = 0.dp,
+                ) {
+                    selection.product.imageUrl?.takeIf { it.isNotBlank() }?.let { imageUrl ->
+                        OrmaRemoteImage(
+                            url = imageUrl,
+                            contentDescription = selection.product.name,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    } ?: Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = publicCatalogInitials(selection.product.name),
+                            style = MaterialTheme.typography.labelLarge,
+                            color = OrmaColors.TextPrimary,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                        )
+                    }
+                }
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Text(
+                        text = listOf(selection.product.name.ifBlank { "Item" }, selection.variant?.name)
+                            .filterNotNull()
+                            .joinToString(" - "),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = OrmaColors.TextPrimary,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = "${selection.product.currency} ${selection.customerPrice} each",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = OrmaColors.TextSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
                 Text(
-                    text = publicCatalogInitials(selection.product.name),
+                    text = "${selection.product.currency} ${money(selection.lineTotal)}",
                     style = MaterialTheme.typography.labelLarge,
                     color = OrmaColors.TextPrimary,
                     fontWeight = FontWeight.SemiBold,
+                    textAlign = TextAlign.End,
                     maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
-        }
-        Column(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-            Text(
-                text = listOf(selection.product.name.ifBlank { "Item" }, selection.variant?.name)
-                    .filterNotNull()
-                    .joinToString(" - "),
-                style = MaterialTheme.typography.bodyLarge,
-                color = OrmaColors.TextPrimary,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                text = "${selection.quantity} x ${selection.product.currency} ${selection.customerPrice}",
-                style = MaterialTheme.typography.labelMedium,
-                color = OrmaColors.TextSecondary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                QuantityStepper(
+                    quantity = selection.quantity,
+                    enabled = true,
+                    maxQuantity = maxQuantity,
+                    onQuantityChange = onQuantityChange,
+                )
+                Text(
+                    text = if (maxQuantity <= selection.quantity) "Max $maxQuantity" else "Qty ${selection.quantity}",
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = OrmaColors.TextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                OrmaLightButton(
+                    text = "Remove",
+                    onClick = { onQuantityChange(0) },
+                    modifier = Modifier.widthIn(min = 92.dp),
+                )
+            }
             selection.product.offer?.let { offer ->
                 val savings = selection.product.discountFor(selection.variant) * selection.quantity
                 if (savings > 0.0) {
@@ -4672,15 +4732,6 @@ private fun PublicCatalogSummaryLine(
                 }
             }
         }
-        Text(
-            text = "${selection.product.currency} ${money(selection.lineTotal)}",
-            style = MaterialTheme.typography.labelLarge,
-            color = OrmaColors.TextPrimary,
-            fontWeight = FontWeight.SemiBold,
-            textAlign = TextAlign.End,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
     }
 }
 
@@ -5037,6 +5088,19 @@ private fun OrmaOrder.publicCatalogHistorySummary(): String {
     val summary = names.joinToString(", ").ifBlank { orderType.publicCatalogWorkTitle() }
     val remaining = (itemCount - names.size).coerceAtLeast(0)
     return if (remaining > 0) "$summary +$remaining" else summary
+}
+
+private fun OrmaOrderItem.publicCatalogBookedItemTitle(): String =
+    variantName?.takeIf { it.isNotBlank() }
+        ?: productName?.takeIf { it.isNotBlank() }
+        ?: description.takeIf { it.isNotBlank() }
+        ?: "Item"
+
+private fun OrmaOrderItem.publicCatalogBookedItemContext(): String? {
+    val bookedTitle = publicCatalogBookedItemTitle()
+    return productName
+        ?.takeIf { it.isNotBlank() && it != bookedTitle }
+        ?: description.takeIf { it.isNotBlank() && it != bookedTitle && it != productName }
 }
 
 private fun String.publicCatalogWorkTitle(): String =
