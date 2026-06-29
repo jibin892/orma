@@ -57,6 +57,7 @@ import org.orma.project_90.backend.OrmaPublicCatalog
 import org.orma.project_90.backend.OrmaPublicCatalogOrderDraft
 import org.orma.project_90.backend.OrmaPublicCatalogOrderItemDraft
 import org.orma.project_90.backend.OrmaPublicCatalogOrderReceipt
+import org.orma.project_90.backend.OrmaPublicCatalogPaymentMethod
 import org.orma.project_90.backend.OrmaPublicCatalogProduct
 import org.orma.project_90.backend.OrmaProductVariant
 import org.orma.project_90.backend.createOrmaBackendClient
@@ -2418,7 +2419,17 @@ private fun PublicCatalogCheckout(
     val currency = catalog?.workspace?.currency ?: selectedItems.firstOrNull()?.product?.currency.orEmpty()
     val estimatedTotal = if (itemCount == 0) "--" else "${currency.ifBlank { "" }} ${money(total)}".trim()
     val offerSavings = selectedItems.publicCatalogOfferSavingsTotal()
-    val hasUpi = catalog?.paymentMethods?.any { it.type == "upi" && !it.upiId.isNullOrBlank() } == true
+    val upiPaymentMethod = catalog?.paymentMethods?.publicCatalogDefaultUpiPaymentMethod()
+    val selectedPaymentMode = if (paymentMode == "upi" && upiPaymentMethod != null) "upi" else "pay_on_spot"
+    val upiPaymentLink = if (selectedPaymentMode == "upi" && total > 0.0) {
+        upiPaymentMethod?.publicCatalogUpiPaymentValue(
+            amount = money(total),
+            currency = currency.ifBlank { "INR" },
+            note = catalog.workspace.businessName.ifBlank { "ORMA" },
+        )
+    } else {
+        null
+    }
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -2483,23 +2494,13 @@ private fun PublicCatalogCheckout(
                     supportingText = "India is selected by default. Change country if needed.",
                 )
                 OrmaSectionHeader(
-                    text = when {
-                        appointmentFlow -> "Appointment and payment"
-                        serviceFlow -> "Service timing and payment"
-                        else -> "Order timing and payment"
-                    },
+                    text = selectedFlow.publicCatalogTimingPaymentTitle(),
                 )
                 if (!appointmentFlow) {
                     OrmaSegmentedRow(
                         options = fulfillmentOptions,
                         selected = selectedFulfillment,
-                        label = {
-                            when (it) {
-                                "scheduled" -> if (serviceFlow) "Schedule service" else "Schedule pickup"
-                                "standard" -> "Request now"
-                                else -> "Take away"
-                            }
-                        },
+                        label = { it.publicCatalogCheckoutFulfillmentLabel(selectedFlow) },
                         onSelected = onFulfillmentChange,
                     )
                 }
@@ -2518,11 +2519,18 @@ private fun PublicCatalogCheckout(
                     )
                 }
                 OrmaSegmentedRow(
-                    options = if (hasUpi) listOf("pay_on_spot", "upi") else listOf("pay_on_spot"),
-                    selected = if (hasUpi) paymentMode else "pay_on_spot",
-                    label = { if (it == "upi") "UPI" else "Pay on spot" },
+                    options = if (upiPaymentMethod != null) listOf("pay_on_spot", "upi") else listOf("pay_on_spot"),
+                    selected = selectedPaymentMode,
+                    label = { it.publicCatalogCheckoutPaymentLabel(selectedFlow) },
                     onSelected = onPaymentModeChange,
                 )
+                if (upiPaymentMethod != null && upiPaymentLink != null) {
+                    PublicCatalogCheckoutUpiPaymentCard(
+                        method = upiPaymentMethod,
+                        amount = "${currency.ifBlank { "INR" }} ${money(total)}",
+                        paymentLink = upiPaymentLink,
+                    )
+                }
                 OrmaTextField(
                     value = notes,
                     onValueChange = onNotesChange,
@@ -2558,6 +2566,73 @@ private fun PublicCatalogCheckout(
                     textAlign = TextAlign.Center,
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun PublicCatalogCheckoutUpiPaymentCard(
+    method: OrmaPublicCatalogPaymentMethod,
+    amount: String,
+    paymentLink: String,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = OrmaShapes.SmallCard,
+        color = OrmaColors.ScreenBackground,
+        contentColor = OrmaColors.TextPrimary,
+        border = BorderStroke(0.6.dp, OrmaColors.Hairline),
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top,
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(3.dp),
+                ) {
+                    Text(
+                        text = "Pay with UPI",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = OrmaColors.TextPrimary,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = "Scan this QR or open your UPI app, then place the order so the business can verify payment.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = OrmaColors.TextSecondary,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                OrmaBadge(text = "UPI", tone = OrmaStatusTone.Success)
+            }
+            OrmaQrCode(
+                value = paymentLink,
+                modifier = Modifier.size(196.dp),
+            )
+            OrmaKeyValueList(
+                rows = listOf(
+                    "Amount" to amount,
+                    "UPI ID" to method.upiId.orEmpty(),
+                    "Pay to" to (method.payeeName ?: method.label).ifBlank { method.label },
+                ),
+            )
+            OrmaLightButton(
+                text = "Open UPI app",
+                onClick = { openPublicCatalogPaymentLink(paymentLink) },
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
     }
 }
@@ -4856,6 +4931,35 @@ private fun String.publicCatalogFulfillmentLabel(): String =
         else -> replace('_', ' ').replaceFirstChar { it.uppercase() }
     }
 
+private fun String.publicCatalogTimingPaymentTitle(): String =
+    when (publicCatalogNormalizedItemType()) {
+        "appointment" -> "Appointment and payment"
+        "service" -> "Service timing and payment"
+        else -> "Pickup and payment"
+    }
+
+private fun String.publicCatalogCheckoutFulfillmentLabel(selectedFlow: String): String =
+    when (trim().lowercase()) {
+        "scheduled" -> if (selectedFlow.publicCatalogNormalizedItemType() == "service") {
+            "Schedule service"
+        } else {
+            "Schedule pickup"
+        }
+        "standard" -> "Request now"
+        "delivery" -> "Delivery"
+        else -> "Take away"
+    }
+
+private fun String.publicCatalogCheckoutPaymentLabel(selectedFlow: String): String =
+    when (trim().lowercase()) {
+        "upi" -> "Pay by UPI"
+        else -> when (selectedFlow.publicCatalogNormalizedItemType()) {
+            "appointment" -> "Pay at visit"
+            "service" -> "Pay after service"
+            else -> "Pay at pickup"
+        }
+    }
+
 private fun String.publicCatalogSessionStatusTone(): OrmaStatusTone =
     when (trim().lowercase()) {
         "completed" -> OrmaStatusTone.Success
@@ -5215,6 +5319,47 @@ private fun String.publicCatalogFulfillmentOptions(): List<String> =
         "service" -> listOf("standard", "scheduled")
         else -> listOf("take_away", "scheduled")
     }
+
+private fun List<OrmaPublicCatalogPaymentMethod>.publicCatalogDefaultUpiPaymentMethod(): OrmaPublicCatalogPaymentMethod? =
+    firstOrNull { it.publicCatalogUsableUpiPaymentMethod() && it.isDefault }
+        ?: firstOrNull { it.publicCatalogUsableUpiPaymentMethod() }
+
+private fun OrmaPublicCatalogPaymentMethod.publicCatalogUsableUpiPaymentMethod(): Boolean =
+    type.trim().lowercase() == "upi" &&
+        upiId.orEmpty().trim().contains("@")
+
+private fun OrmaPublicCatalogPaymentMethod.publicCatalogUpiPaymentValue(
+    amount: String,
+    currency: String,
+    note: String,
+): String? {
+    val upi = upiId?.trim()?.lowercase()?.takeIf { it.contains("@") } ?: return null
+    val paymentAmount = amount.toDoubleOrNull()?.takeIf { it > 0.0 }?.let(::money) ?: return null
+    val cleanCurrency = currency.trim().uppercase().ifBlank { "INR" }
+    val payee = (payeeName ?: label).trim().ifBlank { "ORMA" }
+    val fullValue = buildString {
+        append("upi://pay?pa=")
+        append(upi.publicCatalogUrlQueryEscaped())
+        append("&pn=")
+        append(payee.publicCatalogUrlQueryEscaped())
+        append("&am=")
+        append(paymentAmount.publicCatalogUrlQueryEscaped())
+        append("&cu=")
+        append(cleanCurrency.publicCatalogUrlQueryEscaped())
+        append("&tn=")
+        append(note.trim().ifBlank { "ORMA" }.take(24).publicCatalogUrlQueryEscaped())
+    }
+    if (fullValue.publicCatalogQrSafe()) return fullValue
+    val compactValue = buildString {
+        append("upi://pay?pa=")
+        append(upi.publicCatalogUrlQueryEscaped())
+        append("&am=")
+        append(paymentAmount.publicCatalogUrlQueryEscaped())
+        append("&cu=")
+        append(cleanCurrency.publicCatalogUrlQueryEscaped())
+    }
+    return compactValue.takeIf { it.publicCatalogQrSafe() }
+}
 
 private fun String.publicCatalogItemTypeLabel(): String =
     when (publicCatalogNormalizedItemType()) {
