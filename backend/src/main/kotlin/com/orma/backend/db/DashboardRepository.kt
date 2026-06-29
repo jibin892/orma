@@ -5317,7 +5317,14 @@ class DashboardRepository(
                 oi.id::text,
                 oi.product_id::text,
                 p.name as product_name,
-                p.image_storage_path,
+                (
+                    select pi.storage_path
+                    from product_images pi
+                    where pi.product_id = oi.product_id
+                        and pi.status = 'active'
+                    order by pi.sort_order asc, pi.created_at desc
+                    limit 1
+                ) as image_storage_path,
                 oi.variant_id::text,
                 coalesce(oi.variant_name, pv.name) as variant_name,
                 oi.description,
