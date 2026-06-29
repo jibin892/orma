@@ -1546,19 +1546,32 @@ private fun PublicCatalogProducts(
     var searchQuery by remember(catalog?.workspace?.id) { mutableStateOf("") }
     var selectedTypeFilter by remember(catalog?.workspace?.id) { mutableStateOf("all") }
     val cleanSearchQuery = searchQuery.trim()
-    val availableTypeFilters = catalog?.products
+    val allDisplayItems = catalog?.products
         .orEmpty()
         .publicCatalogDisplayItems()
-        .map { it.product.itemType.publicCatalogNormalizedItemType() }
-        .distinct()
+    val availableTypeFilters = buildList {
+        addAll(
+            allDisplayItems
+                .map { it.product.itemType.publicCatalogNormalizedItemType() }
+                .distinct(),
+        )
+        if (allDisplayItems.any { it.variant != null }) add("packages")
+    }
     val visibleCatalogItems = visibleProducts.publicCatalogDisplayItems()
     val searchedCatalogItems = visibleCatalogItems.filter { item ->
         val product = item.product
         val productType = product.itemType.publicCatalogNormalizedItemType()
-        (selectedTypeFilter == "all" || selectedTypeFilter == productType) &&
+        val matchesType = when (selectedTypeFilter) {
+            "all" -> true
+            "packages" -> item.variant != null
+            else -> selectedTypeFilter == productType
+        }
+        matchesType &&
             (cleanSearchQuery.isBlank() || item.matchesPublicCatalogSearch(cleanSearchQuery))
     }
-    val searchedProducts = searchedCatalogItems.map { it.product }.distinctBy { it.id }
+    val searchedPackageItems = searchedCatalogItems.filter { it.variant != null }
+    val searchedRegularItems = searchedCatalogItems.filter { it.variant == null }
+    val searchedOfferProducts = searchedRegularItems.map { it.product }.distinctBy { it.id }
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -1598,54 +1611,49 @@ private fun PublicCatalogProducts(
                             selectedCategoryId = selectedCategoryId,
                             onCategoryChange = onCategoryChange,
                         )
-                        PublicCatalogOffersStrip(
-                            products = searchedProducts,
-                            quantities = quantities,
-                            activeCartType = selectedCartItemType,
-                            onApplyOffer = { productId ->
-                                val product = searchedProducts.firstOrNull { it.id == productId }
-                                if (product?.publicCatalogActiveVariants().orEmpty().isNotEmpty()) {
-                                    onVariantPickerOpen(productId)
-                                } else {
-                                    onQuantityChange(productId, (quantities[productId] ?: 0).coerceAtLeast(1))
-                                }
-                            },
-                        )
                         if (searchedCatalogItems.isEmpty()) {
                             PublicCatalogEmpty(
                                 title = "No matches",
                                 body = "Try another search or category.",
                             )
                         } else {
-                          Column ( verticalArrangement = Arrangement.spacedBy(12.dp),){
-                              Column(
-                                  modifier = Modifier.fillMaxWidth(),
-                                  verticalArrangement = Arrangement.spacedBy(2.dp),
-                              ) {
-                                  Text(
-                                      text = "Catalog",
-                                      style = MaterialTheme.typography.titleSmall,
-                                      color = OrmaColors.TextPrimary,
-                                      fontWeight = FontWeight.SemiBold,
-                                      maxLines = 1,
-                                      overflow = TextOverflow.Ellipsis,
-                                  )
-//                                Text(
-//                                    text = "Swipe and apply an offer to this session cart.",
-//                                    style = MaterialTheme.typography.bodyMedium,
-//                                    color = OrmaColors.TextSecondary,
-//                                    maxLines = 1,
-//                                    overflow = TextOverflow.Ellipsis,
-//                                )
-                              }
-                              PublicCatalogProductGrid(
-                                  items = searchedCatalogItems,
-                                  quantities = quantities,
-                                  activeCartType = selectedCartItemType,
-                                  onQuantityChange = onQuantityChange,
-                                  onVariantPickerOpen = onVariantPickerOpen,
-                              )
-                          }
+                            Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
+                                if (searchedPackageItems.isNotEmpty()) {
+                                    PublicCatalogGridSection(
+                                        title = "Packages",
+                                        body = "Combos and session packs ready for checkout.",
+                                        badge = "${searchedPackageItems.size} available",
+                                        items = searchedPackageItems,
+                                        quantities = quantities,
+                                        activeCartType = selectedCartItemType,
+                                        onQuantityChange = onQuantityChange,
+                                        onVariantPickerOpen = onVariantPickerOpen,
+                                    )
+                                }
+                                PublicCatalogOffersStrip(
+                                    products = searchedOfferProducts,
+                                    quantities = quantities,
+                                    activeCartType = selectedCartItemType,
+                                    onApplyOffer = { productId ->
+                                        val product = searchedOfferProducts.firstOrNull { it.id == productId }
+                                        if (product?.publicCatalogActiveVariants().orEmpty().isNotEmpty()) {
+                                            onVariantPickerOpen(productId)
+                                        } else {
+                                            onQuantityChange(productId, (quantities[productId] ?: 0).coerceAtLeast(1))
+                                        }
+                                    },
+                                )
+                                if (searchedRegularItems.isNotEmpty()) {
+                                    PublicCatalogGridSection(
+                                        title = "Catalog",
+                                        items = searchedRegularItems,
+                                        quantities = quantities,
+                                        activeCartType = selectedCartItemType,
+                                        onQuantityChange = onQuantityChange,
+                                        onVariantPickerOpen = onVariantPickerOpen,
+                                    )
+                                }
+                            }
                         }
                     })
             }
@@ -1707,7 +1715,7 @@ private fun PublicCatalogTypeFilter(
     ) {
         items.forEach { type ->
             val selected = selectedType == type
-            val locked = activeCartType != null && type != "all" && type != activeCartType
+            val locked = activeCartType != null && type != "all" && type != "packages" && type != activeCartType
             Surface(
                 modifier = Modifier.clickable { onTypeChange(type) },
                 shape = OrmaShapes.Capsule,
@@ -1722,7 +1730,11 @@ private fun PublicCatalogTypeFilter(
                 shadowElevation = 0.dp,
             ) {
                 Text(
-                    text = if (type == "all") "All" else type.publicCatalogItemTypeLabel(),
+                    text = when (type) {
+                        "all" -> "All"
+                        "packages" -> "Packages"
+                        else -> type.publicCatalogItemTypeLabel()
+                    },
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
                     style = MaterialTheme.typography.labelMedium,
                     color = when {
@@ -1921,6 +1933,62 @@ private fun PublicCatalogOfferCard(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun PublicCatalogGridSection(
+    title: String,
+    items: List<PublicCatalogDisplayItem>,
+    quantities: Map<String, Int>,
+    activeCartType: String?,
+    onQuantityChange: (String, Int) -> Unit,
+    onVariantPickerOpen: (String) -> Unit,
+    body: String? = null,
+    badge: String? = null,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = OrmaColors.TextPrimary,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                body?.takeIf { it.isNotBlank() }?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = OrmaColors.TextSecondary,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            badge?.takeIf { it.isNotBlank() }?.let {
+                OrmaBadge(text = it.uppercase(), tone = OrmaStatusTone.Info)
+            }
+        }
+        PublicCatalogProductGrid(
+            items = items,
+            quantities = quantities,
+            activeCartType = activeCartType,
+            onQuantityChange = onQuantityChange,
+            onVariantPickerOpen = onVariantPickerOpen,
+        )
     }
 }
 
