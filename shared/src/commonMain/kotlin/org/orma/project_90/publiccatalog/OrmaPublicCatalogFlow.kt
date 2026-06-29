@@ -832,7 +832,7 @@ private fun PublicCatalogMobile(
             PublicCatalogVariantPickerSheet(
                 compact = true,
                 product = product,
-                variantQuantities = product.publicCatalogActiveVariants().associate { variant ->
+                variantQuantities = product.publicCatalogSelectableOptionVariants().associate { variant ->
                     variant.id to (quantities[product.publicCatalogCartKey(variant.id)] ?: 0)
                 },
                 activeCartType = selectedCartItemType,
@@ -1106,7 +1106,7 @@ private fun PublicCatalogWide(
             PublicCatalogVariantPickerSheet(
                 compact = false,
                 product = product,
-                variantQuantities = product.publicCatalogActiveVariants().associate { variant ->
+                variantQuantities = product.publicCatalogSelectableOptionVariants().associate { variant ->
                     variant.id to (quantities[product.publicCatalogCartKey(variant.id)] ?: 0)
                 },
                 activeCartType = selectedCartItemType,
@@ -1953,7 +1953,7 @@ private fun PublicCatalogProducts(
                                         activeCartType = selectedCartItemType,
                                         onApplyOffer = { productId ->
                                             val product = searchedOfferProducts.firstOrNull { it.id == productId }
-                                            if (product?.publicCatalogActiveVariants().orEmpty().isNotEmpty()) {
+                                            if (product?.publicCatalogSelectableOptionVariants().orEmpty().isNotEmpty()) {
                                                 onVariantPickerOpen(productId)
                                             } else {
                                                 onQuantityChange(productId, (quantities[productId] ?: 0).coerceAtLeast(1))
@@ -2342,7 +2342,7 @@ private fun PublicCatalogProductGrid(
                             item = item,
                             quantity = quantities[itemKey] ?: 0,
                             variantQuantities = if (item.variant == null) {
-                                product.variants.associate { variant ->
+                                product.publicCatalogSelectableOptionVariants().associate { variant ->
                                     variant.id to (quantities[product.publicCatalogCartKey(variant.id)] ?: 0)
                                 }
                             } else {
@@ -3658,7 +3658,7 @@ private fun PublicCatalogProductTile(
     val product = item.product
     val displayVariant = item.variant
     val standalonePackage = displayVariant != null
-    val activeVariants = if (standalonePackage) emptyList() else product.publicCatalogActiveVariants()
+    val activeVariants = if (standalonePackage) emptyList() else product.publicCatalogSelectableOptionVariants()
     val hasVariants = activeVariants.isNotEmpty()
     val selectedVariantCount = variantQuantities.values.sum()
     val selected = quantity > 0 || selectedVariantCount > 0
@@ -3882,7 +3882,7 @@ private fun PublicCatalogVariantPickerSheet(
     onVariantQuantityChange: (String, Int) -> Unit,
 ) {
     val sheetScrollState = rememberScrollState()
-    val activeVariants = product.publicCatalogActiveVariants()
+    val activeVariants = product.publicCatalogSelectableOptionVariants()
     val productType = product.itemType.publicCatalogNormalizedItemType()
     val selectedCount = variantQuantities.values.sum()
     val lockedByType = activeCartType != null && activeCartType != productType && selectedCount == 0
@@ -5342,6 +5342,9 @@ private fun OrmaProductVariant.publicCatalogComponentSummary(): String? {
 
 private fun OrmaPublicCatalogProduct.publicCatalogActiveVariants(): List<OrmaProductVariant> =
     variants.filter { it.status.trim().lowercase() == "active" }
+
+private fun OrmaPublicCatalogProduct.publicCatalogSelectableOptionVariants(): List<OrmaProductVariant> =
+    publicCatalogActiveVariants().filterNot { it.publicCatalogIsPackageVariant(itemType) }
 
 private fun String.publicCatalogNormalizedItemType(): String =
     when (trim().lowercase()) {
