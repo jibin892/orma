@@ -197,7 +197,7 @@ fun OrmaPublicCatalogFlow(
         customerSession = session
         customerAuthError = null
         customerAuthMessage = null
-        session.displayName?.takeIf { it.isNotBlank() }?.let { name ->
+        session.publicCatalogCustomerNameFallback().takeIf { it.isNotBlank() }?.let { name ->
             if (customerName.isBlank()) customerName = name
         }
         session.phoneNumber?.takeIf { it.isNotBlank() }?.let { phone ->
@@ -354,6 +354,8 @@ fun OrmaPublicCatalogFlow(
         val selectedFlow = selectedItems.catalogOrderFlow()
         val appointmentRequired = selectedFlow == "appointment"
         val fulfillmentOptions = selectedFlow.publicCatalogFulfillmentOptions()
+        val effectiveCustomerName = customerName.trim()
+            .ifBlank { customerSession?.publicCatalogCustomerNameFallback().orEmpty() }
         val effectiveFulfillmentType = when {
             appointmentRequired -> "booking"
             fulfillmentType in fulfillmentOptions -> fulfillmentType
@@ -363,7 +365,7 @@ fun OrmaPublicCatalogFlow(
         val submitEnabled = !submitting &&
             selectedItems.isNotEmpty() &&
             !mixedSelection &&
-            customerName.trim().length >= 2 &&
+            effectiveCustomerName.length >= 2 &&
             isOrmaInternationalPhoneValid(phoneNumber) &&
             scheduledReady
 
@@ -372,7 +374,7 @@ fun OrmaPublicCatalogFlow(
                 error = when {
                     selectedItems.isEmpty() -> "Select at least one item before continuing."
                     mixedSelection -> "Keep one checkout type at a time. Clear the cart before mixing products, services, and appointments."
-                    customerName.trim().length < 2 -> "Enter your name to submit this request."
+                    effectiveCustomerName.length < 2 -> "Enter your name to submit this request."
                     (appointmentRequired || effectiveFulfillmentType == "scheduled") && scheduledAt.trim().length < 4 -> "Choose the preferred date or time for this booking."
                     else -> "Enter a valid phone number with country code so the business can contact you."
                 }
@@ -383,7 +385,7 @@ fun OrmaPublicCatalogFlow(
                 error = null
                 val draft = OrmaPublicCatalogOrderDraft(
                     clientRequestId = checkoutRequestId,
-                    customerName = customerName.trim(),
+                    customerName = effectiveCustomerName,
                     phoneNumber = phoneNumber.trim(),
                     customerEmail = customerSession?.email.orEmpty(),
                     notes = notes.trim(),
@@ -4949,6 +4951,20 @@ private fun OrmaAuthSession.publicCatalogAccountLabel(): String =
         phoneNumber?.takeIf { it.isNotBlank() },
     ).firstOrNull()
         ?: "Customer account"
+
+private fun OrmaAuthSession.publicCatalogCustomerNameFallback(): String =
+    listOfNotNull(
+        displayName?.trim()?.takeIf { it.length >= 2 },
+        email
+            ?.substringBefore("@")
+            ?.replace('.', ' ')
+            ?.replace('_', ' ')
+            ?.replace('-', ' ')
+            ?.trim()
+            ?.takeIf { it.length >= 2 }
+            ?.replaceFirstChar { it.uppercase() },
+        phoneNumber?.trim()?.takeIf { it.length >= 2 },
+    ).firstOrNull().orEmpty()
 
 private fun OrmaOrder.publicCatalogHistorySummary(): String {
     val names = items.mapNotNull { item ->
