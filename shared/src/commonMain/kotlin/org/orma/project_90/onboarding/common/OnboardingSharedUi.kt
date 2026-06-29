@@ -19627,6 +19627,10 @@ private fun DashboardProductRecordsSurface(
     val selectedItemType = state.selectedDashboardItemTypeFilter()
     val activeItemType = state.activeDashboardItemType()
     val productPagination = state.dashboard.productPagination
+    val selectedCategoryId = state.dashboard.filtersForScope(DashboardFilterScopeProducts).categoryId.trim()
+    val selectedCategory = state.dashboard.categories.firstOrNull { it.id == selectedCategoryId }
+    val categoryOptions = dashboardCatalogCategoryFilterOptions(state, selectedCategory)
+    val showCategoryFilter = categoryOptions.isNotEmpty() || selectedCategoryId.isNotBlank()
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = OrmaShapes.SmallCard,
@@ -19645,6 +19649,18 @@ private fun DashboardProductRecordsSurface(
                 body = "Manage prices, stock, images, categories, and selling readiness from one catalog table.",
                 badgeText = dashboardLoadingAwareShownBadge(state.dashboard.loading, products.size, productPagination),
             )
+            if (showCategoryFilter) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    DashboardCatalogCategoryFilter(
+                        state = state,
+                        actions = actions,
+                        modifier = Modifier.widthIn(min = 260.dp, max = 360.dp),
+                    )
+                }
+            }
             if (products.isEmpty()) {
                 if (state.dashboard.loading) {
                     DashboardRecordRowsSkeleton(rowCount = 5, columns = 4, showAvatar = true)
