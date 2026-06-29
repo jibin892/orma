@@ -936,6 +936,7 @@ data class OrderItemResponse(
     val id: String,
     val productId: String? = null,
     val productName: String? = null,
+    val imageUrl: String? = null,
     val variantId: String? = null,
     val variantName: String? = null,
     val description: String,

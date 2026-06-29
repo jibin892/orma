@@ -88,6 +88,7 @@ import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
@@ -102,8 +103,11 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.Velocity
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import androidx.compose.foundation.verticalScroll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -3454,15 +3458,17 @@ private fun DashboardCatalogCategoryFilter(
     val selectedCategory = state.dashboard.categories.firstOrNull { it.id == selectedCategoryId }
     val categoryOptions = dashboardCatalogCategoryFilterOptions(state, selectedCategory)
     var expanded by remember { mutableStateOf(false) }
-    Column(
-        modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
+    var anchorWidthPx by remember { mutableStateOf(0) }
+    val density = LocalDensity.current
+    Box(modifier = modifier.fillMaxWidth()) {
         Surface(
             onClick = { expanded = !expanded },
             modifier = Modifier
                 .fillMaxWidth()
-                .height(52.dp),
+                .height(52.dp)
+                .onGloballyPositioned { coordinates ->
+                    anchorWidthPx = coordinates.size.width
+                },
             shape = OrmaShapes.Field,
             color = OrmaColors.CellBackground,
             contentColor = OrmaColors.TextPrimary,
@@ -3498,50 +3504,58 @@ private fun DashboardCatalogCategoryFilter(
             }
         }
         if (expanded) {
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 260.dp),
-                shape = OrmaShapes.StandardCell,
-                color = OrmaColors.CardBackground,
-                contentColor = OrmaColors.TextPrimary,
-                border = BorderStroke(0.6.dp, OrmaColors.Hairline),
-                tonalElevation = 0.dp,
-                shadowElevation = OrmaElevation.Subtle,
+            Popup(
+                alignment = Alignment.TopStart,
+                offset = IntOffset(0, with(density) { 58.dp.roundToPx() }),
+                onDismissRequest = { expanded = false },
+                properties = PopupProperties(focusable = true),
             ) {
-                Column(
+                val menuWidth = if (anchorWidthPx > 0) with(density) { anchorWidthPx.toDp() } else 280.dp
+                Surface(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .verticalScroll(rememberScrollState())
-                        .padding(vertical = 6.dp),
+                        .width(menuWidth)
+                        .heightIn(max = 260.dp),
+                    shape = OrmaShapes.StandardCell,
+                    color = OrmaColors.CardBackground,
+                    contentColor = OrmaColors.TextPrimary,
+                    border = BorderStroke(0.6.dp, OrmaColors.Hairline),
+                    tonalElevation = 0.dp,
+                    shadowElevation = OrmaElevation.Subtle,
                 ) {
-                    DashboardCatalogCategoryMenuRow(
-                        text = "All categories",
-                        selected = selectedCategoryId.isBlank(),
-                        onClick = {
-                            updateDashboardProductCategoryFilter(actions, DashboardFilterScopeProducts, "")
-                            expanded = false
-                        },
-                    )
-                    categoryOptions.forEach { category ->
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState())
+                            .padding(vertical = 6.dp),
+                    ) {
                         DashboardCatalogCategoryMenuRow(
-                            text = category.categoryOptionLabel(),
-                            selected = selectedCategoryId == category.id,
+                            text = "All categories",
+                            selected = selectedCategoryId.isBlank(),
                             onClick = {
-                                updateDashboardProductCategoryFilter(actions, DashboardFilterScopeProducts, category.id)
+                                updateDashboardProductCategoryFilter(actions, DashboardFilterScopeProducts, "")
                                 expanded = false
                             },
                         )
-                    }
-                    if (categoryOptions.isEmpty()) {
-                        Text(
-                            text = "No saved categories",
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = OrmaColors.TextSecondary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
+                        categoryOptions.forEach { category ->
+                            DashboardCatalogCategoryMenuRow(
+                                text = category.categoryOptionLabel(),
+                                selected = selectedCategoryId == category.id,
+                                onClick = {
+                                    updateDashboardProductCategoryFilter(actions, DashboardFilterScopeProducts, category.id)
+                                    expanded = false
+                                },
+                            )
+                        }
+                        if (categoryOptions.isEmpty()) {
+                            Text(
+                                text = "No saved categories",
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = OrmaColors.TextSecondary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
                     }
                 }
             }
@@ -24538,6 +24552,7 @@ private fun BookingLineItemRow(
     item: OrmaOrderItem,
     currency: String,
 ) {
+    val imageUrl = item.imageUrl?.takeIf { it.isNotBlank() }
     val quantityPriceText = "${orderQuantityText(item.quantity.toDoubleOrNull().orZero())} x ${dashboardMoney(item.unitPrice, currency)} · Tax ${item.taxRate.ifBlank { "0" }}%"
     val secondaryText = listOfNotNull(
         item.bookingLineItemContext(),
@@ -24550,13 +24565,31 @@ private fun BookingLineItemRow(
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        OrmaDashboardIconBubble(modifier = Modifier.size(38.dp)) {
-            Text(
-                text = (index + 1).toString(),
-                style = MaterialTheme.typography.labelMedium,
-                color = OrmaColors.TextPrimary,
-                textAlign = TextAlign.Center,
-            )
+        if (imageUrl != null) {
+            Surface(
+                modifier = Modifier.size(48.dp),
+                shape = OrmaShapes.SmallCard,
+                color = OrmaColors.CellBackground,
+                contentColor = OrmaColors.TextPrimary,
+                border = BorderStroke(0.6.dp, OrmaColors.Hairline),
+                tonalElevation = 0.dp,
+                shadowElevation = 0.dp,
+            ) {
+                OrmaRemoteImage(
+                    url = imageUrl,
+                    contentDescription = item.bookingLineItemTitle(),
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+        } else {
+            OrmaDashboardIconBubble(modifier = Modifier.size(38.dp)) {
+                Text(
+                    text = (index + 1).toString(),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = OrmaColors.TextPrimary,
+                    textAlign = TextAlign.Center,
+                )
+            }
         }
         Column(
             modifier = Modifier.weight(1f),
