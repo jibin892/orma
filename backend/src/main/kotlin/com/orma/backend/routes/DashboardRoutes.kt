@@ -79,7 +79,7 @@ fun Route.dashboardRoutes(
         val orders = repository.publicCatalogCustomerOrders(
             firebaseUser = firebaseUser,
             workspaceId = workspaceId,
-            filters = call.dashboardFilters().copy(limit = 20),
+            filters = call.dashboardFilters().copy(limit = 100),
         ) ?: return@get call.publicCatalogNotFound()
         call.respond(OrderListResponse(orders.items, orders.pagination))
     }

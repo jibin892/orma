@@ -161,6 +161,7 @@ enum class OrmaFlatIconKind {
     Upload,
     Print,
     Category,
+    Profile,
     Back,
 }
 
@@ -455,6 +456,19 @@ private fun DrawScope.drawOrmaFlatIcon(
                     style = Stroke(width = strokeWidth * 0.72f),
                 )
             }
+        }
+        OrmaFlatIconKind.Profile -> {
+            drawCircle(
+                color = color,
+                radius = unit * 0.15f,
+                center = Offset(width * 0.50f, height * 0.36f),
+            )
+            drawRoundRect(
+                color = color,
+                topLeft = Offset(width * 0.22f, height * 0.58f),
+                size = Size(width * 0.56f, height * 0.24f),
+                cornerRadius = CornerRadius(unit * 0.17f, unit * 0.17f),
+            )
         }
         OrmaFlatIconKind.Back -> {
             drawLine(color, Offset(width * 0.72f, height * 0.50f), Offset(width * 0.26f, height * 0.50f), strokeWidth, StrokeCap.Round)

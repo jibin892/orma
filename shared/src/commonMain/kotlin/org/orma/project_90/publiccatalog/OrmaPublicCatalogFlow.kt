@@ -63,6 +63,8 @@ import org.orma.project_90.designsystem.OrmaBadge
 import org.orma.project_90.designsystem.OrmaBrandMark
 import org.orma.project_90.designsystem.OrmaCalendarDateTimeField
 import org.orma.project_90.designsystem.OrmaColors
+import org.orma.project_90.designsystem.OrmaFlatIcon
+import org.orma.project_90.designsystem.OrmaFlatIconKind
 import org.orma.project_90.designsystem.OrmaFullButton
 import org.orma.project_90.designsystem.OrmaKeyValueList
 import org.orma.project_90.designsystem.OrmaLightButton
@@ -553,6 +555,10 @@ private fun PublicCatalogMobile(
                 compact = true,
             )
             PublicCatalogProductsCard {
+                PublicCatalogCustomerAccountSummary(
+                    state = customerAccountState,
+                    actions = customerAccountActions,
+                )
                 PublicCatalogProducts(
                     catalog = catalog,
                     loading = loading,
@@ -779,6 +785,10 @@ private fun PublicCatalogWide(
                     compact = false,
                 )
                 PublicCatalogProductsCard {
+                    PublicCatalogCustomerAccountSummary(
+                        state = customerAccountState,
+                        actions = customerAccountActions,
+                    )
                     PublicCatalogProducts(
                         catalog = catalog,
                         loading = loading,
@@ -2508,6 +2518,108 @@ private fun PublicCatalogTrustStrip(
 }
 
 @Composable
+private fun PublicCatalogCustomerAccountSummary(
+    state: PublicCatalogCustomerAccountState,
+    actions: PublicCatalogCustomerAccountActions,
+) {
+    val session = state.session ?: return
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = OrmaShapes.StandardCell,
+        color = OrmaColors.Accent.copy(alpha = 0.05f),
+        contentColor = OrmaColors.TextPrimary,
+        border = BorderStroke(0.8.dp, OrmaColors.Accent.copy(alpha = 0.12f)),
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                PublicCatalogProfileAvatar()
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Text(
+                        text = "Your profile",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = OrmaColors.TextPrimary,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = session.publicCatalogAccountLabel(),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = OrmaColors.TextSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                OrmaBadge(text = "SIGNED IN", tone = OrmaStatusTone.Success)
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OrmaLightButton(
+                    text = if (state.ordersLoading) "Loading..." else "Refresh orders",
+                    onClick = actions.onRefreshOrders,
+                    modifier = Modifier.weight(1f),
+                    enabled = !state.ordersLoading && !state.authBusy,
+                )
+                OrmaLightButton(
+                    text = "Sign out",
+                    onClick = actions.onLogout,
+                    modifier = Modifier.weight(1f),
+                    enabled = !state.authBusy,
+                )
+            }
+            PublicCatalogCustomerOrderHistory(
+                orders = state.orders,
+                loading = state.ordersLoading,
+            )
+            state.error?.takeIf { it.isNotBlank() }?.let { message ->
+                PublicCatalogMessageCard(
+                    title = "Order history unavailable",
+                    body = message,
+                    error = true,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PublicCatalogProfileAvatar() {
+    Surface(
+        modifier = Modifier.size(44.dp),
+        shape = OrmaShapes.Capsule,
+        color = OrmaColors.Accent,
+        contentColor = OrmaColors.OnAccent,
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
+    ) {
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center,
+        ) {
+            OrmaFlatIcon(
+                kind = OrmaFlatIconKind.Profile,
+                modifier = Modifier.size(24.dp),
+                color = OrmaColors.OnAccent,
+            )
+        }
+    }
+}
+
+@Composable
 private fun PublicCatalogCustomerAccountPanel(
     state: PublicCatalogCustomerAccountState,
     actions: PublicCatalogCustomerAccountActions,
@@ -2578,6 +2690,7 @@ private fun PublicCatalogCustomerAccountPanel(
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
+                    PublicCatalogProfileAvatar()
                     Column(
                         modifier = Modifier.weight(1f),
                         verticalArrangement = Arrangement.spacedBy(3.dp),
@@ -2598,7 +2711,7 @@ private fun PublicCatalogCustomerAccountPanel(
                             overflow = TextOverflow.Ellipsis,
                         )
                     }
-                    OrmaBadge(text = "ACCOUNT", tone = OrmaStatusTone.Success)
+                    OrmaBadge(text = "SIGNED IN", tone = OrmaStatusTone.Success)
                 }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -2648,14 +2761,24 @@ private fun PublicCatalogCustomerOrderHistory(
     loading: Boolean,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(
-            text = "Previous requests",
-            style = MaterialTheme.typography.labelLarge,
-            color = OrmaColors.TextPrimary,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "Your orders",
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.labelLarge,
+                color = OrmaColors.TextPrimary,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (!loading && orders.isNotEmpty()) {
+                OrmaBadge(text = "${orders.size} shown", tone = OrmaStatusTone.Info)
+            }
+        }
         when {
             loading -> {
                 repeat(2) {
@@ -2668,13 +2791,13 @@ private fun PublicCatalogCustomerOrderHistory(
                 }
             }
             orders.isEmpty() -> Text(
-                text = "No previous requests for this account.",
+                text = "No purchased orders or bookings found for this account.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = OrmaColors.TextSecondary,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
-            else -> orders.take(4).forEach { order ->
+            else -> orders.forEach { order ->
                 PublicCatalogCustomerOrderHistoryRow(order)
             }
         }
@@ -2692,51 +2815,62 @@ private fun PublicCatalogCustomerOrderHistoryRow(order: OrmaOrder) {
         tonalElevation = 0.dp,
         shadowElevation = 0.dp,
     ) {
-        Row(
+        Column(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(2.dp),
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
                     text = order.orderNumber.ifBlank { order.id },
+                    modifier = Modifier.weight(1f),
                     style = MaterialTheme.typography.labelLarge,
                     color = OrmaColors.TextPrimary,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Text(
-                    text = order.publicCatalogHistorySummary(),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = OrmaColors.TextSecondary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+                OrmaBadge(
+                    text = order.publicCatalogStatusLabel().uppercase(),
+                    tone = order.publicCatalogStatusTone(),
                 )
+            }
+            Text(
+                text = order.publicCatalogHistorySummary(),
+                style = MaterialTheme.typography.bodySmall,
+                color = OrmaColors.TextSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Text(
                     text = listOfNotNull(
                         order.orderType.publicCatalogWorkTitle(),
-                        order.publicCatalogStatusLabel(),
                         order.scheduledAt?.takeIf { it.isNotBlank() },
                     ).joinToString(" / "),
+                    modifier = Modifier.weight(1f),
                     style = MaterialTheme.typography.bodySmall,
                     color = OrmaColors.TextSecondary.copy(alpha = 0.74f),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                Text(
+                    text = "${order.currency} ${order.total}",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = OrmaColors.TextPrimary,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.End,
+                )
             }
-            Text(
-                text = "${order.currency} ${order.total}",
-                style = MaterialTheme.typography.labelLarge,
-                color = OrmaColors.TextPrimary,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                textAlign = TextAlign.End,
-            )
         }
     }
 }
@@ -3951,6 +4085,16 @@ private fun OrmaOrder.publicCatalogStatusLabel(): String =
         "completed" -> "Completed"
         "cancelled" -> "Rejected or cancelled"
         else -> status.ifBlank { "Pending" }.replace('_', ' ').replaceFirstChar { it.uppercase() }
+    }
+
+private fun OrmaOrder.publicCatalogStatusTone(): OrmaStatusTone =
+    when (status.trim().lowercase()) {
+        "new", "draft", "pending" -> OrmaStatusTone.Neutral
+        "confirmed" -> OrmaStatusTone.Info
+        "part_paid" -> OrmaStatusTone.Warning
+        "paid", "completed", "fulfilled" -> OrmaStatusTone.Success
+        "cancelled", "canceled", "rejected", "rejected_or_cancelled", "failed" -> OrmaStatusTone.Danger
+        else -> OrmaStatusTone.Neutral
     }
 
 private fun OrmaAuthSession.publicCatalogAccountLabel(): String =
