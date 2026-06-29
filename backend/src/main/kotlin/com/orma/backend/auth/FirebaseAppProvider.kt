@@ -7,6 +7,7 @@ import com.orma.backend.config.AppConfig
 import java.io.FileInputStream
 
 object FirebaseAppProvider {
+    @Synchronized
     fun app(config: AppConfig): FirebaseApp {
         FirebaseApp.getApps().firstOrNull { it.name == AppName }?.let { return it }
 
