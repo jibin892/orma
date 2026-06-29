@@ -1831,35 +1831,65 @@ private fun PublicCatalogProducts(
     val allDisplayItems = catalog?.products
         .orEmpty()
         .publicCatalogDisplayItems()
+    val allRegularItems = allDisplayItems.filter { it.variant == null }
+    val allPackageItems = allDisplayItems.filter { it.variant != null }
+    val allOfferProducts = catalog?.products
+        .orEmpty()
+        .filter { it.offer != null && it.publicCatalogOfferSavings() > 0.0 }
     val availableTypeFilters = buildList {
         addAll(
-            allDisplayItems
+            allRegularItems
                 .map { it.product.itemType.publicCatalogNormalizedItemType() }
                 .distinct(),
         )
-        if (allDisplayItems.any { it.variant != null }) add("packages")
-    }
+        if (allPackageItems.isNotEmpty()) add("packages")
+        if (allOfferProducts.isNotEmpty()) add("offers")
+    }.distinct()
+    val effectiveTypeFilter = selectedTypeFilter.takeIf { it == "all" || it in availableTypeFilters } ?: "all"
     val visibleCatalogItems = visibleProducts.publicCatalogDisplayItems()
-    val searchedCatalogItems = visibleCatalogItems.filter { item ->
+    val visiblePackageItems = visibleCatalogItems.filter { it.variant != null }
+    val visibleRegularItems = visibleCatalogItems.filter { it.variant == null }
+    val searchedRegularItems = visibleRegularItems.filter { item ->
         val product = item.product
         val productType = product.itemType.publicCatalogNormalizedItemType()
-        val matchesType = when (selectedTypeFilter) {
+        val matchesType = when (effectiveTypeFilter) {
             "all" -> true
-            "packages" -> item.variant != null
-            else -> selectedTypeFilter == productType
+            "packages", "offers" -> false
+            else -> effectiveTypeFilter == productType
         }
         matchesType &&
             (cleanSearchQuery.isBlank() || item.matchesPublicCatalogSearch(cleanSearchQuery))
     }
-    val searchedPackageItems = searchedCatalogItems.filter { it.variant != null }
-    val searchedRegularItems = searchedCatalogItems.filter { it.variant == null }
-    val searchedOfferProducts = searchedRegularItems.map { it.product }.distinctBy { it.id }
+    val searchedPackageItems = visiblePackageItems.filter { item ->
+        (effectiveTypeFilter == "all" || effectiveTypeFilter == "packages") &&
+            (cleanSearchQuery.isBlank() || item.matchesPublicCatalogSearch(cleanSearchQuery))
+    }
+    val searchedOfferProducts = if (effectiveTypeFilter == "offers") {
+        visibleProducts
+            .filter { it.offer != null && it.publicCatalogOfferSavings() > 0.0 }
+            .filter { product ->
+                cleanSearchQuery.isBlank() || PublicCatalogDisplayItem(product = product).matchesPublicCatalogSearch(cleanSearchQuery)
+            }
+            .distinctBy { it.id }
+    } else {
+        emptyList()
+    }
+    val shownCount = when (effectiveTypeFilter) {
+        "packages" -> searchedPackageItems.size
+        "offers" -> searchedOfferProducts.size
+        else -> searchedRegularItems.size + searchedPackageItems.size
+    }
+    val hasSearchResults = when (effectiveTypeFilter) {
+        "packages" -> searchedPackageItems.isNotEmpty()
+        "offers" -> searchedOfferProducts.isNotEmpty()
+        else -> searchedRegularItems.isNotEmpty() || searchedPackageItems.isNotEmpty()
+    }
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         PublicCatalogProductsHeader(
-            count = searchedCatalogItems.size,
+            count = shownCount,
             activeType = selectedCartItemType,
         )
         when {
@@ -1881,7 +1911,7 @@ private fun PublicCatalogProducts(
                 )
                 PublicCatalogTypeFilter(
                     availableTypes = availableTypeFilters,
-                    selectedType = selectedTypeFilter,
+                    selectedType = effectiveTypeFilter,
                     activeCartType = selectedCartItemType,
                     onTypeChange = { selectedTypeFilter = it },
                 )
@@ -1893,14 +1923,18 @@ private fun PublicCatalogProducts(
                             selectedCategoryId = selectedCategoryId,
                             onCategoryChange = onCategoryChange,
                         )
-                        if (searchedCatalogItems.isEmpty()) {
+                        if (!hasSearchResults) {
                             PublicCatalogEmpty(
-                                title = "No matches",
-                                body = "Try another search or category.",
+                                title = when (effectiveTypeFilter) {
+                                    "packages" -> "No matching packages"
+                                    "offers" -> "No matching offers"
+                                    else -> "No matches"
+                                },
+                                body = "Try another search, tab, or category.",
                             )
                         } else {
                             Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
-                                if (searchedPackageItems.isNotEmpty()) {
+                                if ((effectiveTypeFilter == "all" || effectiveTypeFilter == "packages") && searchedPackageItems.isNotEmpty()) {
                                     PublicCatalogGridSection(
                                         title = "Packages",
                                         body = "Combos and session packs ready for checkout.",
@@ -1912,22 +1946,24 @@ private fun PublicCatalogProducts(
                                         onVariantPickerOpen = onVariantPickerOpen,
                                     )
                                 }
-                                PublicCatalogOffersStrip(
-                                    products = searchedOfferProducts,
-                                    quantities = quantities,
-                                    activeCartType = selectedCartItemType,
-                                    onApplyOffer = { productId ->
-                                        val product = searchedOfferProducts.firstOrNull { it.id == productId }
-                                        if (product?.publicCatalogActiveVariants().orEmpty().isNotEmpty()) {
-                                            onVariantPickerOpen(productId)
-                                        } else {
-                                            onQuantityChange(productId, (quantities[productId] ?: 0).coerceAtLeast(1))
-                                        }
-                                    },
-                                )
-                                if (searchedRegularItems.isNotEmpty()) {
+                                if (effectiveTypeFilter == "offers" && searchedOfferProducts.isNotEmpty()) {
+                                    PublicCatalogOffersStrip(
+                                        products = searchedOfferProducts,
+                                        quantities = quantities,
+                                        activeCartType = selectedCartItemType,
+                                        onApplyOffer = { productId ->
+                                            val product = searchedOfferProducts.firstOrNull { it.id == productId }
+                                            if (product?.publicCatalogActiveVariants().orEmpty().isNotEmpty()) {
+                                                onVariantPickerOpen(productId)
+                                            } else {
+                                                onQuantityChange(productId, (quantities[productId] ?: 0).coerceAtLeast(1))
+                                            }
+                                        },
+                                    )
+                                }
+                                if ((effectiveTypeFilter == "all" || effectiveTypeFilter !in setOf("packages", "offers")) && searchedRegularItems.isNotEmpty()) {
                                     PublicCatalogGridSection(
-                                        title = "Catalog",
+                                        title = effectiveTypeFilter.publicCatalogCatalogSectionTitle(),
                                         items = searchedRegularItems,
                                         quantities = quantities,
                                         activeCartType = selectedCartItemType,
@@ -1997,7 +2033,7 @@ private fun PublicCatalogTypeFilter(
     ) {
         items.forEach { type ->
             val selected = selectedType == type
-            val locked = activeCartType != null && type != "all" && type != "packages" && type != activeCartType
+            val locked = activeCartType != null && type !in setOf("all", "packages", "offers") && type != activeCartType
             Surface(
                 modifier = Modifier.clickable { onTypeChange(type) },
                 shape = OrmaShapes.Capsule,
@@ -2015,6 +2051,7 @@ private fun PublicCatalogTypeFilter(
                     text = when (type) {
                         "all" -> "All"
                         "packages" -> "Packages"
+                        "offers" -> "Offers"
                         else -> type.publicCatalogItemTypeLabel()
                     },
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
@@ -2066,7 +2103,7 @@ private fun PublicCatalogOffersStrip(
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    text = "Swipe and apply an offer to this session cart.",
+                    text = "Swipe and apply an offer to this cart.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = OrmaColors.TextSecondary,
                     maxLines = 1,
@@ -5366,6 +5403,17 @@ private fun String.publicCatalogItemTypeLabel(): String =
         "service" -> "Service"
         "appointment" -> "Appointment"
         else -> "Product"
+    }
+
+private fun String.publicCatalogCatalogSectionTitle(): String =
+    when (trim().lowercase()) {
+        "all" -> "Catalog"
+        else -> when (publicCatalogNormalizedItemType()) {
+            "service" -> "Services"
+            "appointment" -> "Appointments"
+            "product" -> "Products"
+            else -> "Catalog"
+        }
     }
 
 private fun OrmaPublicCatalogProduct.publicCatalogMaxSelectableQuantity(variant: OrmaProductVariant? = null): Int =
