@@ -114,6 +114,7 @@ fun OrmaPublicCatalogFlow(
     var loginPhoneNumber by remember(workspaceId) { mutableStateOf("") }
     var loginOtp by remember(workspaceId) { mutableStateOf("") }
     var loginOtpSent by remember(workspaceId) { mutableStateOf(false) }
+    var customerProfileOpen by remember(workspaceId) { mutableStateOf(false) }
 
     fun updateQuantity(cartKey: String, quantity: Int) {
         val productId = cartKey.publicCatalogCartProductId()
@@ -368,6 +369,7 @@ fun OrmaPublicCatalogFlow(
                     authGateway.clearStoredSession()
                     customerSession = null
                     customerOrders = emptyList()
+                    customerProfileOpen = false
                     customerAuthError = null
                     customerAuthMessage = "Guest checkout is active."
                     loginOtp = ""
@@ -394,6 +396,7 @@ fun OrmaPublicCatalogFlow(
                 scheduledAt = scheduledAt,
                 paymentMode = paymentMode,
                 customerAccountState = customerAccountState,
+                customerProfileOpen = customerProfileOpen,
                 selectedItems = selectedItems,
                 selectedFlow = selectedFlow,
                 total = total,
@@ -427,6 +430,13 @@ fun OrmaPublicCatalogFlow(
                 onScheduledAtChange = { scheduledAt = it },
                 onPaymentModeChange = { paymentMode = it },
                 customerAccountActions = customerAccountActions,
+                onCustomerProfileOpen = {
+                    customerSession?.let { session ->
+                        customerProfileOpen = true
+                        scope.launch { loadCustomerOrderHistory(session) }
+                    }
+                },
+                onCustomerProfileClose = { customerProfileOpen = false },
                 onSubmit = ::submit,
             )
             OrmaWindowClass.Wide -> PublicCatalogWide(
@@ -445,6 +455,7 @@ fun OrmaPublicCatalogFlow(
                 scheduledAt = scheduledAt,
                 paymentMode = paymentMode,
                 customerAccountState = customerAccountState,
+                customerProfileOpen = customerProfileOpen,
                 selectedItems = selectedItems,
                 selectedFlow = selectedFlow,
                 total = total,
@@ -478,6 +489,13 @@ fun OrmaPublicCatalogFlow(
                 onScheduledAtChange = { scheduledAt = it },
                 onPaymentModeChange = { paymentMode = it },
                 customerAccountActions = customerAccountActions,
+                onCustomerProfileOpen = {
+                    customerSession?.let { session ->
+                        customerProfileOpen = true
+                        scope.launch { loadCustomerOrderHistory(session) }
+                    }
+                },
+                onCustomerProfileClose = { customerProfileOpen = false },
                 onSubmit = ::submit,
             )
         }
@@ -501,6 +519,7 @@ private fun PublicCatalogMobile(
     scheduledAt: String,
     paymentMode: String,
     customerAccountState: PublicCatalogCustomerAccountState,
+    customerProfileOpen: Boolean,
     selectedItems: List<PublicCatalogSelection>,
     selectedFlow: String,
     total: Double,
@@ -519,6 +538,8 @@ private fun PublicCatalogMobile(
     onScheduledAtChange: (String) -> Unit,
     onPaymentModeChange: (String) -> Unit,
     customerAccountActions: PublicCatalogCustomerAccountActions,
+    onCustomerProfileOpen: () -> Unit,
+    onCustomerProfileClose: () -> Unit,
     onSubmit: () -> Unit,
 ) {
     val scrollState = rememberScrollState()
@@ -531,6 +552,23 @@ private fun PublicCatalogMobile(
         if (selectedItems.isEmpty() && receipt == null) {
             checkoutOpen = false
         }
+    }
+
+    if (customerProfileOpen && customerAccountState.session != null) {
+        PublicCatalogCustomerProfileScreen(
+            state = customerAccountState,
+            actions = customerAccountActions,
+            compact = true,
+            onBack = onCustomerProfileClose,
+            modifier = Modifier
+                .widthIn(max = 430.dp)
+                .fillMaxSize()
+                .statusBarsPadding()
+                .navigationBarsPadding()
+                .imePadding()
+                .padding(horizontal = 16.dp, vertical = 16.dp),
+        )
+        return
     }
 
     Box(
@@ -553,12 +591,10 @@ private fun PublicCatalogMobile(
                 catalog = catalog,
                 loading = loading,
                 compact = true,
+                customerAccountState = customerAccountState,
+                onProfileClick = onCustomerProfileOpen,
             )
             PublicCatalogProductsCard {
-                PublicCatalogCustomerAccountSummary(
-                    state = customerAccountState,
-                    actions = customerAccountActions,
-                )
                 PublicCatalogProducts(
                     catalog = catalog,
                     loading = loading,
@@ -724,6 +760,7 @@ private fun PublicCatalogWide(
     scheduledAt: String,
     paymentMode: String,
     customerAccountState: PublicCatalogCustomerAccountState,
+    customerProfileOpen: Boolean,
     selectedItems: List<PublicCatalogSelection>,
     selectedFlow: String,
     total: Double,
@@ -742,6 +779,8 @@ private fun PublicCatalogWide(
     onScheduledAtChange: (String) -> Unit,
     onPaymentModeChange: (String) -> Unit,
     customerAccountActions: PublicCatalogCustomerAccountActions,
+    onCustomerProfileOpen: () -> Unit,
+    onCustomerProfileClose: () -> Unit,
     onSubmit: () -> Unit,
 ) {
     val wideScrollState = rememberScrollState()
@@ -754,6 +793,28 @@ private fun PublicCatalogWide(
         if (selectedItems.isEmpty() && receipt == null) {
             checkoutOpen = false
         }
+    }
+
+    if (customerProfileOpen && customerAccountState.session != null) {
+        BoxWithConstraints(
+            modifier = Modifier
+                .fillMaxSize()
+                .safeContentPadding()
+                .padding(28.dp),
+            contentAlignment = Alignment.TopCenter,
+        ) {
+            PublicCatalogCustomerProfileScreen(
+                state = customerAccountState,
+                actions = customerAccountActions,
+                compact = false,
+                onBack = onCustomerProfileClose,
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .fillMaxWidth()
+                    .widthIn(max = 920.dp),
+            )
+        }
+        return
     }
 
     BoxWithConstraints(
@@ -783,12 +844,10 @@ private fun PublicCatalogWide(
                     catalog = catalog,
                     loading = loading,
                     compact = false,
+                    customerAccountState = customerAccountState,
+                    onProfileClick = onCustomerProfileOpen,
                 )
                 PublicCatalogProductsCard {
-                    PublicCatalogCustomerAccountSummary(
-                        state = customerAccountState,
-                        actions = customerAccountActions,
-                    )
                     PublicCatalogProducts(
                         catalog = catalog,
                         loading = loading,
@@ -1045,6 +1104,8 @@ private fun PublicCatalogCheckoutTopBar(
     catalog: OrmaPublicCatalog?,
     loading: Boolean,
     compact: Boolean,
+    customerAccountState: PublicCatalogCustomerAccountState,
+    onProfileClick: () -> Unit,
 ) {
     val businessName = catalog?.workspace?.businessName?.ifBlank { "ORMA checkout" } ?: "ORMA checkout"
     val location = catalog?.workspace?.let {
@@ -1067,13 +1128,25 @@ private fun PublicCatalogCheckoutTopBar(
                     modifier = Modifier.padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    PublicCatalogCheckoutBusinessLine(
-                        businessName = businessName,
-                        location = location,
-                        logoUrl = logoUrl,
-                        loading = loading,
+                    Row(
                         modifier = Modifier.fillMaxWidth(),
-                    )
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        PublicCatalogCheckoutBusinessLine(
+                            businessName = businessName,
+                            location = location,
+                            logoUrl = logoUrl,
+                            loading = loading,
+                            modifier = Modifier.weight(1f),
+                        )
+                        if (customerAccountState.session != null) {
+                            PublicCatalogProfileAvatar(
+                                modifier = Modifier.size(48.dp),
+                                onClick = onProfileClick,
+                            )
+                        }
+                    }
                 }
             } else {
                 Row(
@@ -1088,6 +1161,12 @@ private fun PublicCatalogCheckoutTopBar(
                         loading = loading,
                         modifier = Modifier.weight(1f),
                     )
+                    if (customerAccountState.session != null) {
+                        PublicCatalogProfileAvatar(
+                            modifier = Modifier.size(52.dp),
+                            onClick = onProfileClick,
+                        )
+                    }
                 }
             }
         }
@@ -2518,37 +2597,59 @@ private fun PublicCatalogTrustStrip(
 }
 
 @Composable
-private fun PublicCatalogCustomerAccountSummary(
+private fun PublicCatalogCustomerProfileScreen(
     state: PublicCatalogCustomerAccountState,
     actions: PublicCatalogCustomerAccountActions,
+    compact: Boolean,
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val session = state.session ?: return
+    val scrollState = rememberScrollState()
     Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = OrmaShapes.StandardCell,
-        color = OrmaColors.Accent.copy(alpha = 0.05f),
+        modifier = modifier,
+        shape = OrmaShapes.PremiumCard,
+        color = OrmaColors.CardBackground,
         contentColor = OrmaColors.TextPrimary,
-        border = BorderStroke(0.8.dp, OrmaColors.Accent.copy(alpha = 0.12f)),
+        border = BorderStroke(0.8.dp, OrmaColors.Hairline),
         tonalElevation = 0.dp,
         shadowElevation = 0.dp,
     ) {
         Column(
-            modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(scrollState)
+                .padding(if (compact) 16.dp else 22.dp),
+            verticalArrangement = Arrangement.spacedBy(if (compact) 14.dp else 18.dp),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                PublicCatalogProfileAvatar()
+                OrmaLightButton(
+                    text = "Back",
+                    onClick = onBack,
+                    modifier = Modifier.widthIn(min = 88.dp, max = 112.dp),
+                )
+                Spacer(modifier = Modifier.weight(1f))
+                OrmaBadge(text = "SIGNED IN", tone = OrmaStatusTone.Success)
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                PublicCatalogProfileAvatar(
+                    modifier = Modifier.size(if (compact) 48.dp else 54.dp),
+                )
                 Column(
                     modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                    verticalArrangement = Arrangement.spacedBy(3.dp),
                 ) {
                     Text(
                         text = "Your profile",
-                        style = MaterialTheme.typography.titleSmall,
+                        style = MaterialTheme.typography.titleMedium,
                         color = OrmaColors.TextPrimary,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
@@ -2562,11 +2663,10 @@ private fun PublicCatalogCustomerAccountSummary(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                OrmaBadge(text = "SIGNED IN", tone = OrmaStatusTone.Success)
             }
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 OrmaLightButton(
                     text = if (state.ordersLoading) "Loading..." else "Refresh orders",
@@ -2597,25 +2697,48 @@ private fun PublicCatalogCustomerAccountSummary(
 }
 
 @Composable
-private fun PublicCatalogProfileAvatar() {
-    Surface(
-        modifier = Modifier.size(44.dp),
-        shape = OrmaShapes.Capsule,
-        color = OrmaColors.Accent,
-        contentColor = OrmaColors.OnAccent,
-        tonalElevation = 0.dp,
-        shadowElevation = 0.dp,
+private fun PublicCatalogProfileAvatar(
+    modifier: Modifier = Modifier.size(44.dp),
+    onClick: (() -> Unit)? = null,
+) {
+    val content: @Composable () -> Unit = {
+        PublicCatalogProfileAvatarContent()
+    }
+    if (onClick == null) {
+        Surface(
+            modifier = modifier,
+            shape = OrmaShapes.Capsule,
+            color = OrmaColors.Accent,
+            contentColor = OrmaColors.OnAccent,
+            tonalElevation = 0.dp,
+            shadowElevation = 0.dp,
+            content = content,
+        )
+    } else {
+        Surface(
+            onClick = onClick,
+            modifier = modifier,
+            shape = OrmaShapes.Capsule,
+            color = OrmaColors.Accent,
+            contentColor = OrmaColors.OnAccent,
+            tonalElevation = 0.dp,
+            shadowElevation = 0.dp,
+            content = content,
+        )
+    }
+}
+
+@Composable
+private fun PublicCatalogProfileAvatarContent() {
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center,
     ) {
-        Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center,
-        ) {
-            OrmaFlatIcon(
-                kind = OrmaFlatIconKind.Profile,
-                modifier = Modifier.size(24.dp),
-                color = OrmaColors.OnAccent,
-            )
-        }
+        OrmaFlatIcon(
+            kind = OrmaFlatIconKind.Profile,
+            modifier = Modifier.size(24.dp),
+            color = OrmaColors.OnAccent,
+        )
     }
 }
 
@@ -2713,26 +2836,11 @@ private fun PublicCatalogCustomerAccountPanel(
                     }
                     OrmaBadge(text = "SIGNED IN", tone = OrmaStatusTone.Success)
                 }
-                Row(
+                OrmaLightButton(
+                    text = "Sign out",
+                    onClick = actions.onLogout,
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    OrmaLightButton(
-                        text = if (state.ordersLoading) "Loading..." else "Refresh",
-                        onClick = actions.onRefreshOrders,
-                        modifier = Modifier.weight(1f),
-                        enabled = !state.ordersLoading && !state.authBusy,
-                    )
-                    OrmaLightButton(
-                        text = "Sign out",
-                        onClick = actions.onLogout,
-                        modifier = Modifier.weight(1f),
-                        enabled = !state.authBusy,
-                    )
-                }
-                PublicCatalogCustomerOrderHistory(
-                    orders = state.orders,
-                    loading = state.ordersLoading,
+                    enabled = !state.authBusy,
                 )
             }
             state.message?.takeIf { it.isNotBlank() }?.let { message ->
