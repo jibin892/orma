@@ -10779,14 +10779,58 @@ private fun DashboardSaleHeaderCell(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
-        if (active) {
-            Text(
-                text = if (sortAscending) "^" else "v",
-                style = MaterialTheme.typography.labelSmall,
-                color = OrmaColors.TextPrimary,
-                maxLines = 1,
+        if (sortKey != null) {
+            DashboardSortIndicatorIcon(
+                active = active,
+                ascending = sortAscending,
+                modifier = Modifier.size(width = 12.dp, height = 14.dp),
             )
         }
+    }
+}
+
+@Composable
+private fun DashboardSortIndicatorIcon(
+    active: Boolean,
+    ascending: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val activeColor = OrmaColors.TextPrimary
+    val idleColor = OrmaColors.TextTertiary.copy(alpha = if (active) 0.56f else 0.78f)
+    val upColor = if (active && ascending) activeColor else idleColor
+    val downColor = if (active && !ascending) activeColor else idleColor
+    Canvas(modifier = modifier) {
+        val width = size.width
+        val height = size.height
+        val strokeWidth = size.minDimension * 0.15f
+        drawLine(
+            color = upColor,
+            start = Offset(width * 0.28f, height * 0.38f),
+            end = Offset(width * 0.50f, height * 0.16f),
+            strokeWidth = strokeWidth,
+            cap = StrokeCap.Round,
+        )
+        drawLine(
+            color = upColor,
+            start = Offset(width * 0.72f, height * 0.38f),
+            end = Offset(width * 0.50f, height * 0.16f),
+            strokeWidth = strokeWidth,
+            cap = StrokeCap.Round,
+        )
+        drawLine(
+            color = downColor,
+            start = Offset(width * 0.28f, height * 0.62f),
+            end = Offset(width * 0.50f, height * 0.84f),
+            strokeWidth = strokeWidth,
+            cap = StrokeCap.Round,
+        )
+        drawLine(
+            color = downColor,
+            start = Offset(width * 0.72f, height * 0.62f),
+            end = Offset(width * 0.50f, height * 0.84f),
+            strokeWidth = strokeWidth,
+            cap = StrokeCap.Round,
+        )
     }
 }
 
