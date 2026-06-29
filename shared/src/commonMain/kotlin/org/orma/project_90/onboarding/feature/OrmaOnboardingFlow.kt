@@ -85,6 +85,7 @@ import org.orma.project_90.onboarding.desktop.OrmaOnboardingDesktopUi
 import org.orma.project_90.onboarding.mobile.OrmaOnboardingMobileUi
 import org.orma.project_90.notifications.requestOrmaNotificationPermission
 import org.orma.project_90.notifications.currentOrmaNotificationDeviceToken
+import org.orma.project_90.notifications.OrmaNotificationMessage
 import org.orma.project_90.notifications.observeOrmaNotificationMessages
 import org.orma.project_90.notifications.OrmaNotificationTokenException
 import org.orma.project_90.notifications.showOrmaNativeNotification
@@ -1748,16 +1749,47 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
         }
     }
 
+    fun handleDashboardNotificationMessage(message: OrmaNotificationMessage) {
+        val workspaceId = state.workspaceId
+        val matchesWorkspace = message.workspaceId.isBlank() || message.workspaceId == workspaceId
+        if (message.type != "order_created" || !matchesWorkspace) return
+        val orderId = message.orderId.trim().takeIf { it.isNotBlank() }
+        val orderFilters = state.dashboard.filtersForScope(DashboardFilterScopeOrders).copy(
+            query = "",
+            orderStatus = "all",
+            orderType = "all",
+            datePreset = "",
+            dateFrom = "",
+            dateTo = "",
+            page = 1,
+        )
+        state = state.copy(
+            dashboard = state.dashboard.copy(
+                pendingNotificationOrderId = orderId ?: state.dashboard.pendingNotificationOrderId,
+                filterScope = DashboardFilterScopeOrders,
+                scopedFilters = state.dashboard.scopedFilters + (DashboardFilterScopeOrders to orderFilters),
+                filters = orderFilters,
+                errorTitle = null,
+                errorMessage = null,
+                statusMessage = if (orderId != null) "Opening order from notification..." else "New catalog booking received.",
+            ),
+        )
+        refreshDashboard(if (orderId != null) "Opening order from notification..." else "New catalog booking received.")
+    }
+
+    fun consumeDashboardNotificationOrder(orderId: String) {
+        if (orderId.isBlank() || state.dashboard.pendingNotificationOrderId != orderId) return
+        state = state.copy(
+            dashboard = state.dashboard.copy(pendingNotificationOrderId = null),
+        )
+    }
+
     DisposableEffect(state.step, state.workspaceId) {
         if (state.step != OnboardingStep.Dashboard || state.workspaceId.isBlank()) {
             onDispose { }
         } else {
-            val workspaceId = state.workspaceId
             val observer = observeOrmaNotificationMessages { message ->
-                val matchesWorkspace = message.workspaceId.isBlank() || message.workspaceId == workspaceId
-                if (message.type == "order_created" && matchesWorkspace) {
-                    refreshDashboard("New catalog booking received.")
-                }
+                handleDashboardNotificationMessage(message)
             }
             onDispose { observer.dispose() }
         }
@@ -2553,6 +2585,7 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
         },
         onDashboardBarcodeScan = ::handleDashboardBarcodeScan,
         onDashboardBarcodeScanConsumed = ::clearDashboardBarcodeScan,
+        onDashboardNotificationOrderConsumed = ::consumeDashboardNotificationOrder,
         onDashboardFilterScopeChange = { rawScope ->
             val scope = rawScope.normalizedDashboardFilterScope()
             val filters = state.dashboard.filtersForScope(scope)

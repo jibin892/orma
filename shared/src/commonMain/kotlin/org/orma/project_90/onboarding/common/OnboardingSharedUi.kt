@@ -1836,6 +1836,11 @@ private fun DashboardStage(
             selectedSectionName = DashboardSection.OrdersBookings.name
         }
     }
+    LaunchedEffect(state.dashboard.pendingNotificationOrderId) {
+        if (!state.dashboard.pendingNotificationOrderId.isNullOrBlank() && selectedSection != DashboardSection.OrdersBookings) {
+            selectedSectionName = DashboardSection.OrdersBookings.name
+        }
+    }
 
     val workspaceName = state.workspaceName
         .ifBlank { state.draft.businessName }
@@ -8059,6 +8064,25 @@ private fun DashboardOrdersContent(
         scannedProductSequence = event.sequence
         showOrderBuilderPage = true
         onBarcodeScanConsumed(event.sequence)
+    }
+    LaunchedEffect(state.dashboard.pendingNotificationOrderId, state.dashboard.orders, wide) {
+        val pendingOrderId = state.dashboard.pendingNotificationOrderId?.takeIf { it.isNotBlank() }
+            ?: return@LaunchedEffect
+        if (state.dashboard.orders.none { it.id == pendingOrderId }) return@LaunchedEffect
+        showOrderBuilderPage = false
+        createOrderTypeOverride = null
+        scannedProductId = null
+        scannedProductSequence = 0
+        editOrderId = null
+        partPaymentOrderId = null
+        if (wide) {
+            selectedOrderId = null
+            fullDetailsOrderId = pendingOrderId
+        } else {
+            fullDetailsOrderId = null
+            onMobileSelectedOrderChange?.invoke(pendingOrderId) ?: run { selectedOrderId = pendingOrderId }
+        }
+        actions.onDashboardNotificationOrderConsumed(pendingOrderId)
     }
     val requestOrderStatusChange: (OrmaOrder, String) -> Unit = { order, status ->
         if (status == "part_paid") {
