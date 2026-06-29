@@ -50,6 +50,8 @@ import org.orma.project_90.auth.OrmaAuthSession
 import org.orma.project_90.auth.createOrmaAuthGateway
 import org.orma.project_90.backend.OrmaBackendResult
 import org.orma.project_90.backend.OrmaOrder
+import org.orma.project_90.backend.OrmaOrderItem
+import org.orma.project_90.backend.OrmaOrderSession
 import org.orma.project_90.backend.OrmaPublicCatalog
 import org.orma.project_90.backend.OrmaPublicCatalogOrderDraft
 import org.orma.project_90.backend.OrmaPublicCatalogOrderItemDraft
@@ -115,6 +117,10 @@ fun OrmaPublicCatalogFlow(
     var loginOtp by remember(workspaceId) { mutableStateOf("") }
     var loginOtpSent by remember(workspaceId) { mutableStateOf(false) }
     var customerProfileOpen by remember(workspaceId) { mutableStateOf(false) }
+    var customerOrderDetailReceipt by remember(workspaceId) { mutableStateOf<OrmaPublicCatalogOrderReceipt?>(null) }
+    var customerOrderDetailLoading by remember(workspaceId) { mutableStateOf(false) }
+    var customerOrderDetailRefreshing by remember(workspaceId) { mutableStateOf(false) }
+    var customerOrderDetailError by remember(workspaceId) { mutableStateOf<String?>(null) }
 
     fun updateQuantity(cartKey: String, quantity: Int) {
         val productId = cartKey.publicCatalogCartProductId()
@@ -184,6 +190,30 @@ fun OrmaPublicCatalogFlow(
             }
         }
         customerOrdersLoading = false
+    }
+
+    suspend fun loadCustomerOrderDetail(orderId: String, refresh: Boolean) {
+        if (orderId.isBlank()) return
+        if (refresh) {
+            customerOrderDetailRefreshing = true
+        } else {
+            customerOrderDetailLoading = true
+        }
+        customerOrderDetailError = null
+        when (val result = client.loadPublicCatalogOrderStatus(workspaceId, orderId)) {
+            is OrmaBackendResult.Success -> {
+                customerOrderDetailReceipt = result.value
+                customerOrders = customerOrders.map { order ->
+                    if (order.id == result.value.order.id) result.value.order else order
+                }
+                customerAuthError = null
+            }
+            is OrmaBackendResult.Failure -> {
+                customerOrderDetailError = result.publicCatalogMessage(load = true)
+            }
+        }
+        customerOrderDetailLoading = false
+        customerOrderDetailRefreshing = false
     }
 
     suspend fun handleCustomerAuthResult(result: OrmaAuthResult) {
@@ -370,6 +400,8 @@ fun OrmaPublicCatalogFlow(
                     customerSession = null
                     customerOrders = emptyList()
                     customerProfileOpen = false
+                    customerOrderDetailReceipt = null
+                    customerOrderDetailError = null
                     customerAuthError = null
                     customerAuthMessage = "Guest checkout is active."
                     loginOtp = ""
@@ -396,6 +428,10 @@ fun OrmaPublicCatalogFlow(
                 scheduledAt = scheduledAt,
                 paymentMode = paymentMode,
                 customerAccountState = customerAccountState,
+                customerOrderDetailReceipt = customerOrderDetailReceipt,
+                customerOrderDetailLoading = customerOrderDetailLoading,
+                customerOrderDetailRefreshing = customerOrderDetailRefreshing,
+                customerOrderDetailError = customerOrderDetailError,
                 customerProfileOpen = customerProfileOpen,
                 selectedItems = selectedItems,
                 selectedFlow = selectedFlow,
@@ -437,6 +473,17 @@ fun OrmaPublicCatalogFlow(
                     }
                 },
                 onCustomerProfileClose = { customerProfileOpen = false },
+                onCustomerOrderOpen = { order ->
+                    scope.launch { loadCustomerOrderDetail(order.id, refresh = false) }
+                },
+                onCustomerOrderDetailBack = {
+                    customerOrderDetailReceipt = null
+                    customerOrderDetailError = null
+                },
+                onCustomerOrderDetailRefresh = {
+                    val detailOrderId = customerOrderDetailReceipt?.order?.id.orEmpty()
+                    scope.launch { loadCustomerOrderDetail(detailOrderId, refresh = true) }
+                },
                 onSubmit = ::submit,
             )
             OrmaWindowClass.Wide -> PublicCatalogWide(
@@ -455,6 +502,10 @@ fun OrmaPublicCatalogFlow(
                 scheduledAt = scheduledAt,
                 paymentMode = paymentMode,
                 customerAccountState = customerAccountState,
+                customerOrderDetailReceipt = customerOrderDetailReceipt,
+                customerOrderDetailLoading = customerOrderDetailLoading,
+                customerOrderDetailRefreshing = customerOrderDetailRefreshing,
+                customerOrderDetailError = customerOrderDetailError,
                 customerProfileOpen = customerProfileOpen,
                 selectedItems = selectedItems,
                 selectedFlow = selectedFlow,
@@ -496,6 +547,17 @@ fun OrmaPublicCatalogFlow(
                     }
                 },
                 onCustomerProfileClose = { customerProfileOpen = false },
+                onCustomerOrderOpen = { order ->
+                    scope.launch { loadCustomerOrderDetail(order.id, refresh = false) }
+                },
+                onCustomerOrderDetailBack = {
+                    customerOrderDetailReceipt = null
+                    customerOrderDetailError = null
+                },
+                onCustomerOrderDetailRefresh = {
+                    val detailOrderId = customerOrderDetailReceipt?.order?.id.orEmpty()
+                    scope.launch { loadCustomerOrderDetail(detailOrderId, refresh = true) }
+                },
                 onSubmit = ::submit,
             )
         }
@@ -519,6 +581,10 @@ private fun PublicCatalogMobile(
     scheduledAt: String,
     paymentMode: String,
     customerAccountState: PublicCatalogCustomerAccountState,
+    customerOrderDetailReceipt: OrmaPublicCatalogOrderReceipt?,
+    customerOrderDetailLoading: Boolean,
+    customerOrderDetailRefreshing: Boolean,
+    customerOrderDetailError: String?,
     customerProfileOpen: Boolean,
     selectedItems: List<PublicCatalogSelection>,
     selectedFlow: String,
@@ -540,6 +606,9 @@ private fun PublicCatalogMobile(
     customerAccountActions: PublicCatalogCustomerAccountActions,
     onCustomerProfileOpen: () -> Unit,
     onCustomerProfileClose: () -> Unit,
+    onCustomerOrderOpen: (OrmaOrder) -> Unit,
+    onCustomerOrderDetailBack: () -> Unit,
+    onCustomerOrderDetailRefresh: () -> Unit,
     onSubmit: () -> Unit,
 ) {
     val scrollState = rememberScrollState()
@@ -558,8 +627,15 @@ private fun PublicCatalogMobile(
         PublicCatalogCustomerProfileScreen(
             state = customerAccountState,
             actions = customerAccountActions,
+            detailReceipt = customerOrderDetailReceipt,
+            detailLoading = customerOrderDetailLoading,
+            detailRefreshing = customerOrderDetailRefreshing,
+            detailError = customerOrderDetailError,
             compact = true,
             onBack = onCustomerProfileClose,
+            onOrderOpen = onCustomerOrderOpen,
+            onDetailBack = onCustomerOrderDetailBack,
+            onDetailRefresh = onCustomerOrderDetailRefresh,
             modifier = Modifier
                 .widthIn(max = 430.dp)
                 .fillMaxSize()
@@ -760,6 +836,10 @@ private fun PublicCatalogWide(
     scheduledAt: String,
     paymentMode: String,
     customerAccountState: PublicCatalogCustomerAccountState,
+    customerOrderDetailReceipt: OrmaPublicCatalogOrderReceipt?,
+    customerOrderDetailLoading: Boolean,
+    customerOrderDetailRefreshing: Boolean,
+    customerOrderDetailError: String?,
     customerProfileOpen: Boolean,
     selectedItems: List<PublicCatalogSelection>,
     selectedFlow: String,
@@ -781,6 +861,9 @@ private fun PublicCatalogWide(
     customerAccountActions: PublicCatalogCustomerAccountActions,
     onCustomerProfileOpen: () -> Unit,
     onCustomerProfileClose: () -> Unit,
+    onCustomerOrderOpen: (OrmaOrder) -> Unit,
+    onCustomerOrderDetailBack: () -> Unit,
+    onCustomerOrderDetailRefresh: () -> Unit,
     onSubmit: () -> Unit,
 ) {
     val wideScrollState = rememberScrollState()
@@ -806,8 +889,15 @@ private fun PublicCatalogWide(
             PublicCatalogCustomerProfileScreen(
                 state = customerAccountState,
                 actions = customerAccountActions,
+                detailReceipt = customerOrderDetailReceipt,
+                detailLoading = customerOrderDetailLoading,
+                detailRefreshing = customerOrderDetailRefreshing,
+                detailError = customerOrderDetailError,
                 compact = false,
                 onBack = onCustomerProfileClose,
+                onOrderOpen = onCustomerOrderOpen,
+                onDetailBack = onCustomerOrderDetailBack,
+                onDetailRefresh = onCustomerOrderDetailRefresh,
                 modifier = Modifier
                     .fillMaxHeight()
                     .fillMaxWidth()
@@ -2600,12 +2690,24 @@ private fun PublicCatalogTrustStrip(
 private fun PublicCatalogCustomerProfileScreen(
     state: PublicCatalogCustomerAccountState,
     actions: PublicCatalogCustomerAccountActions,
+    detailReceipt: OrmaPublicCatalogOrderReceipt?,
+    detailLoading: Boolean,
+    detailRefreshing: Boolean,
+    detailError: String?,
     compact: Boolean,
     onBack: () -> Unit,
+    onOrderOpen: (OrmaOrder) -> Unit,
+    onDetailBack: () -> Unit,
+    onDetailRefresh: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val session = state.session ?: return
     val scrollState = rememberScrollState()
+    var selectedStatusFilter by remember(session.publicCatalogAccountLabel()) { mutableStateOf("all") }
+    val showingDetail = detailReceipt != null || detailLoading
+    val filteredOrders = remember(state.orders, selectedStatusFilter) {
+        state.orders.publicCatalogFilteredByStatus(selectedStatusFilter)
+    }
     Surface(
         modifier = modifier,
         shape = OrmaShapes.PremiumCard,
@@ -2681,16 +2783,35 @@ private fun PublicCatalogCustomerProfileScreen(
                     enabled = !state.authBusy,
                 )
             }
-            PublicCatalogCustomerOrderHistory(
-                orders = state.orders,
-                loading = state.ordersLoading,
-            )
-            state.error?.takeIf { it.isNotBlank() }?.let { message ->
-                PublicCatalogMessageCard(
-                    title = "Order history unavailable",
-                    body = message,
-                    error = true,
+            if (showingDetail) {
+                PublicCatalogCustomerOrderDetail(
+                    receipt = detailReceipt,
+                    loading = detailLoading,
+                    refreshing = detailRefreshing,
+                    error = detailError,
+                    onBack = onDetailBack,
+                    onRefresh = onDetailRefresh,
                 )
+            } else {
+                PublicCatalogOrderStatusTabs(
+                    orders = state.orders,
+                    selectedStatus = selectedStatusFilter,
+                    onStatusSelected = { selectedStatusFilter = it },
+                )
+                PublicCatalogCustomerOrderHistory(
+                    orders = filteredOrders,
+                    totalOrders = state.orders.size,
+                    loading = state.ordersLoading,
+                    selectedStatus = selectedStatusFilter,
+                    onOrderOpen = onOrderOpen,
+                )
+                state.error?.takeIf { it.isNotBlank() }?.let { message ->
+                    PublicCatalogMessageCard(
+                        title = "Order history unavailable",
+                        body = message,
+                        error = true,
+                    )
+                }
             }
         }
     }
@@ -2864,9 +2985,50 @@ private fun PublicCatalogCustomerAccountPanel(
 }
 
 @Composable
+private fun PublicCatalogOrderStatusTabs(
+    orders: List<OrmaOrder>,
+    selectedStatus: String,
+    onStatusSelected: (String) -> Unit,
+) {
+    val options = orders.publicCatalogStatusFilterOptions()
+    if (options.size <= 1) return
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        options.forEach { option ->
+            val selected = selectedStatus == option.key
+            Surface(
+                modifier = Modifier.clickable { onStatusSelected(option.key) },
+                shape = OrmaShapes.Capsule,
+                color = if (selected) OrmaColors.Accent else OrmaColors.CellBackground,
+                contentColor = if (selected) OrmaColors.OnAccent else OrmaColors.TextPrimary,
+                border = BorderStroke(0.8.dp, OrmaColors.Hairline),
+                tonalElevation = 0.dp,
+                shadowElevation = 0.dp,
+            ) {
+                Text(
+                    text = "${option.label} ${option.count}",
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (selected) OrmaColors.ScreenBackground else OrmaColors.TextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun PublicCatalogCustomerOrderHistory(
     orders: List<OrmaOrder>,
+    totalOrders: Int,
     loading: Boolean,
+    selectedStatus: String,
+    onOrderOpen: (OrmaOrder) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(
@@ -2899,22 +3061,33 @@ private fun PublicCatalogCustomerOrderHistory(
                 }
             }
             orders.isEmpty() -> Text(
-                text = "No purchased orders or bookings found for this account.",
+                text = if (selectedStatus == "all" && totalOrders == 0) {
+                    "No purchased orders or bookings found for this account."
+                } else {
+                    "No orders found for this status."
+                },
                 style = MaterialTheme.typography.bodyMedium,
                 color = OrmaColors.TextSecondary,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
             else -> orders.forEach { order ->
-                PublicCatalogCustomerOrderHistoryRow(order)
+                PublicCatalogCustomerOrderHistoryRow(
+                    order = order,
+                    onClick = { onOrderOpen(order) },
+                )
             }
         }
     }
 }
 
 @Composable
-private fun PublicCatalogCustomerOrderHistoryRow(order: OrmaOrder) {
+private fun PublicCatalogCustomerOrderHistoryRow(
+    order: OrmaOrder,
+    onClick: () -> Unit,
+) {
     Surface(
+        onClick = onClick,
         modifier = Modifier.fillMaxWidth(),
         shape = OrmaShapes.StandardCell,
         color = OrmaColors.CellBackground,
@@ -2979,6 +3152,329 @@ private fun PublicCatalogCustomerOrderHistoryRow(order: OrmaOrder) {
                     textAlign = TextAlign.End,
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun PublicCatalogCustomerOrderDetail(
+    receipt: OrmaPublicCatalogOrderReceipt?,
+    loading: Boolean,
+    refreshing: Boolean,
+    error: String?,
+    onBack: () -> Unit,
+    onRefresh: () -> Unit,
+) {
+    val order = receipt?.order
+    val balanceDue = order?.publicCatalogBalanceDueValue() ?: 0.0
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OrmaLightButton(
+                text = "Orders",
+                onClick = onBack,
+                modifier = Modifier.widthIn(min = 92.dp, max = 124.dp),
+                enabled = !loading,
+            )
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(
+                    text = order?.publicCatalogDetailTitle() ?: "Booking details",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = OrmaColors.TextPrimary,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = order?.orderNumber?.ifBlank { order.id } ?: "Loading selected request",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = OrmaColors.TextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            order?.let {
+                OrmaBadge(
+                    text = it.publicCatalogStatusLabel().uppercase(),
+                    tone = it.publicCatalogStatusTone(),
+                )
+            }
+        }
+        when {
+            loading && order == null -> {
+                repeat(3) {
+                    OrmaSkeleton(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(64.dp),
+                        shape = OrmaShapes.StandardCell,
+                    )
+                }
+            }
+            order != null -> {
+                PublicCatalogMessageCard(
+                    title = order.publicCatalogStatusTitle(),
+                    body = receipt.message.ifBlank { order.publicCatalogStatusBody() },
+                    error = false,
+                )
+                OrmaKeyValueList(
+                    rows = buildList {
+                        add("Reference" to order.orderNumber.ifBlank { order.id })
+                        add("Status" to order.publicCatalogStatusLabel())
+                        add("Type" to order.orderType.publicCatalogWorkTitle())
+                        order.fulfillmentType.takeIf { it.isNotBlank() }?.let { add("Fulfilment" to it.publicCatalogFulfillmentLabel()) }
+                        order.scheduledAt?.takeIf { it.isNotBlank() }?.let { add("Preferred time" to it) }
+                        add("Total" to "${order.currency} ${order.total}")
+                        if (order.paidTotal.toDoubleOrNull().orZero() > 0.0) {
+                            add("Paid" to "${order.currency} ${order.paidTotal}")
+                        }
+                        if (balanceDue > 0.0) {
+                            add("Balance" to order.publicCatalogBalanceDueText())
+                        }
+                    },
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    OrmaLightButton(
+                        text = if (refreshing) "Checking..." else "Refresh status",
+                        onClick = onRefresh,
+                        modifier = Modifier.weight(1f),
+                        enabled = !loading && !refreshing,
+                    )
+                    OrmaLightButton(
+                        text = "Back",
+                        onClick = onBack,
+                        modifier = Modifier.weight(1f),
+                        enabled = !loading,
+                    )
+                }
+                if (receipt.paymentLink?.isNotBlank() == true && balanceDue > 0.0) {
+                    PublicCatalogUpiPaymentCard(
+                        receipt = receipt,
+                        balanceDue = balanceDue,
+                    )
+                }
+                PublicCatalogOrderItemsDetail(order = order)
+                PublicCatalogOrderSessionsDetail(order = order)
+            }
+        }
+        error?.takeIf { it.isNotBlank() }?.let { message ->
+            PublicCatalogMessageCard(
+                title = "Could not refresh details",
+                body = message,
+                error = true,
+            )
+        }
+    }
+}
+
+@Composable
+private fun PublicCatalogUpiPaymentCard(
+    receipt: OrmaPublicCatalogOrderReceipt,
+    balanceDue: Double,
+) {
+    val order = receipt.order
+    val link = receipt.paymentLink?.takeIf { it.isNotBlank() } ?: return
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = OrmaShapes.SmallCard,
+        color = OrmaColors.ScreenBackground,
+        contentColor = OrmaColors.TextPrimary,
+        border = BorderStroke(0.6.dp, OrmaColors.Hairline),
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top,
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(3.dp),
+                ) {
+                    Text(
+                        text = "Payment required",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = OrmaColors.TextPrimary,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = "Scan the QR or open your UPI app to pay the remaining balance.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = OrmaColors.TextSecondary,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                OrmaBadge(text = "UPI", tone = OrmaStatusTone.Success)
+            }
+            if (link.publicCatalogQrSafe()) {
+                OrmaQrCode(
+                    value = link,
+                    modifier = Modifier.size(196.dp),
+                )
+            }
+            receipt.paymentMethod?.let { method ->
+                OrmaKeyValueList(
+                    rows = listOf(
+                        "Amount" to "${order.currency.ifBlank { "INR" }} ${money(balanceDue)}",
+                        "Order ID" to order.orderNumber.ifBlank { order.id },
+                        "UPI ID" to method.upiId.orEmpty(),
+                        "Pay to" to (method.payeeName ?: method.label),
+                    ),
+                )
+            }
+            OrmaLightButton(
+                text = "Open UPI app",
+                onClick = { openPublicCatalogPaymentLink(link) },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
+}
+
+@Composable
+private fun PublicCatalogOrderItemsDetail(order: OrmaOrder) {
+    if (order.items.isEmpty()) return
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        OrmaSectionHeader(text = "Items")
+        order.items.forEach { item ->
+            PublicCatalogOrderItemRow(item = item, currency = order.currency)
+        }
+    }
+}
+
+@Composable
+private fun PublicCatalogOrderItemRow(
+    item: OrmaOrderItem,
+    currency: String,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = OrmaShapes.StandardCell,
+        color = OrmaColors.CellBackground,
+        contentColor = OrmaColors.TextPrimary,
+        border = BorderStroke(0.6.dp, OrmaColors.Hairline),
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(
+                    text = listOfNotNull(
+                        item.productName?.takeIf { it.isNotBlank() } ?: item.description.takeIf { it.isNotBlank() },
+                        item.variantName?.takeIf { it.isNotBlank() },
+                    ).joinToString(" - ").ifBlank { "Item" },
+                    style = MaterialTheme.typography.labelLarge,
+                    color = OrmaColors.TextPrimary,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = "${item.quantity} x ${currency.ifBlank { "INR" }} ${item.unitPrice}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = OrmaColors.TextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Text(
+                text = "${currency.ifBlank { "INR" }} ${item.lineTotal}",
+                style = MaterialTheme.typography.labelLarge,
+                color = OrmaColors.TextPrimary,
+                fontWeight = FontWeight.SemiBold,
+                textAlign = TextAlign.End,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+@Composable
+private fun PublicCatalogOrderSessionsDetail(order: OrmaOrder) {
+    if (order.sessions.isEmpty()) return
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        OrmaSectionHeader(text = "Sessions")
+        order.sessions.sortedBy { it.sequenceNumber }.forEach { session ->
+            PublicCatalogOrderSessionRow(session = session)
+        }
+    }
+}
+
+@Composable
+private fun PublicCatalogOrderSessionRow(session: OrmaOrderSession) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = OrmaShapes.StandardCell,
+        color = OrmaColors.CellBackground,
+        contentColor = OrmaColors.TextPrimary,
+        border = BorderStroke(0.6.dp, OrmaColors.Hairline),
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(
+                    text = session.title.ifBlank { "Session ${session.sequenceNumber}" },
+                    style = MaterialTheme.typography.labelLarge,
+                    color = OrmaColors.TextPrimary,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = session.scheduledAt?.takeIf { it.isNotBlank() } ?: "Not scheduled yet",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = OrmaColors.TextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            OrmaBadge(
+                text = session.status.ifBlank { "scheduled" }.replace('_', ' ').uppercase(),
+                tone = session.status.publicCatalogSessionStatusTone(),
+            )
         }
     }
 }
@@ -4205,6 +4701,63 @@ private fun OrmaOrder.publicCatalogStatusTone(): OrmaStatusTone =
         else -> OrmaStatusTone.Neutral
     }
 
+private fun OrmaOrder.publicCatalogStatusFilterKey(): String =
+    status.trim().lowercase().ifBlank { "pending" }
+
+private fun List<OrmaOrder>.publicCatalogFilteredByStatus(statusFilter: String): List<OrmaOrder> =
+    if (statusFilter == "all") this else filter { it.publicCatalogStatusFilterKey() == statusFilter }
+
+private fun List<OrmaOrder>.publicCatalogStatusFilterOptions(): List<PublicCatalogOrderStatusFilterOption> {
+    val statusCounts = groupingBy { it.publicCatalogStatusFilterKey() }.eachCount()
+    val sortedStatusKeys = statusCounts.keys.sortedWith(compareBy({ key ->
+        when (key) {
+            "new" -> 0
+            "draft" -> 1
+            "confirmed" -> 2
+            "part_paid" -> 3
+            "paid" -> 4
+            "completed" -> 5
+            "cancelled", "canceled", "rejected", "rejected_or_cancelled" -> 6
+            else -> 7
+        }
+    }, { it }))
+    return listOf(PublicCatalogOrderStatusFilterOption("all", "All", size)) +
+        sortedStatusKeys.map { key ->
+            val sample = firstOrNull { it.publicCatalogStatusFilterKey() == key }
+            PublicCatalogOrderStatusFilterOption(
+                key = key,
+                label = sample?.publicCatalogStatusLabel() ?: key.replace('_', ' ').replaceFirstChar { it.uppercase() },
+                count = statusCounts[key] ?: 0,
+            )
+        }
+}
+
+private fun OrmaOrder.publicCatalogDetailTitle(): String =
+    when (orderType.trim().lowercase()) {
+        "appointment" -> "Booking details"
+        "service" -> "Service details"
+        else -> "Order details"
+    }
+
+private fun String.publicCatalogFulfillmentLabel(): String =
+    when (trim().lowercase()) {
+        "take_away" -> "Take away"
+        "delivery" -> "Delivery"
+        "scheduled" -> "Scheduled"
+        "booking" -> "Booking"
+        "standard" -> "Standard"
+        else -> replace('_', ' ').replaceFirstChar { it.uppercase() }
+    }
+
+private fun String.publicCatalogSessionStatusTone(): OrmaStatusTone =
+    when (trim().lowercase()) {
+        "completed" -> OrmaStatusTone.Success
+        "cancelled", "canceled", "missed" -> OrmaStatusTone.Danger
+        "confirmed", "scheduled" -> OrmaStatusTone.Info
+        "part_paid" -> OrmaStatusTone.Warning
+        else -> OrmaStatusTone.Neutral
+    }
+
 private fun OrmaAuthSession.publicCatalogAccountLabel(): String =
     listOfNotNull(
         displayName?.takeIf { it.isNotBlank() },
@@ -4348,6 +4901,12 @@ private data class PublicCatalogCustomerAccountActions(
     val onGoogleSignIn: () -> Unit,
     val onRefreshOrders: () -> Unit,
     val onLogout: () -> Unit,
+)
+
+private data class PublicCatalogOrderStatusFilterOption(
+    val key: String,
+    val label: String,
+    val count: Int,
 )
 
 private data class PublicCatalogSelection(
