@@ -57,8 +57,13 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.path
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import org.jetbrains.compose.resources.DrawableResource
 import org.jetbrains.compose.resources.painterResource
 import org.orma.project_90.calendar.ormaCurrentIsoDate
@@ -918,6 +923,9 @@ fun OrmaCalendarDateField(
     val selectedDate = value.take(10).takeIf(::ormaIsIsoDate)
     val minimumDate = minDate?.take(10)?.takeIf(::ormaIsIsoDate)
     val fieldTone = if (selectedDate == null) OrmaColors.TextPrimary.copy(alpha = 0.72f) else OrmaColors.Accent
+    var anchorWidthPx by remember { mutableStateOf(0) }
+    var anchorHeightPx by remember { mutableStateOf(0) }
+    val density = LocalDensity.current
     Column(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -928,37 +936,75 @@ fun OrmaCalendarDateField(
             style = MaterialTheme.typography.labelMedium,
             color = OrmaColors.TextSecondary,
         )
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable { expanded = !expanded },
-            shape = OrmaShapes.Field,
-            color = OrmaColors.CellBackground,
-            contentColor = OrmaColors.TextPrimary,
-            border = BorderStroke(1.dp, OrmaColors.Accent.copy(alpha = if (selectedDate == null) 0.08f else 0.14f)),
-            tonalElevation = 0.dp,
-            shadowElevation = 0.dp,
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically,
+        Box(modifier = Modifier.fillMaxWidth()) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded }
+                    .onGloballyPositioned { coordinates ->
+                        anchorWidthPx = coordinates.size.width
+                        anchorHeightPx = coordinates.size.height
+                    },
+                shape = OrmaShapes.Field,
+                color = OrmaColors.CellBackground,
+                contentColor = OrmaColors.TextPrimary,
+                border = BorderStroke(1.dp, OrmaColors.Accent.copy(alpha = if (selectedDate == null) 0.08f else 0.14f)),
+                tonalElevation = 0.dp,
+                shadowElevation = 0.dp,
             ) {
-                OrmaFlatIcon(
-                    kind = OrmaFlatIconKind.Calendar,
-                    modifier = Modifier.size(18.dp),
-                    color = fieldTone,
-                )
-                Text(
-                    text = selectedDate?.let(::ormaDateDisplayLabel) ?: placeholder,
-                    modifier = Modifier.weight(1f),
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = if (selectedDate == null) OrmaColors.TextSecondary else OrmaColors.Accent,
-                )
-                OrmaChevronDownIcon(
-                    modifier = Modifier.size(18.dp),
-                    color = fieldTone,
-                )
+                Row(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    OrmaFlatIcon(
+                        kind = OrmaFlatIconKind.Calendar,
+                        modifier = Modifier.size(18.dp),
+                        color = fieldTone,
+                    )
+                    Text(
+                        text = selectedDate?.let(::ormaDateDisplayLabel) ?: placeholder,
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = if (selectedDate == null) OrmaColors.TextSecondary else OrmaColors.Accent,
+                    )
+                    OrmaChevronDownIcon(
+                        modifier = Modifier.size(18.dp),
+                        color = fieldTone,
+                    )
+                }
+            }
+            if (expanded) {
+                Popup(
+                    alignment = Alignment.TopStart,
+                    offset = IntOffset(
+                        x = 0,
+                        y = anchorHeightPx + with(density) { 8.dp.roundToPx() },
+                    ),
+                    onDismissRequest = { expanded = false },
+                    properties = PopupProperties(focusable = true),
+                ) {
+                    val pickerWidth = if (anchorWidthPx > 0) with(density) { anchorWidthPx.toDp() } else 280.dp
+                    OrmaCalendarMonthPicker(
+                        visibleMonth = visibleMonth,
+                        selectedDate = selectedDate,
+                        minDate = minimumDate,
+                        onMonthChange = { visibleMonth = it },
+                        onSelected = {
+                            onValueChange(it)
+                            expanded = false
+                        },
+                        onClear = if (allowClear) {
+                            {
+                                onValueChange("")
+                                expanded = false
+                            }
+                        } else {
+                            null
+                        },
+                        modifier = Modifier.width(pickerWidth),
+                    )
+                }
             }
         }
         supportingText?.takeIf { it.isNotBlank() }?.let {
@@ -967,26 +1013,6 @@ fun OrmaCalendarDateField(
                 modifier = Modifier.padding(start = 4.dp),
                 style = MaterialTheme.typography.labelMedium,
                 color = OrmaColors.TextSecondary,
-            )
-        }
-        if (expanded) {
-            OrmaCalendarMonthPicker(
-                visibleMonth = visibleMonth,
-                selectedDate = selectedDate,
-                minDate = minimumDate,
-                onMonthChange = { visibleMonth = it },
-                onSelected = {
-                    onValueChange(it)
-                    expanded = false
-                },
-                onClear = if (allowClear) {
-                    {
-                        onValueChange("")
-                        expanded = false
-                    }
-                } else {
-                    null
-                },
             )
         }
     }
@@ -1040,6 +1066,7 @@ private fun OrmaCalendarMonthPicker(
     onMonthChange: (String) -> Unit,
     onSelected: (String) -> Unit,
     onClear: (() -> Unit)?,
+    modifier: Modifier = Modifier.fillMaxWidth(),
 ) {
     val year = visibleMonth.substringBefore("-").toIntOrNull() ?: 2026
     val month = visibleMonth.substringAfter("-", "06").toIntOrNull()?.coerceIn(1, 12) ?: 6
@@ -1049,7 +1076,7 @@ private fun OrmaCalendarMonthPicker(
     val days = ormaDaysInMonth(year, month)
     val leadingEmptyCells = ormaFirstWeekdayOffset(year, month)
     Surface(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier,
         shape = OrmaShapes.StandardCell,
         color = OrmaColors.CardBackground,
         contentColor = OrmaColors.TextPrimary,
