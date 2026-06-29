@@ -2419,7 +2419,6 @@ private fun PublicCatalogCheckout(
     val estimatedTotal = if (itemCount == 0) "--" else "${currency.ifBlank { "" }} ${money(total)}".trim()
     val offerSavings = selectedItems.publicCatalogOfferSavingsTotal()
     val hasUpi = catalog?.paymentMethods?.any { it.type == "upi" && !it.upiId.isNullOrBlank() } == true
-    val hasWhatsApp = catalog?.workspace?.whatsappDisplayNumber.toPublicCatalogWhatsAppPhone() != null
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -2466,11 +2465,6 @@ private fun PublicCatalogCheckout(
                     )
                 }
             } else {
-                PublicCatalogTrustStrip(
-                    hasUpi = hasUpi,
-                    hasWhatsApp = hasWhatsApp,
-                    selectedFulfillment = selectedFulfillment,
-                )
                 PublicCatalogCustomerAccountPanel(
                     state = customerAccountState,
                     actions = customerAccountActions,
@@ -2738,54 +2732,6 @@ private fun PublicCatalogCheckoutMetric(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-        }
-    }
-}
-
-@Composable
-private fun PublicCatalogTrustStrip(
-    hasUpi: Boolean,
-    hasWhatsApp: Boolean,
-    selectedFulfillment: String,
-) {
-    val timingLabel = when (selectedFulfillment) {
-        "booking" -> "Booking request"
-        "scheduled" -> "Scheduled timing"
-        "standard" -> "Service request"
-        else -> "Take-away ready"
-    }
-    val items = listOf(
-        "Direct to ORMA",
-        timingLabel,
-        if (hasUpi) "UPI available" else "Pay on spot",
-        if (hasWhatsApp) "WhatsApp fallback" else "No login needed",
-    )
-    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-        if (maxWidth < 420.dp) {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items.chunked(2).forEach { rowItems ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        rowItems.forEach { item ->
-                            PublicCatalogTrustItem(text = item, modifier = Modifier.weight(1f))
-                        }
-                        if (rowItems.size == 1) {
-                            Spacer(modifier = Modifier.weight(1f))
-                        }
-                    }
-                }
-            }
-        } else {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                items.forEach { item ->
-                    PublicCatalogTrustItem(text = item, modifier = Modifier.weight(1f))
-                }
-            }
         }
     }
 }
@@ -3584,31 +3530,6 @@ private fun PublicCatalogOrderSessionRow(session: OrmaOrderSession) {
                 tone = session.status.publicCatalogSessionStatusTone(),
             )
         }
-    }
-}
-
-@Composable
-private fun PublicCatalogTrustItem(
-    text: String,
-    modifier: Modifier = Modifier,
-) {
-    Surface(
-        modifier = modifier,
-        shape = OrmaShapes.StandardCell,
-        color = OrmaColors.Accent.copy(alpha = 0.055f),
-        border = BorderStroke(0.8.dp, OrmaColors.Accent.copy(alpha = 0.08f)),
-        tonalElevation = 0.dp,
-        shadowElevation = 0.dp,
-    ) {
-        Text(
-            text = text,
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp),
-            style = MaterialTheme.typography.labelMedium,
-            color = OrmaColors.TextSecondary,
-            textAlign = TextAlign.Center,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-        )
     }
 }
 
