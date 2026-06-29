@@ -476,6 +476,7 @@ data class OrmaPublicCatalogOrderDraft(
     val clientRequestId: String = ormaClientRequestId("catalog"),
     val customerName: String = "",
     val phoneNumber: String = "",
+    val customerEmail: String = "",
     val notes: String = "",
     val fulfillmentType: String = "take_away",
     val scheduledAt: String = "",
@@ -1283,18 +1284,24 @@ class OrmaBackendClient(
                 ormaPostJsonAuthorized(
                     url = config.url("/customers"),
                     bearerToken = idToken,
-                    body = buildJsonObject(
-                        "name" to JsonValue.StringValue(draft.name),
-                        "phoneNumber" to JsonValue.StringValue(draft.phoneNumber.blankToNull()),
-                        "email" to JsonValue.StringValue(draft.email.blankToNull()),
-                        "taxNumber" to JsonValue.StringValue(draft.taxNumber.blankToNull()),
-                        "addressLine" to JsonValue.StringValue(draft.addressLine.blankToNull()),
-                        "city" to JsonValue.StringValue(draft.city.blankToNull()),
-                        "region" to JsonValue.StringValue(draft.region.blankToNull()),
-                        "country" to JsonValue.StringValue(draft.country.blankToNull()),
-                        "postalCode" to JsonValue.StringValue(draft.postalCode.blankToNull()),
-                        "notes" to JsonValue.StringValue(draft.notes.blankToNull()),
-                    ),
+                    body = draft.toCustomerRequestJson(),
+                )
+            },
+            parse = { it.toCustomer() },
+        )
+
+    suspend fun updateCustomer(
+        idToken: String,
+        customerId: String,
+        draft: OrmaCustomerDraft,
+    ): OrmaBackendResult<OrmaCustomer> =
+        executeBackendRequest(
+            actionTitle = "Update customer",
+            request = {
+                ormaPutJsonAuthorized(
+                    url = config.url("/customers/${customerId.urlPathEscaped()}"),
+                    bearerToken = idToken,
+                    body = draft.toCustomerRequestJson(),
                 )
             },
             parse = { it.toCustomer() },
@@ -2004,6 +2011,7 @@ class OrmaBackendClient(
     suspend fun submitPublicCatalogOrder(
         workspaceId: String,
         draft: OrmaPublicCatalogOrderDraft,
+        idToken: String? = null,
     ): OrmaBackendResult<OrmaPublicCatalogOrderReceipt> =
         executeBackendRequest(
             actionTitle = "Submit order request",
@@ -2017,21 +2025,38 @@ class OrmaBackendClient(
                             "quantity" to JsonValue.StringValue(item.quantity.blankToZero(default = "1")),
                         )
                     }
-                ormaPostJson(
-                    url = config.url("/public/workspaces/${workspaceId.urlQueryEscaped()}/orders"),
-                    body = buildJsonObject(
-                        "customerName" to JsonValue.StringValue(draft.customerName),
-                        "phoneNumber" to JsonValue.StringValue(draft.phoneNumber),
-                        "notes" to JsonValue.StringValue(draft.notes.blankToNull()),
-                        "fulfillmentType" to JsonValue.StringValue(draft.fulfillmentType),
-                        "scheduledAt" to JsonValue.StringValue(draft.scheduledAt.blankToNull()),
-                        "paymentMode" to JsonValue.StringValue(draft.paymentMode),
-                        "clientRequestId" to JsonValue.StringValue(draft.clientRequestId.blankToNull()),
-                        "items" to JsonValue.RawValue(itemsJson),
-                    ),
+                val url = config.url("/public/workspaces/${workspaceId.urlQueryEscaped()}/orders")
+                val body = buildJsonObject(
+                    "customerName" to JsonValue.StringValue(draft.customerName),
+                    "phoneNumber" to JsonValue.StringValue(draft.phoneNumber),
+                    "customerEmail" to JsonValue.StringValue(draft.customerEmail.blankToNull()),
+                    "notes" to JsonValue.StringValue(draft.notes.blankToNull()),
+                    "fulfillmentType" to JsonValue.StringValue(draft.fulfillmentType),
+                    "scheduledAt" to JsonValue.StringValue(draft.scheduledAt.blankToNull()),
+                    "paymentMode" to JsonValue.StringValue(draft.paymentMode),
+                    "clientRequestId" to JsonValue.StringValue(draft.clientRequestId.blankToNull()),
+                    "items" to JsonValue.RawValue(itemsJson),
                 )
+                idToken?.takeIf { it.isNotBlank() }?.let { token ->
+                    ormaPostJsonAuthorized(url = url, body = body, bearerToken = token)
+                } ?: ormaPostJson(url = url, body = body)
             },
             parse = { it.toPublicCatalogOrderReceipt() },
+        )
+
+    suspend fun loadPublicCatalogCustomerOrders(
+        workspaceId: String,
+        idToken: String,
+    ): OrmaBackendResult<OrmaPagedList<OrmaOrder>> =
+        executeBackendRequest(
+            actionTitle = "Load previous requests",
+            request = {
+                ormaGetAuthorized(
+                    url = config.url("/public/workspaces/${workspaceId.urlQueryEscaped()}/account/orders"),
+                    bearerToken = idToken,
+                )
+            },
+            parse = { it.toPagedList("orders") { orderJson -> orderJson.toOrder() } },
         )
 
     suspend fun loadPublicCatalogOrderStatus(
@@ -2919,6 +2944,20 @@ private fun buildJsonObject(vararg fields: Pair<String, JsonValue>): String =
         }
         "\"$key\":$encodedValue"
     }
+
+private fun OrmaCustomerDraft.toCustomerRequestJson(): String =
+    buildJsonObject(
+        "name" to JsonValue.StringValue(name),
+        "phoneNumber" to JsonValue.StringValue(phoneNumber.blankToNull()),
+        "email" to JsonValue.StringValue(email.blankToNull()),
+        "taxNumber" to JsonValue.StringValue(taxNumber.blankToNull()),
+        "addressLine" to JsonValue.StringValue(addressLine.blankToNull()),
+        "city" to JsonValue.StringValue(city.blankToNull()),
+        "region" to JsonValue.StringValue(region.blankToNull()),
+        "country" to JsonValue.StringValue(country.blankToNull()),
+        "postalCode" to JsonValue.StringValue(postalCode.blankToNull()),
+        "notes" to JsonValue.StringValue(notes.blankToNull()),
+    )
 
 private fun OrmaSupplierDraft.toSupplierRequestJson(): String =
     buildJsonObject(

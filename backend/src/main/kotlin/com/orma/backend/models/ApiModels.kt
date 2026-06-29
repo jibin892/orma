@@ -710,6 +710,7 @@ data class PublicCatalogResponse(
 data class PublicCatalogOrderRequest(
     val customerName: String,
     val phoneNumber: String,
+    val customerEmail: String? = null,
     val notes: String? = null,
     val fulfillmentType: String = "take_away",
     val scheduledAt: String? = null,

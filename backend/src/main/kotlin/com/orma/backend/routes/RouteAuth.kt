@@ -28,3 +28,14 @@ suspend fun ApplicationCall.verifiedFirebaseUser(config: AppConfig): VerifiedFir
 
     return FirebaseTokenVerifier(config).verify(token)
 }
+
+suspend fun ApplicationCall.optionalVerifiedFirebaseUser(config: AppConfig): VerifiedFirebaseUser? {
+    val token = request.headers[HttpHeaders.Authorization]
+        ?.trim()
+        ?.removePrefix("Bearer")
+        ?.trim()
+        ?.takeIf { it.isNotBlank() }
+        ?: return null
+
+    return FirebaseTokenVerifier(config).verify(token)
+}

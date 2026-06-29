@@ -14,6 +14,12 @@ data class AppConfig(
     val oneSignalAppId: String?,
     val oneSignalRestApiKey: String?,
     val oneSignalNotificationsUrl: String,
+    val apnsTeamId: String?,
+    val apnsKeyId: String?,
+    val apnsBundleId: String?,
+    val apnsPrivateKey: String?,
+    val apnsPrivateKeyPath: String?,
+    val apnsUseSandbox: Boolean,
     val mediaStorageProvider: String?,
     val cloudinaryCloudName: String?,
     val cloudinaryApiKey: String?,
@@ -44,6 +50,12 @@ data class AppConfig(
 
     val oneSignalPushConfigured: Boolean
         get() = !oneSignalAppId.isNullOrBlank() && !oneSignalRestApiKey.isNullOrBlank()
+
+    val apnsPushConfigured: Boolean
+        get() = !apnsTeamId.isNullOrBlank() &&
+            !apnsKeyId.isNullOrBlank() &&
+            !apnsBundleId.isNullOrBlank() &&
+            (!apnsPrivateKey.isNullOrBlank() || !apnsPrivateKeyPath.isNullOrBlank())
 
     val firebaseStorageConfigured: Boolean
         get() = firebaseAuthConfigured && !firebaseStorageBucket.isNullOrBlank()
@@ -109,6 +121,12 @@ data class AppConfig(
                 oneSignalRestApiKey = env["ONESIGNAL_REST_API_KEY"].orNullIfBlank(),
                 oneSignalNotificationsUrl = env["ONESIGNAL_NOTIFICATIONS_URL"].orEmpty()
                     .ifBlank { "https://api.onesignal.com/notifications" },
+                apnsTeamId = env["APNS_TEAM_ID"].orNullIfBlank(),
+                apnsKeyId = env["APNS_KEY_ID"].orNullIfBlank(),
+                apnsBundleId = env["APNS_BUNDLE_ID"].orNullIfBlank() ?: defaultIosBundleId,
+                apnsPrivateKey = env["APNS_PRIVATE_KEY"].orNullIfBlank(),
+                apnsPrivateKeyPath = env["APNS_PRIVATE_KEY_PATH"].orNullIfBlank(),
+                apnsUseSandbox = env["APNS_USE_SANDBOX"]?.toBooleanStrictOrNull() ?: false,
                 mediaStorageProvider = env["MEDIA_STORAGE_PROVIDER"].orNullIfBlank(),
                 cloudinaryCloudName = env["CLOUDINARY_CLOUD_NAME"].orNullIfBlank(),
                 cloudinaryApiKey = env["CLOUDINARY_API_KEY"].orNullIfBlank(),
@@ -154,6 +172,7 @@ data class AppConfig(
         )
 
         private const val defaultOneSignalAppId = "60d2a2a5-e140-46ba-abca-aa2216043e03"
+        private const val defaultIosBundleId = "org.orma.project90.orma"
 
         private val defaultMetaOAuthScopes = listOf(
             "business_management",
@@ -176,6 +195,12 @@ data class AppConfig(
             oneSignalAppId = defaultOneSignalAppId,
             oneSignalRestApiKey = null,
             oneSignalNotificationsUrl = "https://api.onesignal.com/notifications",
+            apnsTeamId = null,
+            apnsKeyId = null,
+            apnsBundleId = defaultIosBundleId,
+            apnsPrivateKey = null,
+            apnsPrivateKeyPath = null,
+            apnsUseSandbox = true,
             mediaStorageProvider = null,
             cloudinaryCloudName = null,
             cloudinaryApiKey = null,

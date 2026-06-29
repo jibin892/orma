@@ -242,6 +242,7 @@ internal data class OnboardingActions(
     val onDashboardPageChange: (DashboardPageTarget, Int) -> Unit,
     val onLoadCustomerOrders: (String) -> Unit,
     val onCreateCustomer: (OrmaCustomerDraft) -> Unit,
+    val onUpdateCustomer: (String, OrmaCustomerDraft) -> Unit,
     val onCreateSupplier: (OrmaSupplierDraft) -> Unit,
     val onUpdateSupplier: (String, OrmaSupplierDraft) -> Unit,
     val onCreateProductCategory: (OrmaProductCategoryDraft) -> Unit,

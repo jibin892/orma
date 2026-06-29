@@ -44,6 +44,7 @@ import com.orma.backend.models.ProductVariantAddonRequest
 import com.orma.backend.models.ProductVariantAddonResponse
 import com.orma.backend.models.ProductVariantComponentRequest
 import com.orma.backend.models.ProductVariantComponentResponse
+import com.orma.backend.models.ProductVariantRequest
 import com.orma.backend.models.ProductVariantResponse
 import com.orma.backend.models.StockAdjustmentRequest
 import com.orma.backend.models.StockMovementResponse
@@ -110,6 +111,11 @@ class DashboardOrderValidationException(
 data class PagedResult<T>(
     val items: List<T>,
     val pagination: PaginationResponse,
+)
+
+private data class PublicCatalogCustomerIdentifiers(
+    val email: String?,
+    val phoneNumber: String?,
 )
 
 sealed interface PublicCatalogOrderSubmitResult {
@@ -294,9 +300,30 @@ class DashboardRepository(
         }
     }
 
+    suspend fun publicCatalogCustomerOrders(
+        firebaseUser: VerifiedFirebaseUser,
+        workspaceId: String,
+        filters: DashboardQueryFilters = DashboardQueryFilters(limit = 20),
+    ): PagedResult<OrderResponse>? = withContext(Dispatchers.IO) {
+        dataSource.connection.use { connection ->
+            val access = connection.resolvePublicWorkspaceAccess(workspaceId) ?: return@withContext null
+            val identifiers = firebaseUser.publicCatalogCustomerIdentifiers()
+            if (identifiers.email == null && identifiers.phoneNumber == null) {
+                return@withContext emptyList<OrderResponse>().toPagedResult(filters, totalItems = 0)
+            }
+            connection.listPublicCatalogCustomerOrders(
+                workspaceId = access.workspaceId,
+                identifiers = identifiers,
+                filters = filters,
+                includeItems = true,
+            )
+        }
+    }
+
     suspend fun createPublicCatalogOrder(
         workspaceId: String,
         request: PublicCatalogOrderRequest,
+        firebaseUser: VerifiedFirebaseUser? = null,
     ): PublicCatalogOrderSubmitResult = withContext(Dispatchers.IO) {
         dataSource.connection.use { connection ->
             connection.autoCommit = false
@@ -318,15 +345,29 @@ class DashboardRepository(
                     connection.rollback()
                     return@withContext PublicCatalogOrderSubmitResult.AppointmentTimeRequired
                 }
+                val publicCustomerEmail = request.customerEmail.cleanOptional()?.lowercase()
+                    ?: firebaseUser?.email.cleanOptional()?.lowercase()
+                val publicCustomerPhone = request.phoneNumber.cleanOptional()
+                    ?: firebaseUser?.phoneNumber.cleanOptional()
+                    ?: request.phoneNumber
                 val existingCustomer = connection.findCustomerByPhone(
                     workspaceId = access.workspaceId,
-                    phoneNumber = request.phoneNumber,
+                    phoneNumber = publicCustomerPhone,
                 )
-                val customer = existingCustomer ?: connection.insertCustomer(
+                val customer = existingCustomer?.let { customer ->
+                    connection.updatePublicCatalogCustomerContact(
+                        workspaceId = access.workspaceId,
+                        customer = customer,
+                        customerName = request.customerName,
+                        phoneNumber = publicCustomerPhone,
+                        email = publicCustomerEmail,
+                    )
+                } ?: connection.insertCustomer(
                     workspaceId = access.workspaceId,
                     request = CustomerRequest(
                         name = request.customerName,
-                        phoneNumber = request.phoneNumber,
+                        phoneNumber = publicCustomerPhone,
+                        email = publicCustomerEmail,
                         notes = "Created from public catalog.",
                     ),
                 ).also { createdCustomer ->
@@ -341,7 +382,8 @@ class DashboardRepository(
                         tone = "success",
                         actorUserId = null,
                         actorDisplayName = request.customerName,
-                        actorPhoneNumber = request.phoneNumber,
+                        actorEmail = publicCustomerEmail,
+                        actorPhoneNumber = publicCustomerPhone,
                         actorRole = "public_catalog",
                     )
                 }
@@ -388,7 +430,8 @@ class DashboardRepository(
                     tone = order.status.dashboardTone(),
                     actorUserId = null,
                     actorDisplayName = request.customerName,
-                    actorPhoneNumber = request.phoneNumber,
+                    actorEmail = publicCustomerEmail,
+                    actorPhoneNumber = publicCustomerPhone,
                     actorRole = "public_catalog",
                 )
                 val balanceDue = order.paymentBalanceDue()
@@ -653,6 +696,7 @@ class DashboardRepository(
                     connection.rollback()
                     return@withContext null
                 }
+                access.requirePermission(PermissionManageCustomers, "create customers")
                 val customer = connection.insertCustomer(access.workspaceId, request)
                 connection.insertWorkspaceActivity(
                     access = access,
@@ -687,6 +731,7 @@ class DashboardRepository(
                     connection.rollback()
                     return@withContext null
                 }
+                access.requirePermission(PermissionManageCustomers, "update customers")
                 val customer = connection.updateCustomer(access.workspaceId, customerId, request)
                 if (customer != null) {
                     connection.insertWorkspaceActivity(
@@ -731,6 +776,7 @@ class DashboardRepository(
                     connection.rollback()
                     return@withContext null
                 }
+                access.requirePermission(PermissionManageStock, "create suppliers")
                 val supplier = connection.insertSupplier(access.workspaceId, request)
                 connection.insertWorkspaceActivity(
                     access = access,
@@ -765,6 +811,7 @@ class DashboardRepository(
                     connection.rollback()
                     return@withContext null
                 }
+                access.requirePermission(PermissionManageStock, "update suppliers")
                 val supplier = connection.updateSupplier(access.workspaceId, supplierId, request)
                 if (supplier != null) {
                     connection.insertWorkspaceActivity(
@@ -809,6 +856,10 @@ class DashboardRepository(
                     connection.rollback()
                     return@withContext null
                 }
+                access.requireAnyPermission(
+                    permissions = listOf(PermissionCreateProduct, PermissionCreateService, PermissionCreateAppointment),
+                    actionLabel = "create categories",
+                )
                 val category = connection.insertProductCategory(access.workspaceId, request)
                 connection.insertWorkspaceActivity(
                     access = access,
@@ -933,6 +984,7 @@ class DashboardRepository(
                     connection.rollback()
                     return@withContext null
                 }
+                access.requirePermission(PermissionManageAccount, "create payment methods")
                 val method = connection.insertPaymentMethod(access.workspaceId, request)
                 connection.ensureOneDefaultPaymentMethod(access.workspaceId)
                 connection.insertWorkspaceActivity(
@@ -968,6 +1020,7 @@ class DashboardRepository(
                     connection.rollback()
                     return@withContext null
                 }
+                access.requirePermission(PermissionManageAccount, "update payment methods")
                 val method = connection.updatePaymentMethod(access.workspaceId, paymentMethodId, request) ?: run {
                     connection.rollback()
                     return@withContext null
@@ -988,6 +1041,8 @@ class DashboardRepository(
             } catch (error: Throwable) {
                 connection.rollback()
                 throw error
+            } finally {
+                connection.autoCommit = true
             }
         }
     }
@@ -1003,6 +1058,7 @@ class DashboardRepository(
                     connection.rollback()
                     return@withContext null
                 }
+                access.requirePermission(PermissionManageAccount, "set default payment methods")
                 val method = connection.setDefaultPaymentMethod(access.workspaceId, paymentMethodId) ?: run {
                     connection.rollback()
                     return@withContext null
@@ -1022,6 +1078,8 @@ class DashboardRepository(
             } catch (error: Throwable) {
                 connection.rollback()
                 throw error
+            } finally {
+                connection.autoCommit = true
             }
         }
     }
@@ -1037,6 +1095,7 @@ class DashboardRepository(
                     connection.rollback()
                     return@withContext null
                 }
+                access.requirePermission(PermissionManageAccount, "delete payment methods")
                 val method = connection.deletePaymentMethod(access.workspaceId, paymentMethodId) ?: run {
                     connection.rollback()
                     return@withContext null
@@ -1057,6 +1116,8 @@ class DashboardRepository(
             } catch (error: Throwable) {
                 connection.rollback()
                 throw error
+            } finally {
+                connection.autoCommit = true
             }
         }
     }
@@ -1449,6 +1510,7 @@ class DashboardRepository(
                     connection.rollback()
                     return@withContext null
                 }
+                access.requirePermission(PermissionManageAccount, "create printer profiles")
                 val printer = connection.insertPrinter(access.workspaceId, request)
                 connection.ensurePrinterDefaults(access.workspaceId)
                 connection.insertWorkspaceActivity(
@@ -1484,6 +1546,7 @@ class DashboardRepository(
                     connection.rollback()
                     return@withContext null
                 }
+                access.requirePermission(PermissionManageAccount, "update printer profiles")
                 val printer = connection.updatePrinter(access.workspaceId, printerId, request)
                 if (printer != null) {
                     connection.ensurePrinterDefaults(access.workspaceId)
@@ -1519,6 +1582,7 @@ class DashboardRepository(
                     connection.rollback()
                     return@withContext null
                 }
+                access.requirePermission(PermissionManageAccount, "delete printer profiles")
                 val printer = connection.deletePrinter(access.workspaceId, printerId) ?: run {
                     connection.rollback()
                     return@withContext null
@@ -1937,6 +2001,39 @@ class DashboardRepository(
             statement.setString(2, phone)
             statement.executeQuery().use { result ->
                 if (result.next()) result.toCustomerResponse() else null
+            }
+        }
+    }
+
+    private fun Connection.updatePublicCatalogCustomerContact(
+        workspaceId: String,
+        customer: CustomerResponse,
+        customerName: String,
+        phoneNumber: String?,
+        email: String?,
+    ): CustomerResponse {
+        val cleanEmail = email.cleanOptional()?.lowercase()
+        val cleanPhone = phoneNumber.cleanOptional()
+        if (cleanEmail == null && cleanPhone == null && customerName.cleanOptional() == null) {
+            return customer
+        }
+        val sql = """
+            update customers
+            set name = coalesce(?, name),
+                phone_number = coalesce(phone_number, ?),
+                email = coalesce(email, ?),
+                updated_at = now()
+            where id = ?::uuid and workspace_id = ?::uuid
+            returning *
+        """.trimIndent()
+        return prepareStatement(sql).use { statement ->
+            statement.setNullableString(1, customerName.cleanOptional())
+            statement.setNullableString(2, cleanPhone)
+            statement.setNullableString(3, cleanEmail)
+            statement.setString(4, customer.id)
+            statement.setString(5, workspaceId)
+            statement.executeQuery().use { result ->
+                if (result.next()) result.toCustomerResponse() else customer
             }
         }
     }
@@ -3773,69 +3870,235 @@ class DashboardRepository(
         productId: String,
         request: ProductRequest,
     ) {
-        prepareStatement(
+        val itemType = request.itemType.cleanItemType()
+        val retainedVariantIds = request.variants
+            .filter { it.name.cleanOptional() != null }
+            .distinctBy { it.name.cleanName().lowercase() }
+            .take(40)
+            .mapIndexed { index, variant ->
+                val values = variant.toProductVariantValues(request, itemType, index)
+                val existingVariantId = findExistingProductVariantId(
+                    access = access,
+                    productId = productId,
+                    requestedVariantId = variant.id,
+                    cleanName = values.name,
+                )
+                val variantId = if (existingVariantId == null) {
+                    insertProductVariant(access, productId, values)
+                } else {
+                    updateProductVariant(access, productId, existingVariantId, values)
+                }
+                deleteProductVariantComponents(access, variantId)
+                insertProductVariantComponents(
+                    access = access,
+                    packageVariantId = variantId,
+                    parentItemType = itemType,
+                    components = variant.components,
+                )
+                variantId
+            }
+        archiveRemovedProductVariants(access, productId, retainedVariantIds)
+    }
+
+    private fun ProductVariantRequest.toProductVariantValues(
+        request: ProductRequest,
+        itemType: String,
+        sortOrder: Int,
+    ): ProductVariantValues {
+        val sellingPrice = sellingPrice?.cleanOptional()?.moneyOrZero() ?: request.sellingPrice.moneyOrZero()
+        val costPrice = costPrice?.cleanOptional()?.moneyOrZero() ?: request.costPrice.moneyOrZero()
+        val stockQuantity = if (itemType == "product") {
+            stockQuantity?.cleanOptional()?.decimalOrZero() ?: BigDecimal.ZERO
+        } else {
+            BigDecimal.ZERO
+        }
+        return ProductVariantValues(
+            name = name.cleanName(),
+            sku = sku?.cleanOptionalUpper(),
+            barcode = barcode?.cleanOptional(),
+            sellingPrice = sellingPrice.scaled(),
+            costPrice = costPrice.scaled(),
+            stockQuantity = stockQuantity.scaled(),
+            durationMinutes = durationMinutes?.takeIf { it > 0 }?.coerceAtMost(1440),
+            includedQuantity = includedQuantity.coerceAtLeast(1).coerceAtMost(999),
+            addonsJson = addons.cleanVariantAddons().let(DashboardRepositoryJson::encodeToString),
+            sortOrder = sortOrder,
+            status = status.cleanCatalogStatus(),
+        )
+    }
+
+    private fun Connection.findExistingProductVariantId(
+        access: DashboardWorkspaceAccess,
+        productId: String,
+        requestedVariantId: String?,
+        cleanName: String,
+    ): String? {
+        requestedVariantId.cleanUuidOrNull()?.let { variantId ->
+            prepareStatement(
+                """
+                select id::text
+                from product_variants
+                where workspace_id = ?::uuid and product_id = ?::uuid and id = ?::uuid
+                limit 1
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setString(1, access.workspaceId)
+                statement.setString(2, productId)
+                statement.setString(3, variantId)
+                statement.executeQuery().use { result ->
+                    if (result.next()) return result.getString("id")
+                }
+            }
+        }
+        return prepareStatement(
             """
-            update product_variants
-            set status = 'archived', updated_at = now()
-            where workspace_id = ?::uuid and product_id = ?::uuid
+            select id::text
+            from product_variants
+            where workspace_id = ?::uuid and product_id = ?::uuid and name = ?
+            limit 1
             """.trimIndent(),
         ).use { statement ->
             statement.setString(1, access.workspaceId)
             statement.setString(2, productId)
+            statement.setString(3, cleanName)
+            statement.executeQuery().use { result ->
+                if (result.next()) result.getString("id") else null
+            }
+        }
+    }
+
+    private fun Connection.insertProductVariant(
+        access: DashboardWorkspaceAccess,
+        productId: String,
+        values: ProductVariantValues,
+    ): String =
+        prepareStatement(
+            """
+            insert into product_variants (
+                workspace_id, product_id, name, sku, barcode, selling_price, cost_price,
+                stock_quantity, duration_minutes, included_quantity, addons_json, sort_order, status, updated_at
+            )
+            values (?::uuid, ?::uuid, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, now())
+            returning id::text
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setString(1, access.workspaceId)
+            statement.setString(2, productId)
+            statement.bindProductVariantValues(startIndex = 3, values = values)
+            statement.executeQuery().use { result ->
+                result.next()
+                result.getString("id")
+            }
+        }
+
+    private fun Connection.updateProductVariant(
+        access: DashboardWorkspaceAccess,
+        productId: String,
+        variantId: String,
+        values: ProductVariantValues,
+    ): String =
+        prepareStatement(
+            """
+            update product_variants
+            set name = ?,
+                sku = ?,
+                barcode = ?,
+                selling_price = ?,
+                cost_price = ?,
+                stock_quantity = ?,
+                duration_minutes = ?,
+                included_quantity = ?,
+                addons_json = ?::jsonb,
+                sort_order = ?,
+                status = ?,
+                updated_at = now()
+            where workspace_id = ?::uuid and product_id = ?::uuid and id = ?::uuid
+            returning id::text
+            """.trimIndent(),
+        ).use { statement ->
+            statement.bindProductVariantValues(startIndex = 1, values = values)
+            statement.setString(12, access.workspaceId)
+            statement.setString(13, productId)
+            statement.setString(14, variantId)
+            statement.executeQuery().use { result ->
+                result.next()
+                result.getString("id")
+            }
+        }
+
+    private fun PreparedStatement.bindProductVariantValues(
+        startIndex: Int,
+        values: ProductVariantValues,
+    ) {
+        setString(startIndex, values.name)
+        setNullableString(startIndex + 1, values.sku)
+        setNullableString(startIndex + 2, values.barcode)
+        setBigDecimal(startIndex + 3, values.sellingPrice)
+        setBigDecimal(startIndex + 4, values.costPrice)
+        setBigDecimal(startIndex + 5, values.stockQuantity)
+        if (values.durationMinutes == null) {
+            setNull(startIndex + 6, Types.INTEGER)
+        } else {
+            setInt(startIndex + 6, values.durationMinutes)
+        }
+        setInt(startIndex + 7, values.includedQuantity)
+        setString(startIndex + 8, values.addonsJson)
+        setInt(startIndex + 9, values.sortOrder)
+        setString(startIndex + 10, values.status)
+    }
+
+    private fun Connection.deleteProductVariantComponents(
+        access: DashboardWorkspaceAccess,
+        packageVariantId: String,
+    ) {
+        prepareStatement(
+            """
+            delete from product_variant_components
+            where workspace_id = ?::uuid and package_variant_id = ?::uuid
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setString(1, access.workspaceId)
+            statement.setString(2, packageVariantId)
             statement.executeUpdate()
         }
-        request.variants
-            .filter { it.name.cleanOptional() != null }
-            .take(40)
-            .forEachIndexed { index, variant ->
-                val sellingPrice = variant.sellingPrice?.cleanOptional()?.moneyOrZero() ?: request.sellingPrice.moneyOrZero()
-                val costPrice = variant.costPrice?.cleanOptional()?.moneyOrZero() ?: request.costPrice.moneyOrZero()
-                val stockQuantity = if (request.itemType.cleanItemType() == "product") {
-                    variant.stockQuantity?.cleanOptional()?.decimalOrZero() ?: BigDecimal.ZERO
-                } else {
-                    BigDecimal.ZERO
-                }
-                val includedQuantity = variant.includedQuantity.coerceAtLeast(1).coerceAtMost(999)
-                val addonsJson = variant.addons.cleanVariantAddons().let(DashboardRepositoryJson::encodeToString)
-                val variantId = prepareStatement(
-                    """
-                    insert into product_variants (
-                        workspace_id, product_id, name, sku, barcode, selling_price, cost_price,
-                        stock_quantity, duration_minutes, included_quantity, addons_json, sort_order, status, updated_at
-                    )
-                    values (?::uuid, ?::uuid, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, now())
-                    returning id::text
-                    """.trimIndent(),
-                ).use { statement ->
-                    statement.setString(1, access.workspaceId)
-                    statement.setString(2, productId)
-                    statement.setString(3, variant.name.cleanName())
-                    statement.setNullableString(4, variant.sku?.cleanOptionalUpper())
-                    statement.setNullableString(5, variant.barcode?.cleanOptional())
-                    statement.setBigDecimal(6, sellingPrice.scaled())
-                    statement.setBigDecimal(7, costPrice.scaled())
-                    statement.setBigDecimal(8, stockQuantity.scaled())
-                    if (variant.durationMinutes == null || variant.durationMinutes <= 0) {
-                        statement.setNull(9, Types.INTEGER)
-                    } else {
-                        statement.setInt(9, variant.durationMinutes.coerceAtMost(1440))
-                    }
-                    statement.setInt(10, includedQuantity)
-                    statement.setString(11, addonsJson)
-                    statement.setInt(12, index)
-                    statement.setString(13, variant.status.cleanCatalogStatus())
-                    statement.executeQuery().use { result ->
-                        result.next()
-                        result.getString("id")
-                    }
-                }
-                insertProductVariantComponents(
-                    access = access,
-                    packageVariantId = variantId,
-                    parentItemType = request.itemType.cleanItemType(),
-                    components = variant.components,
-                )
+    }
+
+    private fun Connection.archiveRemovedProductVariants(
+        access: DashboardWorkspaceAccess,
+        productId: String,
+        retainedVariantIds: List<String>,
+    ) {
+        if (retainedVariantIds.isEmpty()) {
+            prepareStatement(
+                """
+                update product_variants
+                set status = 'archived', updated_at = now()
+                where workspace_id = ?::uuid and product_id = ?::uuid
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setString(1, access.workspaceId)
+                statement.setString(2, productId)
+                statement.executeUpdate()
             }
+            return
+        }
+        val placeholders = retainedVariantIds.joinToString(", ") { "?::uuid" }
+        prepareStatement(
+            """
+            update product_variants
+            set status = 'archived', updated_at = now()
+            where workspace_id = ?::uuid
+                and product_id = ?::uuid
+                and id not in ($placeholders)
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setString(1, access.workspaceId)
+            statement.setString(2, productId)
+            retainedVariantIds.forEachIndexed { index, variantId ->
+                statement.setString(index + 3, variantId)
+            }
+            statement.executeUpdate()
+        }
     }
 
     private fun Connection.insertProductVariantComponents(
@@ -4373,6 +4636,62 @@ class DashboardRepository(
                     }
                 }
                 items.toPagedResult(filters, totalItems)
+            }
+        }
+    }
+
+    private fun Connection.listPublicCatalogCustomerOrders(
+        workspaceId: String,
+        identifiers: PublicCatalogCustomerIdentifiers,
+        filters: DashboardQueryFilters = DashboardQueryFilters(limit = 20),
+        includeItems: Boolean,
+    ): PagedResult<OrderResponse> {
+        val params = mutableListOf(workspaceId)
+        val searchTokens = filters.query.cleanSearchTokens()
+        val sql = buildString {
+            append(orderSelectSql())
+            append(" where o.workspace_id = ?::uuid")
+            append(" and o.source = 'public_catalog'")
+            append(" and o.customer_id is not null")
+            append(" and (")
+            val clauses = buildList {
+                identifiers.email?.let { email ->
+                    add("lower(coalesce(c.email, '')) = ?")
+                    params.add(email)
+                }
+                identifiers.phoneNumber?.let { phoneNumber ->
+                    add("coalesce(c.phone_number, '') = ?")
+                    params.add(phoneNumber)
+                }
+            }
+            append(clauses.joinToString(" or "))
+            append(")")
+            appendOrderDateWhere(filters, params, alias = "o")
+            appendOrderSearchWhere(searchTokens, params)
+            append(" group by o.id, c.name")
+            append(" order by o.created_at desc")
+            append(" limit ${filters.limit.sanitizedLimit().coerceAtMost(20)}")
+            append(" offset ${filters.offset()}")
+        }
+        return prepareStatement(sql).use { statement ->
+            statement.bindStringParams(params)
+            statement.executeQuery().use { result ->
+                var totalItems = 0
+                val items = buildList {
+                    while (result.next()) {
+                        if (totalItems == 0) totalItems = result.getInt("total_count")
+                        val order = result.toOrderResponse(emptyList(), emptyList())
+                        add(if (includeItems) {
+                            order.copy(
+                                items = listOrderItems(order.id),
+                                sessions = listOrderSessions(workspaceId, order.id),
+                            )
+                        } else {
+                            order
+                        })
+                    }
+                }
+                items.toPagedResult(filters.copy(limit = filters.limit.coerceAtMost(20)), totalItems)
             }
         }
     }
@@ -6532,6 +6851,12 @@ class DashboardRepository(
     private fun String.cleanName(): String =
         trim().take(180).ifBlank { "Untitled" }
 
+    private fun VerifiedFirebaseUser.publicCatalogCustomerIdentifiers(): PublicCatalogCustomerIdentifiers =
+        PublicCatalogCustomerIdentifiers(
+            email = email.cleanOptional()?.lowercase(),
+            phoneNumber = phoneNumber.cleanOptional(),
+        )
+
     private fun String?.cleanOptional(): String? =
         this?.trim()?.take(240)?.ifBlank { null }
 
@@ -7235,6 +7560,17 @@ class DashboardRepository(
         }
     }
 
+    private fun DashboardWorkspaceAccess.requireAnyPermission(permissions: List<String>, actionLabel: String) {
+        if (role == "business_owner") return
+        val cleanPermissions = this.permissions.map { it.trim().lowercase().replace("-", "_") }.toSet()
+        if (PermissionReadOnly in cleanPermissions || permissions.none { it in cleanPermissions }) {
+            throw DashboardOrderValidationException(
+                code = "team_permission_denied",
+                publicMessage = "This staff role cannot $actionLabel.",
+            )
+        }
+    }
+
     private fun String.catalogCreatePermission(): String =
         when (trim().lowercase()) {
             "service" -> PermissionCreateService
@@ -7277,6 +7613,20 @@ class DashboardRepository(
         val productId: String,
         val variantId: String?,
         val quantity: BigDecimal,
+        val status: String,
+    )
+
+    private data class ProductVariantValues(
+        val name: String,
+        val sku: String?,
+        val barcode: String?,
+        val sellingPrice: BigDecimal,
+        val costPrice: BigDecimal,
+        val stockQuantity: BigDecimal,
+        val durationMinutes: Int?,
+        val includedQuantity: Int,
+        val addonsJson: String,
+        val sortOrder: Int,
         val status: String,
     )
 
@@ -7377,6 +7727,8 @@ class DashboardRepository(
         const val PermissionCreateAppointment = "create_appointment"
         const val PermissionCreateOffer = "create_offer"
         const val PermissionManageStock = "manage_stock"
+        const val PermissionManageCustomers = "manage_customers"
+        const val PermissionManageAccount = "manage_account"
         val AllowedPrinterConnectionTypes = setOf(
             "mtp_usb",
             "usb",

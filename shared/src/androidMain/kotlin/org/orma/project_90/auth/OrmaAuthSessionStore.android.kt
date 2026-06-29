@@ -9,6 +9,8 @@ object OrmaAndroidAuthSessionStore {
         appContext = context.applicationContext
     }
 
+    internal fun context(): Context? = appContext
+
     internal fun preferences() =
         appContext?.getSharedPreferences("orma_auth_session", Context.MODE_PRIVATE)
 }

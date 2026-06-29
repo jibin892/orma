@@ -72,6 +72,18 @@ fun Route.dashboardRoutes(
         call.respond(order)
     }
 
+    get("/public/workspaces/{workspaceId}/account/orders") {
+        val repository = dashboardRepository ?: return@get call.dashboardDatabaseNotConfigured()
+        val firebaseUser = call.verifiedFirebaseUser(config) ?: return@get
+        val workspaceId = call.parameters["workspaceId"].orEmpty()
+        val orders = repository.publicCatalogCustomerOrders(
+            firebaseUser = firebaseUser,
+            workspaceId = workspaceId,
+            filters = call.dashboardFilters().copy(limit = 20),
+        ) ?: return@get call.publicCatalogNotFound()
+        call.respond(OrderListResponse(orders.items, orders.pagination))
+    }
+
     post("/public/workspaces/{workspaceId}/orders") {
         val repository = dashboardRepository ?: return@post call.dashboardDatabaseNotConfigured()
         val workspaceId = call.parameters["workspaceId"].orEmpty()
@@ -88,7 +100,8 @@ fun Route.dashboardRoutes(
             call.respondValidation("public_items_required", "Select at least one item.")
             return@post
         }
-        when (val result = repository.createPublicCatalogOrder(workspaceId, request)) {
+        val firebaseUser = call.optionalVerifiedFirebaseUser(config)
+        when (val result = repository.createPublicCatalogOrder(workspaceId, request, firebaseUser)) {
             is PublicCatalogOrderSubmitResult.Success -> {
                 orderNotificationService?.notifyOrderCreated(result.response.order)
                 call.respond(result.response)

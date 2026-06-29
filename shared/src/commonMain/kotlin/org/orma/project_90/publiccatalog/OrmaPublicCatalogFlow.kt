@@ -45,6 +45,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+import org.orma.project_90.auth.OrmaAuthResult
+import org.orma.project_90.auth.OrmaAuthSession
+import org.orma.project_90.auth.createOrmaAuthGateway
 import org.orma.project_90.backend.OrmaBackendResult
 import org.orma.project_90.backend.OrmaOrder
 import org.orma.project_90.backend.OrmaPublicCatalog
@@ -83,6 +86,7 @@ fun OrmaPublicCatalogFlow(
     modifier: Modifier = Modifier,
 ) {
     val client = remember { createOrmaBackendClient() }
+    val authGateway = remember { createOrmaAuthGateway() }
     val scope = rememberCoroutineScope()
     var catalog by remember(workspaceId) { mutableStateOf<OrmaPublicCatalog?>(null) }
     var loading by remember(workspaceId) { mutableStateOf(true) }
@@ -99,6 +103,15 @@ fun OrmaPublicCatalogFlow(
     var scheduledAt by remember(workspaceId) { mutableStateOf("") }
     var paymentMode by remember(workspaceId) { mutableStateOf("pay_on_spot") }
     var checkoutRequestId by remember(workspaceId) { mutableStateOf(ormaClientRequestId("catalog")) }
+    var customerSession by remember(workspaceId) { mutableStateOf<OrmaAuthSession?>(null) }
+    var customerOrders by remember(workspaceId) { mutableStateOf<List<OrmaOrder>>(emptyList()) }
+    var customerOrdersLoading by remember(workspaceId) { mutableStateOf(false) }
+    var customerAuthBusy by remember(workspaceId) { mutableStateOf(false) }
+    var customerAuthMessage by remember(workspaceId) { mutableStateOf<String?>(null) }
+    var customerAuthError by remember(workspaceId) { mutableStateOf<String?>(null) }
+    var loginPhoneNumber by remember(workspaceId) { mutableStateOf("") }
+    var loginOtp by remember(workspaceId) { mutableStateOf("") }
+    var loginOtpSent by remember(workspaceId) { mutableStateOf(false) }
 
     fun updateQuantity(cartKey: String, quantity: Int) {
         val productId = cartKey.publicCatalogCartProductId()
@@ -142,8 +155,74 @@ fun OrmaPublicCatalogFlow(
         statusRefreshing = false
     }
 
+    fun applyCustomerSession(session: OrmaAuthSession) {
+        customerSession = session
+        customerAuthError = null
+        customerAuthMessage = null
+        session.displayName?.takeIf { it.isNotBlank() }?.let { name ->
+            if (customerName.isBlank()) customerName = name
+        }
+        session.phoneNumber?.takeIf { it.isNotBlank() }?.let { phone ->
+            if (phoneNumber.isBlank()) phoneNumber = phone
+            if (loginPhoneNumber.isBlank()) loginPhoneNumber = phone
+        }
+    }
+
+    suspend fun loadCustomerOrderHistory(session: OrmaAuthSession) {
+        customerOrdersLoading = true
+        when (val result = client.loadPublicCatalogCustomerOrders(workspaceId, session.idToken)) {
+            is OrmaBackendResult.Success -> {
+                customerOrders = result.value.items
+                customerAuthError = null
+            }
+            is OrmaBackendResult.Failure -> {
+                customerOrders = emptyList()
+                customerAuthError = result.publicCatalogMessage(load = true)
+            }
+        }
+        customerOrdersLoading = false
+    }
+
+    suspend fun handleCustomerAuthResult(result: OrmaAuthResult) {
+        when (result) {
+            is OrmaAuthResult.OtpSent -> {
+                loginOtpSent = true
+                customerAuthMessage = result.message
+                customerAuthError = null
+            }
+            is OrmaAuthResult.Success -> {
+                applyCustomerSession(result.session)
+                customerAuthMessage = result.message
+                loginOtp = ""
+                loginOtpSent = false
+                loadCustomerOrderHistory(result.session)
+            }
+            is OrmaAuthResult.Failure -> {
+                customerAuthError = result.message
+                customerAuthMessage = null
+            }
+        }
+    }
+
     LaunchedEffect(workspaceId) {
         loadCatalogAndReceiptStatus(refreshReceipt = false)
+    }
+
+    LaunchedEffect(workspaceId) {
+        customerAuthBusy = true
+        when (val restored = authGateway.restoreSession()) {
+            is OrmaAuthResult.Success -> {
+                applyCustomerSession(restored.session)
+                loadCustomerOrderHistory(restored.session)
+            }
+            is OrmaAuthResult.Failure -> {
+                customerAuthError = null
+                customerOrders = emptyList()
+            }
+            is OrmaAuthResult.OtpSent,
+            null -> Unit
+        }
+        customerAuthBusy = false
     }
 
     OrmaAdaptiveSurface(modifier = modifier) {
@@ -206,6 +285,7 @@ fun OrmaPublicCatalogFlow(
                     clientRequestId = checkoutRequestId,
                     customerName = customerName.trim(),
                     phoneNumber = phoneNumber.trim(),
+                    customerEmail = customerSession?.email.orEmpty(),
                     notes = notes.trim(),
                     fulfillmentType = effectiveFulfillmentType,
                     scheduledAt = if (appointmentRequired || effectiveFulfillmentType == "scheduled") scheduledAt.trim() else "",
@@ -218,13 +298,82 @@ fun OrmaPublicCatalogFlow(
                         )
                     },
                 )
-                when (val result = client.submitPublicCatalogOrder(workspaceId, draft)) {
-                    is OrmaBackendResult.Success -> receipt = result.value
+                when (val result = client.submitPublicCatalogOrder(workspaceId, draft, customerSession?.idToken)) {
+                    is OrmaBackendResult.Success -> {
+                        receipt = result.value
+                        customerSession?.let { loadCustomerOrderHistory(it) }
+                    }
                     is OrmaBackendResult.Failure -> error = result.publicCatalogMessage(load = false)
                 }
                 submitting = false
             }
         }
+
+        val customerAccountState = PublicCatalogCustomerAccountState(
+            session = customerSession,
+            orders = customerOrders,
+            ordersLoading = customerOrdersLoading,
+            authBusy = customerAuthBusy,
+            message = customerAuthMessage,
+            error = customerAuthError,
+            phoneNumber = loginPhoneNumber,
+            otp = loginOtp,
+            otpSent = loginOtpSent,
+        )
+        val customerAccountActions = PublicCatalogCustomerAccountActions(
+            onPhoneChange = {
+                loginPhoneNumber = it
+                if (!loginOtpSent) customerAuthError = null
+            },
+            onOtpChange = {
+                loginOtp = it
+                customerAuthError = null
+            },
+            onSendOtp = {
+                scope.launch {
+                    customerAuthBusy = true
+                    customerAuthError = null
+                    val phone = loginPhoneNumber.ifBlank { phoneNumber }
+                    if (loginPhoneNumber.isBlank()) loginPhoneNumber = phone
+                    handleCustomerAuthResult(authGateway.requestPhoneOtp(phone))
+                    customerAuthBusy = false
+                }
+            },
+            onVerifyOtp = {
+                scope.launch {
+                    customerAuthBusy = true
+                    customerAuthError = null
+                    handleCustomerAuthResult(authGateway.verifyPhoneOtp(loginOtp))
+                    customerAuthBusy = false
+                }
+            },
+            onGoogleSignIn = {
+                scope.launch {
+                    customerAuthBusy = true
+                    customerAuthError = null
+                    handleCustomerAuthResult(authGateway.signInWithGoogle())
+                    customerAuthBusy = false
+                }
+            },
+            onRefreshOrders = {
+                customerSession?.let { session ->
+                    scope.launch { loadCustomerOrderHistory(session) }
+                }
+            },
+            onLogout = {
+                scope.launch {
+                    customerAuthBusy = true
+                    authGateway.clearStoredSession()
+                    customerSession = null
+                    customerOrders = emptyList()
+                    customerAuthError = null
+                    customerAuthMessage = "Guest checkout is active."
+                    loginOtp = ""
+                    loginOtpSent = false
+                    customerAuthBusy = false
+                }
+            },
+        )
 
         when (this) {
             OrmaWindowClass.Mobile -> PublicCatalogMobile(
@@ -242,6 +391,7 @@ fun OrmaPublicCatalogFlow(
                 fulfillmentType = fulfillmentType,
                 scheduledAt = scheduledAt,
                 paymentMode = paymentMode,
+                customerAccountState = customerAccountState,
                 selectedItems = selectedItems,
                 selectedFlow = selectedFlow,
                 total = total,
@@ -274,6 +424,7 @@ fun OrmaPublicCatalogFlow(
                 onFulfillmentChange = { fulfillmentType = it },
                 onScheduledAtChange = { scheduledAt = it },
                 onPaymentModeChange = { paymentMode = it },
+                customerAccountActions = customerAccountActions,
                 onSubmit = ::submit,
             )
             OrmaWindowClass.Wide -> PublicCatalogWide(
@@ -291,6 +442,7 @@ fun OrmaPublicCatalogFlow(
                 fulfillmentType = fulfillmentType,
                 scheduledAt = scheduledAt,
                 paymentMode = paymentMode,
+                customerAccountState = customerAccountState,
                 selectedItems = selectedItems,
                 selectedFlow = selectedFlow,
                 total = total,
@@ -323,6 +475,7 @@ fun OrmaPublicCatalogFlow(
                 onFulfillmentChange = { fulfillmentType = it },
                 onScheduledAtChange = { scheduledAt = it },
                 onPaymentModeChange = { paymentMode = it },
+                customerAccountActions = customerAccountActions,
                 onSubmit = ::submit,
             )
         }
@@ -345,6 +498,7 @@ private fun PublicCatalogMobile(
     fulfillmentType: String,
     scheduledAt: String,
     paymentMode: String,
+    customerAccountState: PublicCatalogCustomerAccountState,
     selectedItems: List<PublicCatalogSelection>,
     selectedFlow: String,
     total: Double,
@@ -362,6 +516,7 @@ private fun PublicCatalogMobile(
     onFulfillmentChange: (String) -> Unit,
     onScheduledAtChange: (String) -> Unit,
     onPaymentModeChange: (String) -> Unit,
+    customerAccountActions: PublicCatalogCustomerAccountActions,
     onSubmit: () -> Unit,
 ) {
     val scrollState = rememberScrollState()
@@ -444,6 +599,7 @@ private fun PublicCatalogMobile(
                     fulfillmentType = fulfillmentType,
                     scheduledAt = scheduledAt,
                     paymentMode = paymentMode,
+                    customerAccountState = customerAccountState,
                     selectedItems = selectedItems,
                     selectedFlow = selectedFlow,
                     total = total,
@@ -462,6 +618,7 @@ private fun PublicCatalogMobile(
                     onFulfillmentChange = onFulfillmentChange,
                     onScheduledAtChange = onScheduledAtChange,
                     onPaymentModeChange = onPaymentModeChange,
+                    customerAccountActions = customerAccountActions,
                     onSubmit = onSubmit,
                 )
             }
@@ -560,6 +717,7 @@ private fun PublicCatalogWide(
     fulfillmentType: String,
     scheduledAt: String,
     paymentMode: String,
+    customerAccountState: PublicCatalogCustomerAccountState,
     selectedItems: List<PublicCatalogSelection>,
     selectedFlow: String,
     total: Double,
@@ -577,6 +735,7 @@ private fun PublicCatalogWide(
     onFulfillmentChange: (String) -> Unit,
     onScheduledAtChange: (String) -> Unit,
     onPaymentModeChange: (String) -> Unit,
+    customerAccountActions: PublicCatalogCustomerAccountActions,
     onSubmit: () -> Unit,
 ) {
     val wideScrollState = rememberScrollState()
@@ -654,6 +813,7 @@ private fun PublicCatalogWide(
                         fulfillmentType = fulfillmentType,
                         scheduledAt = scheduledAt,
                         paymentMode = paymentMode,
+                        customerAccountState = customerAccountState,
                         selectedItems = selectedItems,
                         selectedFlow = selectedFlow,
                         total = total,
@@ -672,6 +832,7 @@ private fun PublicCatalogWide(
                         onFulfillmentChange = onFulfillmentChange,
                         onScheduledAtChange = onScheduledAtChange,
                         onPaymentModeChange = onPaymentModeChange,
+                        customerAccountActions = customerAccountActions,
                         onSubmit = onSubmit,
                     )
                 }
@@ -1387,28 +1548,23 @@ private fun PublicCatalogProducts(
     val cleanSearchQuery = searchQuery.trim()
     val availableTypeFilters = catalog?.products
         .orEmpty()
-        .map { it.itemType.publicCatalogNormalizedItemType() }
+        .publicCatalogDisplayItems()
+        .map { it.product.itemType.publicCatalogNormalizedItemType() }
         .distinct()
-    val searchedProducts = visibleProducts.filter { product ->
+    val visibleCatalogItems = visibleProducts.publicCatalogDisplayItems()
+    val searchedCatalogItems = visibleCatalogItems.filter { item ->
+        val product = item.product
         val productType = product.itemType.publicCatalogNormalizedItemType()
         (selectedTypeFilter == "all" || selectedTypeFilter == productType) &&
-            (cleanSearchQuery.isBlank() ||
-            product.name.contains(cleanSearchQuery, ignoreCase = true) ||
-            product.description.orEmpty().contains(cleanSearchQuery, ignoreCase = true) ||
-            product.categoryName.orEmpty().contains(cleanSearchQuery, ignoreCase = true) ||
-            product.variants.any { variant ->
-                variant.name.contains(cleanSearchQuery, ignoreCase = true) ||
-                    variant.sku.orEmpty().contains(cleanSearchQuery, ignoreCase = true) ||
-                    variant.barcode.orEmpty().contains(cleanSearchQuery, ignoreCase = true)
-            } ||
-            productType.publicCatalogItemTypeLabel().contains(cleanSearchQuery, ignoreCase = true))
+            (cleanSearchQuery.isBlank() || item.matchesPublicCatalogSearch(cleanSearchQuery))
     }
+    val searchedProducts = searchedCatalogItems.map { it.product }.distinctBy { it.id }
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         PublicCatalogProductsHeader(
-            count = searchedProducts.size,
+            count = searchedCatalogItems.size,
             activeType = selectedCartItemType,
         )
         when {
@@ -1455,7 +1611,7 @@ private fun PublicCatalogProducts(
                                 }
                             },
                         )
-                        if (searchedProducts.isEmpty()) {
+                        if (searchedCatalogItems.isEmpty()) {
                             PublicCatalogEmpty(
                                 title = "No matches",
                                 body = "Try another search or category.",
@@ -1483,7 +1639,7 @@ private fun PublicCatalogProducts(
 //                                )
                               }
                               PublicCatalogProductGrid(
-                                  products = searchedProducts,
+                                  items = searchedCatalogItems,
                                   quantities = quantities,
                                   activeCartType = selectedCartItemType,
                                   onQuantityChange = onQuantityChange,
@@ -1770,7 +1926,7 @@ private fun PublicCatalogOfferCard(
 
 @Composable
 private fun PublicCatalogProductGrid(
-    products: List<OrmaPublicCatalogProduct>,
+    items: List<PublicCatalogDisplayItem>,
     quantities: Map<String, Int>,
     activeCartType: String?,
     onQuantityChange: (String, Int) -> Unit,
@@ -1786,22 +1942,27 @@ private fun PublicCatalogProductGrid(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            products.chunked(columns).forEach { rowItems ->
+            items.chunked(columns).forEach { rowItems ->
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalAlignment = Alignment.Top,
                 ) {
-                    rowItems.forEach { product ->
-                        val parentKey = product.publicCatalogCartKey()
+                    rowItems.forEach { item ->
+                        val product = item.product
+                        val itemKey = item.cartKey
                         PublicCatalogProductTile(
-                            product = product,
-                            quantity = quantities[parentKey] ?: 0,
-                            variantQuantities = product.variants.associate { variant ->
-                                variant.id to (quantities[product.publicCatalogCartKey(variant.id)] ?: 0)
+                            item = item,
+                            quantity = quantities[itemKey] ?: 0,
+                            variantQuantities = if (item.variant == null) {
+                                product.variants.associate { variant ->
+                                    variant.id to (quantities[product.publicCatalogCartKey(variant.id)] ?: 0)
+                                }
+                            } else {
+                                emptyMap()
                             },
                             activeCartType = activeCartType,
-                            onQuantityChange = { onQuantityChange(parentKey, it) },
+                            onQuantityChange = { onQuantityChange(itemKey, it) },
                             onVariantPickerOpen = { onVariantPickerOpen(product.id) },
                             modifier = Modifier.weight(1f),
                         )
@@ -1864,6 +2025,7 @@ private fun PublicCatalogCheckout(
     fulfillmentType: String,
     scheduledAt: String,
     paymentMode: String,
+    customerAccountState: PublicCatalogCustomerAccountState,
     selectedItems: List<PublicCatalogSelection>,
     selectedFlow: String,
     total: Double,
@@ -1879,6 +2041,7 @@ private fun PublicCatalogCheckout(
     onFulfillmentChange: (String) -> Unit,
     onScheduledAtChange: (String) -> Unit,
     onPaymentModeChange: (String) -> Unit,
+    customerAccountActions: PublicCatalogCustomerAccountActions,
     onSubmit: () -> Unit,
 ) {
     val appointmentFlow = selectedFlow == "appointment"
@@ -1894,12 +2057,12 @@ private fun PublicCatalogCheckout(
     val checkoutTitle = when {
         appointmentFlow -> "Book appointment"
         serviceFlow -> "Request service"
-        else -> "Checkout"
+        else -> "Place order"
     }
     val checkoutPrompt = when {
-        appointmentFlow -> "Reserve a slot, share your phone number, and the business will confirm the booking."
-        serviceFlow -> "Share the service details and timing so the business can confirm availability."
-        else -> "Review your items, choose timing, and send the order directly to the business."
+        appointmentFlow -> "Choose the preferred slot and send this booking to the business."
+        serviceFlow -> "Choose request timing and send the service details to the business."
+        else -> "Choose pickup timing and send this order to the business."
     }
     val itemCount = selectedItems.sumOf { it.quantity }
     val currency = catalog?.workspace?.currency ?: selectedItems.firstOrNull()?.product?.currency.orEmpty()
@@ -1919,16 +2082,16 @@ private fun PublicCatalogCheckout(
                 onNewOrder = onNewOrder,
             )
         } else {
-//            PublicCatalogCheckoutHeader(
-//                title = checkoutTitle,
-//                body = checkoutPrompt,
-//                itemCount = itemCount,
-//                total = estimatedTotal,
-//                offerSavings = offerSavings,
-//                currency = currency,
-//                ready = submitEnabled,
-//                submitting = submitting,
-//            )
+            PublicCatalogCheckoutHeader(
+                title = checkoutTitle,
+                body = checkoutPrompt,
+                itemCount = itemCount,
+                total = estimatedTotal,
+                offerSavings = offerSavings,
+                currency = currency,
+                ready = submitEnabled,
+                submitting = submitting,
+            )
             PublicCatalogSelectionSummary(
                 catalog = catalog,
                 selectedItems = selectedItems,
@@ -1952,11 +2115,15 @@ private fun PublicCatalogCheckout(
                     )
                 }
             } else {
-//                PublicCatalogTrustStrip(
-//                    hasUpi = hasUpi,
-//                    hasWhatsApp = hasWhatsApp,
-//                    selectedFulfillment = selectedFulfillment,
-//                )
+                PublicCatalogTrustStrip(
+                    hasUpi = hasUpi,
+                    hasWhatsApp = hasWhatsApp,
+                    selectedFulfillment = selectedFulfillment,
+                )
+                PublicCatalogCustomerAccountPanel(
+                    state = customerAccountState,
+                    actions = customerAccountActions,
+                )
                 OrmaSectionHeader(text = "Contact details")
                 OrmaTextField(
                     value = customerName,
@@ -1970,14 +2137,20 @@ private fun PublicCatalogCheckout(
                     label = "Phone number",
                     supportingText = "India is selected by default. Change country if needed.",
                 )
-                OrmaSectionHeader(text = "Timing and payment")
+                OrmaSectionHeader(
+                    text = when {
+                        appointmentFlow -> "Appointment and payment"
+                        serviceFlow -> "Service timing and payment"
+                        else -> "Order timing and payment"
+                    },
+                )
                 if (!appointmentFlow) {
                     OrmaSegmentedRow(
                         options = fulfillmentOptions,
                         selected = selectedFulfillment,
                         label = {
                             when (it) {
-                                "scheduled" -> "Schedule"
+                                "scheduled" -> if (serviceFlow) "Schedule service" else "Schedule pickup"
                                 "standard" -> "Request now"
                                 else -> "Take away"
                             }
@@ -1989,9 +2162,13 @@ private fun PublicCatalogCheckout(
                     OrmaCalendarDateTimeField(
                         value = scheduledAt,
                         onValueChange = onScheduledAtChange,
-                        label = "Preferred date/time",
+                        label = if (appointmentFlow) "Appointment date/time" else "Preferred date/time",
                         placeholder = "Choose date",
-                        supportingText = "Choose a date. Add a common time slot if needed.",
+                        supportingText = if (appointmentFlow) {
+                            "Choose the appointment slot requested by the customer."
+                        } else {
+                            "Choose a date. Add a common time slot if needed."
+                        },
                         allowClear = !appointmentFlow,
                     )
                 }
@@ -2079,7 +2256,7 @@ private fun PublicCatalogCheckoutHeader(
                     modifier = Modifier.padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
-//                    PublicCatalogCheckoutTitle(title = title, body = body, status = status)
+                    PublicCatalogCheckoutTitle(title = title, body = body, status = status)
                     metrics.chunked(2).forEach { rowMetrics ->
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -2104,12 +2281,12 @@ private fun PublicCatalogCheckoutHeader(
                     horizontalArrangement = Arrangement.spacedBy(18.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-//                    PublicCatalogCheckoutTitle(
-//                        title = title,
-//                        body = body,
-//                        status = status,
-//                        modifier = Modifier.weight(1f),
-//                    )
+                    PublicCatalogCheckoutTitle(
+                        title = title,
+                        body = body,
+                        status = status,
+                        modifier = Modifier.weight(1f),
+                    )
                     Column(
                         modifier = Modifier.widthIn(min = 150.dp, max = 190.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -2263,6 +2440,240 @@ private fun PublicCatalogTrustStrip(
 }
 
 @Composable
+private fun PublicCatalogCustomerAccountPanel(
+    state: PublicCatalogCustomerAccountState,
+    actions: PublicCatalogCustomerAccountActions,
+) {
+    OrmaSectionHeader(text = "Account")
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = OrmaShapes.SmallCard,
+        color = OrmaColors.ScreenBackground,
+        contentColor = OrmaColors.TextPrimary,
+        border = BorderStroke(0.6.dp, OrmaColors.Hairline),
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            if (state.session == null) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "Guest checkout",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = OrmaColors.TextPrimary,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    OrmaBadge(text = "OPTIONAL", tone = OrmaStatusTone.Info)
+                }
+                OrmaLightButton(
+                    text = if (state.authBusy) "Signing in..." else "Continue with Google",
+                    onClick = actions.onGoogleSignIn,
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !state.authBusy,
+                )
+                OrmaCountryPhoneField(
+                    value = state.phoneNumber,
+                    onValueChange = actions.onPhoneChange,
+                    label = "Phone login",
+                    supportingText = "Use the same phone number used for earlier bookings.",
+                )
+                if (state.otpSent) {
+                    OrmaTextField(
+                        value = state.otp,
+                        onValueChange = actions.onOtpChange,
+                        label = "OTP",
+                        placeholder = "6 digit code",
+                    )
+                }
+                OrmaLightButton(
+                    text = when {
+                        state.authBusy -> "Checking..."
+                        state.otpSent -> "Verify OTP"
+                        else -> "Send OTP"
+                    },
+                    onClick = if (state.otpSent) actions.onVerifyOtp else actions.onSendOtp,
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !state.authBusy,
+                )
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(3.dp),
+                    ) {
+                        Text(
+                            text = "Signed in",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = OrmaColors.TextPrimary,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            text = state.session.publicCatalogAccountLabel(),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = OrmaColors.TextSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    OrmaBadge(text = "ACCOUNT", tone = OrmaStatusTone.Success)
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    OrmaLightButton(
+                        text = if (state.ordersLoading) "Loading..." else "Refresh",
+                        onClick = actions.onRefreshOrders,
+                        modifier = Modifier.weight(1f),
+                        enabled = !state.ordersLoading && !state.authBusy,
+                    )
+                    OrmaLightButton(
+                        text = "Sign out",
+                        onClick = actions.onLogout,
+                        modifier = Modifier.weight(1f),
+                        enabled = !state.authBusy,
+                    )
+                }
+                PublicCatalogCustomerOrderHistory(
+                    orders = state.orders,
+                    loading = state.ordersLoading,
+                )
+            }
+            state.message?.takeIf { it.isNotBlank() }?.let { message ->
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = OrmaColors.TextSecondary,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            state.error?.takeIf { it.isNotBlank() }?.let { message ->
+                PublicCatalogMessageCard(
+                    title = "Account check failed",
+                    body = message,
+                    error = true,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PublicCatalogCustomerOrderHistory(
+    orders: List<OrmaOrder>,
+    loading: Boolean,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = "Previous requests",
+            style = MaterialTheme.typography.labelLarge,
+            color = OrmaColors.TextPrimary,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        when {
+            loading -> {
+                repeat(2) {
+                    OrmaSkeleton(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(58.dp),
+                        shape = OrmaShapes.StandardCell,
+                    )
+                }
+            }
+            orders.isEmpty() -> Text(
+                text = "No previous requests for this account.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = OrmaColors.TextSecondary,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            else -> orders.take(4).forEach { order ->
+                PublicCatalogCustomerOrderHistoryRow(order)
+            }
+        }
+    }
+}
+
+@Composable
+private fun PublicCatalogCustomerOrderHistoryRow(order: OrmaOrder) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = OrmaShapes.StandardCell,
+        color = OrmaColors.CellBackground,
+        contentColor = OrmaColors.TextPrimary,
+        border = BorderStroke(0.6.dp, OrmaColors.Hairline),
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(
+                    text = order.orderNumber.ifBlank { order.id },
+                    style = MaterialTheme.typography.labelLarge,
+                    color = OrmaColors.TextPrimary,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = order.publicCatalogHistorySummary(),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = OrmaColors.TextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = listOfNotNull(
+                        order.orderType.publicCatalogWorkTitle(),
+                        order.publicCatalogStatusLabel(),
+                        order.scheduledAt?.takeIf { it.isNotBlank() },
+                    ).joinToString(" / "),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = OrmaColors.TextSecondary.copy(alpha = 0.74f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Text(
+                text = "${order.currency} ${order.total}",
+                style = MaterialTheme.typography.labelLarge,
+                color = OrmaColors.TextPrimary,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.End,
+            )
+        }
+    }
+}
+
+@Composable
 private fun PublicCatalogTrustItem(
     text: String,
     modifier: Modifier = Modifier,
@@ -2289,7 +2700,7 @@ private fun PublicCatalogTrustItem(
 
 @Composable
 private fun PublicCatalogProductTile(
-    product: OrmaPublicCatalogProduct,
+    item: PublicCatalogDisplayItem,
     quantity: Int,
     variantQuantities: Map<String, Int>,
     activeCartType: String?,
@@ -2297,21 +2708,27 @@ private fun PublicCatalogProductTile(
     onVariantPickerOpen: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val activeVariants = product.publicCatalogActiveVariants()
+    val product = item.product
+    val displayVariant = item.variant
+    val standalonePackage = displayVariant != null
+    val activeVariants = if (standalonePackage) emptyList() else product.publicCatalogActiveVariants()
     val hasVariants = activeVariants.isNotEmpty()
     val selectedVariantCount = variantQuantities.values.sum()
     val selected = quantity > 0 || selectedVariantCount > 0
     val productType = product.itemType.publicCatalogNormalizedItemType()
     val lockedByType = activeCartType != null && activeCartType != productType && !selected
-    val enabled = product.inStock && !lockedByType
+    val maxQuantity = product.publicCatalogMaxSelectableQuantity(displayVariant)
+    val enabled = maxQuantity > 0 && !lockedByType
     val tileEnabled = enabled || selected
-    val maxQuantity = product.publicCatalogMaxSelectableQuantity()
     val actionLabel = when {
-        !product.inStock -> "Unavailable"
+        maxQuantity <= 0 -> "Unavailable"
         lockedByType -> "Clear ${activeCartType.publicCatalogItemTypeLabel().lowercase()} cart"
         hasVariants && selectedVariantCount > 0 -> "$selectedVariantCount selected"
         hasVariants -> "Choose option"
         selected -> "Selected"
+        standalonePackage && productType == "appointment" -> "Book package"
+        standalonePackage && productType == "service" -> "Request package"
+        standalonePackage -> "Place order"
         productType == "appointment" -> "Book"
         productType == "service" -> "Request"
         else -> "Add"
@@ -2362,6 +2779,9 @@ private fun PublicCatalogProductTile(
                     if (product.offer != null) {
                         OrmaBadge(text = "OFFER", tone = OrmaStatusTone.Success)
                     }
+                    if (standalonePackage) {
+                        OrmaBadge(text = "PACKAGE", tone = OrmaStatusTone.Success)
+                    }
                     OrmaBadge(
                         text = productType.publicCatalogItemTypeLabel().uppercase(),
                         tone = when (productType) {
@@ -2374,7 +2794,7 @@ private fun PublicCatalogProductTile(
             }
             Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
                 Text(
-                    text = product.name.ifBlank { "Item" },
+                    text = item.displayName,
                     style = MaterialTheme.typography.titleSmall,
                     color = if (lockedByType) OrmaColors.TextSecondary else OrmaColors.TextPrimary,
                     fontWeight = FontWeight.SemiBold,
@@ -2382,8 +2802,7 @@ private fun PublicCatalogProductTile(
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    text = product.description?.takeIf(String::isNotBlank)
-                        ?: product.publicCatalogAvailabilityLabel(),
+                    text = item.supportingText,
                     style = MaterialTheme.typography.bodyMedium,
                     color = OrmaColors.TextSecondary,
                     maxLines = 2,
@@ -2399,16 +2818,16 @@ private fun PublicCatalogProductTile(
                     modifier = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
-                    PublicCatalogOfferPrice(product = product)
+                    PublicCatalogOfferPrice(product = product, variant = displayVariant)
                     Text(
-                        text = product.publicCatalogAvailabilityLabel(),
+                        text = item.availabilityText,
                         style = MaterialTheme.typography.labelMedium,
                         color = OrmaColors.TextSecondary,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                if (product.variants.isEmpty()) {
+                if (!hasVariants) {
                     QuantityStepper(
                         quantity = quantity,
                         enabled = enabled || selected,
@@ -2876,18 +3295,20 @@ private fun PublicCatalogProductRow(
 @Composable
 private fun PublicCatalogOfferPrice(
     product: OrmaPublicCatalogProduct,
+    variant: OrmaProductVariant? = null,
 ) {
     val offer = product.offer
-    val discountAmount = offer?.discountAmount?.toDoubleOrNull().orZero()
+    val basePrice = variant?.sellingPrice?.takeIf { it.isNotBlank() } ?: product.sellingPrice
+    val discountAmount = product.discountFor(variant)
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        OrmaPrice(amount = product.customerPrice, currency = product.currency)
+        OrmaPrice(amount = product.customerPriceFor(variant), currency = product.currency)
         if (offer != null && discountAmount > 0.0) {
             Row(
                 horizontalArrangement = Arrangement.spacedBy(7.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = "${product.currency} ${product.sellingPrice}",
+                    text = "${product.currency} $basePrice",
                     style = MaterialTheme.typography.labelSmall,
                     color = OrmaColors.TextTertiary,
                     maxLines = 1,
@@ -3292,7 +3713,7 @@ private fun PublicCatalogSummaryLine(
                 overflow = TextOverflow.Ellipsis,
             )
             selection.product.offer?.let { offer ->
-                val savings = offer.discountAmount.toDoubleOrNull().orZero() * selection.quantity
+                val savings = selection.product.discountFor(selection.variant) * selection.quantity
                 if (savings > 0.0) {
                     Text(
                         text = "${offer.name}: save ${selection.product.currency} ${money(savings)}",
@@ -3464,6 +3885,25 @@ private fun OrmaOrder.publicCatalogStatusLabel(): String =
         else -> status.ifBlank { "Pending" }.replace('_', ' ').replaceFirstChar { it.uppercase() }
     }
 
+private fun OrmaAuthSession.publicCatalogAccountLabel(): String =
+    listOfNotNull(
+        displayName?.takeIf { it.isNotBlank() },
+        email?.takeIf { it.isNotBlank() },
+        phoneNumber?.takeIf { it.isNotBlank() },
+    ).firstOrNull()
+        ?: "Customer account"
+
+private fun OrmaOrder.publicCatalogHistorySummary(): String {
+    val names = items.mapNotNull { item ->
+        item.variantName?.takeIf { it.isNotBlank() }
+            ?: item.productName?.takeIf { it.isNotBlank() }
+            ?: item.description.takeIf { it.isNotBlank() }
+    }.take(2)
+    val summary = names.joinToString(", ").ifBlank { orderType.publicCatalogWorkTitle() }
+    val remaining = (itemCount - names.size).coerceAtLeast(0)
+    return if (remaining > 0) "$summary +$remaining" else summary
+}
+
 private fun String.publicCatalogWorkTitle(): String =
     when (trim().lowercase()) {
         "appointment" -> "Appointment"
@@ -3545,6 +3985,51 @@ private fun PublicCatalogSkeleton() {
     }
 }
 
+private data class PublicCatalogDisplayItem(
+    val product: OrmaPublicCatalogProduct,
+    val variant: OrmaProductVariant? = null,
+) {
+    val cartKey: String = product.publicCatalogCartKey(variant?.id)
+    val displayName: String = variant?.name?.takeIf { it.isNotBlank() } ?: product.name.ifBlank { "Item" }
+    val supportingText: String
+        get() = if (variant == null) {
+            product.description?.takeIf(String::isNotBlank) ?: product.publicCatalogAvailabilityLabel()
+        } else {
+            listOfNotNull(
+                "From ${product.name.ifBlank { "catalog item" }}",
+                variant.publicCatalogPackageDetail(product.itemType, product.unit),
+                variant.publicCatalogComponentSummary(),
+                variant.publicCatalogAddonSummary(),
+            ).joinToString(" / ").ifBlank {
+                product.description?.takeIf(String::isNotBlank) ?: product.publicCatalogAvailabilityLabel(variant)
+            }
+        }
+    val availabilityText: String
+        get() = product.publicCatalogAvailabilityLabel(variant)
+}
+
+private data class PublicCatalogCustomerAccountState(
+    val session: OrmaAuthSession?,
+    val orders: List<OrmaOrder>,
+    val ordersLoading: Boolean,
+    val authBusy: Boolean,
+    val message: String?,
+    val error: String?,
+    val phoneNumber: String,
+    val otp: String,
+    val otpSent: Boolean,
+)
+
+private data class PublicCatalogCustomerAccountActions(
+    val onPhoneChange: (String) -> Unit,
+    val onOtpChange: (String) -> Unit,
+    val onSendOtp: () -> Unit,
+    val onVerifyOtp: () -> Unit,
+    val onGoogleSignIn: () -> Unit,
+    val onRefreshOrders: () -> Unit,
+    val onLogout: () -> Unit,
+)
+
 private data class PublicCatalogSelection(
     val product: OrmaPublicCatalogProduct,
     val variant: OrmaProductVariant? = null,
@@ -3556,6 +4041,34 @@ private data class PublicCatalogSelection(
 
 private fun OrmaPublicCatalogProduct.publicCatalogCartKey(variantId: String? = null): String =
     if (variantId.isNullOrBlank()) id else "$id|$variantId"
+
+private fun List<OrmaPublicCatalogProduct>.publicCatalogDisplayItems(): List<PublicCatalogDisplayItem> =
+    flatMap { product ->
+        listOf(PublicCatalogDisplayItem(product = product)) +
+            product.publicCatalogActiveVariants()
+                .filter { it.publicCatalogIsPackageVariant(product.itemType) }
+                .map { variant -> PublicCatalogDisplayItem(product = product, variant = variant) }
+    }
+
+private fun PublicCatalogDisplayItem.matchesPublicCatalogSearch(query: String): Boolean {
+    val productType = product.itemType.publicCatalogNormalizedItemType()
+    val haystack = listOfNotNull(
+        displayName,
+        supportingText,
+        availabilityText,
+        product.name,
+        product.description,
+        product.categoryName,
+        productType.publicCatalogItemTypeLabel(),
+        variant?.sku,
+        variant?.barcode,
+        variant?.addons?.joinToString(" ") { it.name },
+        variant?.components?.joinToString(" ") { component ->
+            listOfNotNull(component.productName, component.variantName).joinToString(" ")
+        },
+    ).joinToString(" ")
+    return haystack.contains(query, ignoreCase = true)
+}
 
 private fun String.publicCatalogCartProductId(): String = substringBefore("|")
 
@@ -3580,6 +4093,19 @@ private fun OrmaProductVariant.publicCatalogPackageDetail(itemType: String, unit
         "appointment" -> "$count sessions"
         "service" -> "$count service sessions"
         else -> "$count ${unit.ifBlank { "items" }}"
+    }
+}
+
+private fun OrmaProductVariant.publicCatalogIsPackageVariant(itemType: String): Boolean =
+    includedQuantity.coerceAtLeast(1) > 1 ||
+        components.any { it.status.trim().lowercase() == "active" } ||
+        (itemType.publicCatalogNormalizedItemType() != "product" &&
+            addons.any { it.status.trim().lowercase() == "active" })
+
+private fun OrmaProductVariant.publicCatalogAddonSummary(): String? {
+    val activeAddons = addons.filter { it.status.trim().lowercase() == "active" }
+    return activeAddons.takeIf { it.isNotEmpty() }?.let { addons ->
+        "${addons.size} add-on${if (addons.size == 1) "" else "s"} available"
     }
 }
 
@@ -3641,12 +4167,18 @@ private fun OrmaPublicCatalogProduct.publicCatalogMaxSelectableQuantity(variant:
         else -> 99
     }
 
-private fun OrmaPublicCatalogProduct.publicCatalogAvailabilityLabel(): String =
+private fun OrmaPublicCatalogProduct.publicCatalogAvailabilityLabel(
+    variant: OrmaProductVariant? = null,
+): String =
     when (itemType.publicCatalogNormalizedItemType()) {
-        "appointment" -> durationMinutes?.let { "$it min appointment" } ?: "appointment booking"
-        "service" -> durationMinutes?.let { "$it min service" } ?: "service"
-        else -> if (trackStock) {
-            "${stockQuantity.publicCatalogQuantityLabel()} ${unit.ifBlank { "unit" }} left"
+        "appointment" -> variant?.publicCatalogPackageDetail(itemType, unit)
+            ?: (variant?.durationMinutes ?: durationMinutes)?.let { "$it min appointment" }
+            ?: "appointment booking"
+        "service" -> variant?.publicCatalogPackageDetail(itemType, unit)
+            ?: (variant?.durationMinutes ?: durationMinutes)?.let { "$it min service" }
+            ?: "service"
+        else -> variant?.publicCatalogPackageDetail(itemType, unit) ?: if (trackStock) {
+            "${(variant?.stockQuantity ?: stockQuantity).publicCatalogQuantityLabel()} ${unit.ifBlank { "unit" }} left"
         } else {
             "per ${unit.ifBlank { "unit" }}"
         }
@@ -3702,7 +4234,12 @@ private fun OrmaPublicCatalog.publicCatalogWhatsAppMessage(
     if (selectedItems.isNotEmpty()) {
         append("\n\nItems:")
         selectedItems.forEach { item ->
-            append("\n- ${item.product.name} x${item.quantity}")
+            val itemName = listOf(item.product.name, item.variant?.name)
+                .filterNotNull()
+                .filter { it.isNotBlank() }
+                .joinToString(" - ")
+                .ifBlank { "Item" }
+            append("\n- $itemName x${item.quantity}")
         }
         append("\n\nEstimated total: ${workspace.currency} ${money(selectedItems.sumOf { it.lineTotal })}")
     }

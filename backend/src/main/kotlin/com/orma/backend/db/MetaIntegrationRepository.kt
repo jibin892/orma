@@ -318,6 +318,7 @@ class MetaIntegrationRepository(
 
         val templateName = request.name.cleanMetaTemplateName()
         val bodyText = request.bodyText.cleanMetaTemplateBody()
+        val category = request.category.cleanMetaTemplateCategory()
         val templateId = request.templateId
             ?.trim()
             ?.takeIf { it.isNotBlank() }
@@ -328,10 +329,24 @@ class MetaIntegrationRepository(
                 message = "Template name and body are required. Name must be at least 3 characters and body at least 10 characters.",
             )
         }
+        if (category == "AUTHENTICATION") {
+            return@withContext MetaWhatsAppTemplateCreateResponse(
+                created = false,
+                status = "invalid_request",
+                message = "Authentication templates need Meta OTP components. Use Utility or Marketing for normal WhatsApp updates.",
+            )
+        }
+        bodyText.metaTemplatePlaceholderValidationError()?.let { validationMessage ->
+            return@withContext MetaWhatsAppTemplateCreateResponse(
+                created = false,
+                status = "invalid_request",
+                message = validationMessage,
+            )
+        }
 
         val graphRequest = MetaGraphWhatsAppTemplateRequest(
             name = templateName,
-            category = request.category.cleanMetaTemplateCategory(),
+            category = category,
             languageCode = request.languageCode.cleanMetaTemplateLanguage(config.metaDefaultLanguageCode),
             bodyText = bodyText,
             sampleParameters = bodyText.metaTemplateSamples(request.sampleParameters),
@@ -545,7 +560,7 @@ class MetaIntegrationRepository(
             MetaOrderUpdateResponse(
                 sent = false,
                 status = "send_failed",
-                message = "WhatsApp could not send this update. Check the template and Meta account setup.",
+                message = "WhatsApp could not send this update. $publicMessage",
             )
         }
     }
@@ -587,12 +602,13 @@ class MetaIntegrationRepository(
                                 metaProductId = result.metaProductId,
                             )
                         } catch (error: MetaGraphException) {
+                            val publicMessage = error.publicMetaMessage()
                             connection.upsertMetaProductReadiness(
                                 workspaceId = access.workspaceId,
                                 product = product,
                                 status = "sync_failed",
-                                issues = listOf("Meta could not sync this item right now."),
-                                lastError = error.publicMetaMessage(),
+                                issues = listOf("Meta could not sync this item. $publicMessage"),
+                                lastError = publicMessage,
                             )
                         }
                     } else {
@@ -1912,7 +1928,7 @@ private data class OrmaWhatsAppTemplateSpec(
             category = category,
             languageCode = languageCode,
             bodyText = bodyText,
-            sampleParameters = sampleParameters,
+            sampleParameters = bodyText.metaTemplateSamples(sampleParameters),
         )
 
     fun toGraphRequest(languageCode: String): MetaGraphWhatsAppTemplateRequest =
@@ -1921,7 +1937,7 @@ private data class OrmaWhatsAppTemplateSpec(
             category = category,
             languageCode = languageCode,
             bodyText = bodyText,
-            sampleParameters = sampleParameters,
+            sampleParameters = bodyText.metaTemplateSamples(sampleParameters),
         )
 }
 
@@ -1967,11 +1983,7 @@ private fun String?.cleanMetaTemplateLanguage(defaultLanguageCode: String): Stri
 }
 
 private fun String.metaTemplateSamples(requestSamples: List<String>): List<String> {
-    val parameterCount = Regex("""\{\{\s*(\d+)\s*}}""")
-        .findAll(this)
-        .mapNotNull { it.groupValues.getOrNull(1)?.toIntOrNull() }
-        .maxOrNull()
-        ?: 0
+    val parameterCount = metaTemplatePlaceholderNumbers().maxOrNull() ?: 0
     if (parameterCount <= 0) return emptyList()
     val samples = requestSamples
         .map { it.trim().take(120) }
@@ -1985,6 +1997,32 @@ private fun String.metaTemplateSamples(requestSamples: List<String>): List<Strin
     }
     return samples.take(parameterCount)
 }
+
+private fun String.metaTemplatePlaceholderNumbers(): List<Int> =
+    MetaTemplateNumberPlaceholderRegex
+        .findAll(this)
+        .mapNotNull { it.groupValues.getOrNull(1)?.toIntOrNull() }
+        .toList()
+
+private fun String.metaTemplatePlaceholderValidationError(): String? {
+    val placeholders = MetaTemplateAnyPlaceholderRegex.findAll(this).toList()
+    if (placeholders.isEmpty()) return null
+    val numbers = metaTemplatePlaceholderNumbers()
+    if (numbers.size != placeholders.size || numbers.any { it <= 0 }) {
+        return "Template variables must use numeric placeholders like {{1}}, {{2}}, and {{3}}."
+    }
+    val uniqueNumbers = numbers.toSet()
+    val parameterCount = numbers.maxOrNull() ?: 0
+    val missingNumbers = (1..parameterCount).filterNot { it in uniqueNumbers }
+    if (missingNumbers.isNotEmpty()) {
+        return "Template variables must be sequential. Missing ${missingNumbers.joinToString { "{{$it}}" }}."
+    }
+    return null
+}
+
+private val MetaTemplateAnyPlaceholderRegex = Regex("""\{\{\s*([^}]+?)\s*}}""")
+
+private val MetaTemplateNumberPlaceholderRegex = Regex("""\{\{\s*(\d+)\s*}}""")
 
 private val MetaTemplateSampleDefaults = listOf(
     "ORD-123456",
@@ -2362,11 +2400,28 @@ private fun String.cloudinaryPathEncoded(): String =
                 .replace("+", "%20")
         }
 
-private fun Throwable.publicMetaMessage(): String =
-    message
-        ?.take(240)
+private fun Throwable.publicMetaMessage(): String {
+    val baseMessage = message
+        ?.trim()
         ?.takeIf { it.isNotBlank() }
         ?: "Meta request failed."
+    if (this !is MetaGraphException) return baseMessage.take(240)
+    val providerLabels = buildList {
+        providerCode?.takeIf { it.isNotBlank() }?.let { add("Meta code $it") }
+        providerSubcode?.takeIf { it.isNotBlank() }?.let { add("subcode $it") }
+        providerTraceId?.takeIf { it.isNotBlank() }?.let { add("trace $it") }
+    }
+    val messageWithProviderContext = if (
+        providerLabels.isNotEmpty() &&
+        (baseMessage.equals("Invalid parameter", ignoreCase = true) ||
+            baseMessage.startsWith("Meta request failed", ignoreCase = true))
+    ) {
+        "$baseMessage (${providerLabels.joinToString(", ")})"
+    } else {
+        baseMessage
+    }
+    return messageWithProviderContext.take(360)
+}
 
 private fun java.sql.PreparedStatement.setStringOrNull(index: Int, value: String?) {
     if (value.isNullOrBlank()) {

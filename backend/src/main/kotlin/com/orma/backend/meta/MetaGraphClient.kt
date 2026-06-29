@@ -310,25 +310,68 @@ data class MetaGraphMessageResult(
     val messageId: String?,
 )
 
-class MetaGraphException(message: String) : RuntimeException(message)
+class MetaGraphException(
+    message: String,
+    val httpStatus: Int? = null,
+    val providerCode: String? = null,
+    val providerSubcode: String? = null,
+    val providerType: String? = null,
+    val providerDetails: String? = null,
+    val providerTraceId: String? = null,
+) : RuntimeException(message)
+
+private data class MetaGraphErrorPayload(
+    val message: String?,
+    val details: String?,
+    val code: String?,
+    val subcode: String?,
+    val type: String?,
+    val traceId: String?,
+) {
+    val publicMessage: String?
+        get() = listOfNotNull(message, details)
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .distinctBy { it.lowercase() }
+            .takeIf { it.isNotEmpty() }
+            ?.joinToString(": ")
+}
 
 private val JsonParser = Json { ignoreUnknownKeys = true }
 
 private fun HttpResponse<String>.successfulBody(): String {
     if (statusCode() in 200..299) return body()
-    val providerMessage = runCatching {
-        body()
-            .parseJsonObject()["error"]
-            ?.jsonObjectOrNull()
-            ?.get("message")
-            ?.jsonPrimitive
-            ?.contentOrNull
-    }.getOrNull()
-    throw MetaGraphException(providerMessage ?: "Meta request failed with HTTP ${statusCode()}.")
+    val providerError = body().parseMetaGraphError()
+    throw MetaGraphException(
+        message = providerError?.publicMessage ?: "Meta request failed with HTTP ${statusCode()}.",
+        httpStatus = statusCode(),
+        providerCode = providerError?.code,
+        providerSubcode = providerError?.subcode,
+        providerType = providerError?.type,
+        providerDetails = providerError?.details,
+        providerTraceId = providerError?.traceId,
+    )
 }
 
 private fun String.parseJsonObject(): JsonObject =
     JsonParser.parseToJsonElement(this).jsonObject
+
+private fun String.parseMetaGraphError(): MetaGraphErrorPayload? =
+    runCatching {
+        val error = parseJsonObject()["error"]?.jsonObjectOrNull() ?: return@runCatching null
+        val errorData = error["error_data"]?.jsonObjectOrNull()
+        val details = errorData?.stringValue("details")
+            ?: error.stringValue("error_user_msg")
+            ?: error.stringValue("error_user_title")
+        MetaGraphErrorPayload(
+            message = error.stringValue("message"),
+            details = details,
+            code = error.stringValue("code"),
+            subcode = error.stringValue("error_subcode"),
+            type = error.stringValue("type"),
+            traceId = error.stringValue("fbtrace_id"),
+        )
+    }.getOrNull()
 
 private fun formEncode(values: Map<String, String>): String =
     values
@@ -350,6 +393,12 @@ private fun String.onlyDialableCharacters(): String =
 private fun JsonElement?.jsonObjectOrNull(): JsonObject? = this as? JsonObject
 
 private fun JsonElement?.jsonArrayOrNull(): JsonArray? = this as? JsonArray
+
+private fun JsonObject.stringValue(key: String): String? =
+    (get(key) as? JsonPrimitive)
+        ?.contentOrNull
+        ?.trim()
+        ?.takeIf { it.isNotBlank() }
 
 private fun JsonObject.toWhatsAppTemplate(): MetaGraphWhatsAppTemplate? {
     val name = get("name")?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() } ?: return null

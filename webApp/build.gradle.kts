@@ -1,7 +1,35 @@
+import org.gradle.api.DefaultTask
+import org.gradle.api.file.RegularFileProperty
+import org.gradle.api.tasks.Delete
+import org.gradle.api.tasks.InputFile
+import org.gradle.api.tasks.Optional
+import org.gradle.api.tasks.PathSensitive
+import org.gradle.api.tasks.PathSensitivity
+import org.gradle.api.tasks.TaskAction
+
 plugins {
     alias(libs.plugins.kotlinMultiplatform)
     alias(libs.plugins.composeMultiplatform)
     alias(libs.plugins.composeCompiler)
+}
+
+abstract class SanitizeComposeRuntimeJs : DefaultTask() {
+    @get:InputFile
+    @get:Optional
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val runtimeFile: RegularFileProperty
+
+    @TaskAction
+    fun sanitize() {
+        val file = runtimeFile.asFile.get()
+        if (!file.exists()) return
+
+        val bytes = file.readBytes()
+        val firstNullByte = bytes.indexOf(0.toByte())
+        if (firstNullByte >= 0) {
+            file.writeBytes(bytes.copyOf(firstNullByte))
+        }
+    }
 }
 
 kotlin {
@@ -62,21 +90,26 @@ tasks.matching { it.name == "jsBrowserDistribution" }.configureEach {
     finalizedBy(stageVercelSpaRouting)
 }
 
-val composeRuntimeJs = rootProject.layout.buildDirectory
-    .file("js/packages/Orma-webApp/kotlin/androidx-compose-runtime-runtime.js")
-    .get()
-    .asFile
+val sanitizeComposeRuntimeJs by tasks.registering(SanitizeComposeRuntimeJs::class) {
+    group = "build"
+    description = "Removes trailing null bytes from generated Compose runtime JavaScript before webpack reads it."
+    runtimeFile.set(rootProject.layout.buildDirectory.file("js/packages/Orma-webApp/kotlin/androidx-compose-runtime-runtime.js"))
+    dependsOn(tasks.matching { it.name == "jsProductionExecutableCompileSync" })
+}
+
+val deleteProductionSourceMaps by tasks.registering(Delete::class) {
+    group = "build"
+    description = "Removes production source maps from the web distribution payload."
+    delete(
+        layout.buildDirectory.dir("dist/js/productionExecutable").map { outputDirectory ->
+            fileTree(outputDirectory) {
+                include("**/*.map")
+            }
+        },
+    )
+}
 
 tasks.matching { it.name == "jsBrowserProductionWebpack" }.configureEach {
-    notCompatibleWithConfigurationCache("Sanitizes generated Compose runtime JavaScript before webpack reads it.")
-
-    doFirst {
-        if (composeRuntimeJs.exists()) {
-            val bytes = composeRuntimeJs.readBytes()
-            val firstNullByte = bytes.indexOf(0.toByte())
-            if (firstNullByte >= 0) {
-                composeRuntimeJs.writeBytes(bytes.copyOf(firstNullByte))
-            }
-        }
-    }
+    dependsOn(sanitizeComposeRuntimeJs)
+    finalizedBy(deleteProductionSourceMaps)
 }
