@@ -5320,7 +5320,8 @@ class DashboardRepository(
                 (
                     select pi.storage_path
                     from product_images pi
-                    where pi.product_id = oi.product_id
+                    where pi.workspace_id = p.workspace_id
+                        and pi.product_id = oi.product_id::text
                         and pi.status = 'active'
                     order by pi.sort_order asc, pi.created_at desc
                     limit 1
