@@ -2305,17 +2305,20 @@ class DashboardRepository(
                 } else {
                     val productStock = product.stockQuantity.decimalOrZero()
                     val variantStock = variant?.stockQuantity?.decimalOrZero() ?: BigDecimal.ZERO
-                    if (product.trackStock && productStock <= BigDecimal.ZERO) {
-                        return@mapNotNull null
-                    }
-                    if (product.trackStock && quantity > productStock) {
-                        return@mapNotNull null
-                    }
-                    if (variant?.trackStock == true && variantStock <= BigDecimal.ZERO) {
-                        return@mapNotNull null
-                    }
-                    if (variant?.trackStock == true && quantity > variantStock) {
-                        return@mapNotNull null
+                    if (variant?.trackStock == true) {
+                        if (variantStock <= BigDecimal.ZERO) {
+                            return@mapNotNull null
+                        }
+                        if (quantity > variantStock) {
+                            return@mapNotNull null
+                        }
+                    } else {
+                        if (product.trackStock && productStock <= BigDecimal.ZERO) {
+                            return@mapNotNull null
+                        }
+                        if (product.trackStock && quantity > productStock) {
+                            return@mapNotNull null
+                        }
                     }
                 }
                 val variantPrice = variant?.sellingPrice?.moneyOrZero()
@@ -4622,8 +4625,6 @@ class DashboardRepository(
                     val productTrackStock = result.getBoolean("track_stock")
                     val productStockQuantity = result.getBigDecimal("product_stock_quantity") ?: BigDecimal.ZERO
                     val stockQuantity = when {
-                        componentVariantId != null && variantTrackStock && productTrackStock ->
-                            minOf(variantStockQuantity ?: BigDecimal.ZERO, productStockQuantity)
                         componentVariantId != null && variantTrackStock -> variantStockQuantity ?: BigDecimal.ZERO
                         productTrackStock -> productStockQuantity
                         componentVariantId != null -> variantStockQuantity ?: BigDecimal.ZERO
@@ -6052,6 +6053,7 @@ class DashboardRepository(
             access = access,
             productId = productId,
             variantId = item.variantId,
+            variantTrackStock = item.variantTrackStock,
             quantityDelta = quantityDelta,
             note = note,
         )
@@ -6071,10 +6073,14 @@ class DashboardRepository(
             return
         }
         val productId = item.productId ?: return
+        val variantTrackStock = item.variantId
+            ?.let { isProductVariantStockTracked(access.workspaceId, it) }
+            ?: false
         applyOrderInventoryMovement(
             access = access,
             productId = productId,
             variantId = item.variantId,
+            variantTrackStock = variantTrackStock,
             quantityDelta = quantityDelta,
             note = note,
         )
@@ -6090,11 +6096,11 @@ class DashboardRepository(
             .filter { it.itemType == "product" && (it.trackStock || it.variantTrackStock) }
             .forEach { component ->
                 val componentQuantityDelta = quantityDelta.multiply(component.quantity).scaled()
-                if (component.trackStock) {
-                    applyOrderStockMovement(access, component.productId, componentQuantityDelta, note)
-                }
-                component.variantId?.takeIf { component.variantTrackStock }?.let { componentVariantId ->
+                val componentVariantId = component.variantId?.takeIf { component.variantTrackStock }
+                if (componentVariantId != null) {
                     applyVariantStockMovement(access, componentVariantId, componentQuantityDelta)
+                } else if (component.trackStock) {
+                    applyOrderStockMovement(access, component.productId, componentQuantityDelta, note)
                 }
             }
     }
@@ -6103,14 +6109,35 @@ class DashboardRepository(
         access: DashboardWorkspaceAccess,
         productId: String,
         variantId: String?,
+        variantTrackStock: Boolean,
         quantityDelta: BigDecimal,
         note: String,
     ) {
-        applyOrderStockMovement(access, productId, quantityDelta, note)
-        if (variantId != null) {
+        if (variantId != null && variantTrackStock) {
             applyVariantStockMovement(access, variantId, quantityDelta)
+        } else {
+            applyOrderStockMovement(access, productId, quantityDelta, note)
         }
     }
+
+    private fun Connection.isProductVariantStockTracked(
+        workspaceId: String,
+        variantId: String,
+    ): Boolean =
+        prepareStatement(
+            """
+            select track_stock
+            from product_variants
+            where id = ?::uuid and workspace_id = ?::uuid and status = 'active'
+            limit 1
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setString(1, variantId)
+            statement.setString(2, workspaceId)
+            statement.executeQuery().use { result ->
+                result.next() && result.getBoolean("track_stock")
+            }
+        }
 
     private fun Connection.applyVariantStockMovement(
         access: DashboardWorkspaceAccess,
@@ -6950,11 +6977,12 @@ class DashboardRepository(
         fun addRequirement(productId: String?, variantId: String?, variantTrackStock: Boolean, quantity: BigDecimal) {
             val cleanProductId = productId ?: return
             if (quantity <= BigDecimal.ZERO) return
-            val productKey = InventoryRequirementKey(cleanProductId, null, variantScoped = false)
-            requirements[productKey] = requirements[productKey]?.add(quantity) ?: quantity
             if (variantId != null && variantTrackStock) {
                 val variantKey = InventoryRequirementKey(cleanProductId, variantId, variantScoped = true)
                 requirements[variantKey] = requirements[variantKey]?.add(quantity) ?: quantity
+            } else {
+                val productKey = InventoryRequirementKey(cleanProductId, null, variantScoped = false)
+                requirements[productKey] = requirements[productKey]?.add(quantity) ?: quantity
             }
         }
         forEach { item ->
@@ -7188,8 +7216,6 @@ class DashboardRepository(
                     val productTrackStock = result.getBoolean("track_stock")
                     val productStockQuantity = result.getBigDecimal("product_stock_quantity") ?: BigDecimal.ZERO
                     val stockQuantity = when {
-                        componentVariantId != null && variantTrackStock && productTrackStock ->
-                            minOf(variantStockQuantity ?: BigDecimal.ZERO, productStockQuantity)
                         componentVariantId != null && variantTrackStock -> variantStockQuantity ?: BigDecimal.ZERO
                         productTrackStock -> productStockQuantity
                         componentVariantId != null -> variantStockQuantity ?: BigDecimal.ZERO

@@ -1215,6 +1215,26 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
         }
     }
 
+    fun mergeDashboardProduct(product: OrmaProduct, statusMessage: String? = null) {
+        fun List<OrmaProduct>.replaceIfPresent(): List<OrmaProduct> =
+            if (any { it.id == product.id }) {
+                map { existing -> if (existing.id == product.id) product else existing }
+            } else {
+                this
+            }
+
+        state = state.copy(
+            dashboard = state.dashboard.copy(
+                products = state.dashboard.products.replaceIfPresent(),
+                saleCatalogProducts = state.dashboard.saleCatalogProducts.replaceIfPresent(),
+                marketingProducts = state.dashboard.marketingProducts.replaceIfPresent(),
+                errorTitle = null,
+                errorMessage = null,
+                statusMessage = statusMessage ?: state.dashboard.statusMessage,
+            ),
+        )
+    }
+
     suspend fun pollDesktopNotificationBridge() {
         if (!isOrmaDesktopRuntime() || state.step != OnboardingStep.Dashboard || !state.notificationsEnabled) return
         val snapshot = state
@@ -1666,6 +1686,8 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
             when (val result = backendClient.updateProduct(idToken, productId, draft.copy(currency = draft.currency.ifBlank { snapshot.dashboard.summary.currency }))) {
                 is OrmaBackendResult.Success -> {
                     val image = draft.image
+                    val updatedMessage = "${result.value.itemType.sellableItemTypeLabel()} updated."
+                    mergeDashboardProduct(result.value, updatedMessage)
                     if (image != null) {
                         when (val upload = backendClient.uploadProductImage(idToken, result.value.id, image)) {
                             is OrmaBackendResult.Success -> {
@@ -1676,7 +1698,7 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
                         }
                     } else {
                         clearDashboardActionLoading(actionKey)
-                        refreshDashboard("${result.value.itemType.sellableItemTypeLabel()} updated.")
+                        refreshDashboard(updatedMessage)
                     }
                 }
                 is OrmaBackendResult.Failure -> applyDashboardFailure(result.title, result.message, result.code)
