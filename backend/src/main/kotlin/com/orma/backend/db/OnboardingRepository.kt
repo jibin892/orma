@@ -384,17 +384,26 @@ class OnboardingRepository(
                 phoneNumberFallback = null,
                 displayNameFallback = null,
             )
-            val updatedUser = connection.updateNotificationPreference(user.id, enabled)
-            val workspace = connection.findPrimaryWorkspace(updatedUser.id)
-            if (!enabled) {
-                connection.disableNotificationDeviceTokens(updatedUser.id)
-            } else if (workspace != null) {
+            val workspace = connection.findPrimaryWorkspace(user.id)
+            val updatedUser = if (enabled) {
                 connection.upsertNotificationDeviceToken(
-                    userId = updatedUser.id,
-                    workspaceId = workspace.id,
+                    userId = user.id,
+                    workspaceId = workspace?.id,
                     token = deviceToken,
                     platform = platform,
                     deviceName = deviceName,
+                )
+                connection.updateNotificationPreference(user.id, true)
+            } else {
+                val hasDeviceToken = !deviceToken.isNullOrBlank()
+                if (hasDeviceToken) {
+                    connection.disableNotificationDeviceToken(user.id, deviceToken)
+                } else {
+                    connection.disableNotificationDeviceTokens(user.id)
+                }
+                connection.updateNotificationPreference(
+                    userId = user.id,
+                    enabled = if (hasDeviceToken) connection.hasEnabledNotificationDeviceTokens(user.id) else false,
                 )
             }
             updatedUser.toSession(workspace)
@@ -1200,12 +1209,13 @@ class OnboardingRepository(
 
     private fun Connection.upsertNotificationDeviceToken(
         userId: String,
-        workspaceId: String,
+        workspaceId: String?,
         token: String?,
         platform: String?,
         deviceName: String?,
     ) {
         val cleanToken = token?.trim()?.takeIf { it.isNotBlank() } ?: return
+        val cleanWorkspaceId = workspaceId?.trim()?.takeIf { it.isNotBlank() } ?: return
         val cleanPlatform = platform?.trim()?.lowercase()?.takeIf { it.isNotBlank() } ?: "unknown"
         val cleanDeviceName = deviceName?.trim()?.takeIf { it.isNotBlank() }?.take(120)
         prepareStatement(
@@ -1226,7 +1236,7 @@ class OnboardingRepository(
             """.trimIndent(),
         ).use { statement ->
             statement.setString(1, userId)
-            statement.setString(2, workspaceId)
+            statement.setString(2, cleanWorkspaceId)
             statement.setString(3, cleanToken)
             statement.setString(4, cleanPlatform)
             statement.setNullableString(5, cleanDeviceName)
@@ -1259,6 +1269,26 @@ class OnboardingRepository(
             statement.setString(1, userId)
             statement.setString(2, cleanToken)
             statement.executeUpdate()
+        }
+    }
+
+    private fun Connection.hasEnabledNotificationDeviceTokens(userId: String): Boolean {
+        return prepareStatement(
+            """
+            select exists (
+                select 1
+                from notification_device_tokens
+                where user_id = ?::uuid
+                  and enabled = true
+                limit 1
+            )
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setString(1, userId)
+            statement.executeQuery().use { result ->
+                result.next()
+                result.getBoolean(1)
+            }
         }
     }
 

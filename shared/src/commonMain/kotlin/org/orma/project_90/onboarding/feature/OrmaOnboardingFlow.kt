@@ -769,6 +769,9 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
                 }
                 true
             } else {
+                notificationDeviceToken = runCatching {
+                    currentOrmaNotificationDeviceToken(snapshot.authUserId.takeIf { it.isNotBlank() })
+                }.getOrNull()
                 false
             }
 

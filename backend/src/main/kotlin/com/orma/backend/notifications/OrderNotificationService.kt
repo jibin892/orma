@@ -313,7 +313,6 @@ class OrderNotificationService(
               and ndt.enabled = true
               and lower(ndt.platform) in ('android', 'web')
               and coalesce(au.firebase_uid, '') <> ''
-              and au.notifications_enabled = true
         """.trimIndent()
         return prepareStatement(sql).use { statement ->
             statement.setString(1, workspaceId)
@@ -340,7 +339,6 @@ class OrderNotificationService(
               and ndt.enabled = true
               and lower(ndt.platform) = 'ios'
               and ndt.token like 'apns:%'
-              and au.notifications_enabled = true
         """.trimIndent()
         return prepareStatement(sql).use { statement ->
             statement.setString(1, workspaceId)
