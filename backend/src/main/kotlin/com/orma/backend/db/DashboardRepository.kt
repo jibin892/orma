@@ -2954,7 +2954,9 @@ class DashboardRepository(
                         sum(coalesce(payable_amount, 0)) as payable_total,
                         sum(coalesce(paid_amount, 0)) as paid_total
                     from stock_movements
-                    where workspace_id = ?::uuid and supplier_id is not null
+                    where workspace_id = ?::uuid
+                      and supplier_id is not null
+                      and (coalesce(payable_amount, 0) <> 0 or coalesce(paid_amount, 0) <> 0)
                     group by supplier_id
                 ) batch_totals on batch_totals.supplier_id = s.id
                 where s.workspace_id = ?::uuid and s.status = 'active'
