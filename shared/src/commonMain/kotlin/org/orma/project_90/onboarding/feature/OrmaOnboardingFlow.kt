@@ -100,6 +100,7 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
     var state by remember { mutableStateOf(OnboardingUiState(authLoadingKind = AuthLoadingKind.RestoringSession)) }
     var desktopKnownNotificationIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var desktopNotificationSeeded by remember { mutableStateOf(false) }
+    var mobileNotificationPromptKey by remember { mutableStateOf<String?>(null) }
     val authGateway = remember { createOrmaAuthGateway() }
     val backendClient = remember { createOrmaBackendClient() }
     val scope = rememberCoroutineScope()
@@ -109,6 +110,11 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
         return platform.contains("android") || platform.contains("ios")
     }
 
+    fun mobileNotificationGateKey(snapshot: OnboardingUiState): String =
+        listOf(snapshot.authUserId, snapshot.workspaceId)
+            .filter { it.isNotBlank() }
+            .joinToString(":")
+
     suspend fun refreshMobileNotificationPermissionGate() {
         val snapshot = state
         if (!isOrmaMobileNotificationGatePlatform()) return
@@ -117,14 +123,24 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
 
         val permission = currentOrmaNotificationPermission()
         if (!permission.enabled) {
-            state = state.copy(
-                step = OnboardingStep.Notification,
-                notificationsEnabled = false,
-                notificationPermissionRequired = true,
-                onboardingLoading = false,
-            )
+            val promptKey = mobileNotificationGateKey(snapshot)
+            val promptAlreadyShown = promptKey.isNotBlank() && mobileNotificationPromptKey == promptKey
+            if (snapshot.step == OnboardingStep.Notification || !promptAlreadyShown) {
+                if (promptKey.isNotBlank()) {
+                    mobileNotificationPromptKey = promptKey
+                }
+                state = state.copy(
+                    step = OnboardingStep.Notification,
+                    notificationsEnabled = false,
+                    notificationPermissionRequired = false,
+                    onboardingLoading = false,
+                )
+            }
         } else if (snapshot.notificationPermissionRequired) {
+            mobileNotificationPromptKey = null
             state = state.copy(notificationPermissionRequired = false)
+        } else {
+            mobileNotificationPromptKey = null
         }
     }
 
@@ -149,6 +165,7 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
     fun restart() {
         if (state.authLoadingKind == AuthLoadingKind.SigningOut) return
         val signOutSnapshot = state
+        mobileNotificationPromptKey = null
         state = signOutSnapshot.copy(
             authLoadingKind = AuthLoadingKind.SigningOut,
             onboardingLoading = false,
@@ -759,22 +776,13 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
     fun saveNotificationDecision(enabled: Boolean) {
         val snapshot = state
         if (snapshot.onboardingLoading) return
-        if (!enabled && snapshot.notificationPermissionRequired && isOrmaMobileNotificationGatePlatform()) {
-            state = snapshot.copy(
-                authErrorTitle = "Notifications required",
-                authErrorMessage = "Enable notifications on this device so ORMA can alert you about catalog orders and workspace updates.",
-                authErrorCode = "MOBILE_NOTIFICATION_PERMISSION_REQUIRED",
-            )
-            return
+        if (!enabled && isOrmaMobileNotificationGatePlatform()) {
+            mobileNotificationPromptKey = mobileNotificationGateKey(snapshot).takeIf { it.isNotBlank() }
         }
         val idToken = backendTokenOrError(snapshot) ?: return
         state = snapshot.copy(
             notificationsEnabled = if (enabled) snapshot.notificationsEnabled else false,
-            notificationPermissionRequired = if (enabled) {
-                snapshot.notificationPermissionRequired
-            } else {
-                false
-            },
+            notificationPermissionRequired = false,
             onboardingLoading = true,
             authErrorTitle = null,
             authErrorMessage = null,
@@ -787,7 +795,7 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
                 if (!permission.enabled) {
                     state = state.copy(
                         notificationsEnabled = false,
-                        notificationPermissionRequired = isOrmaMobileNotificationGatePlatform(),
+                        notificationPermissionRequired = false,
                         onboardingLoading = false,
                         authErrorTitle = permission.title,
                         authErrorMessage = permission.message,
@@ -803,7 +811,7 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
                     val tokenError = tokenResult.exceptionOrNull() as? OrmaNotificationTokenException
                     state = state.copy(
                         notificationsEnabled = false,
-                        notificationPermissionRequired = isOrmaMobileNotificationGatePlatform(),
+                        notificationPermissionRequired = false,
                         onboardingLoading = false,
                         authErrorTitle = tokenError?.title ?: "Notifications are not connected",
                         authErrorMessage = tokenError?.message
@@ -828,6 +836,9 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
                 deviceName = notificationDeviceToken?.deviceName,
             )) {
                 is OrmaBackendResult.Success -> {
+                    if (requestedEnabled) {
+                        mobileNotificationPromptKey = null
+                    }
                     state = routeAfterBackendSession(
                         state.copy(
                             notificationsEnabled = requestedEnabled,

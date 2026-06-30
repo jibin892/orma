@@ -14513,7 +14513,8 @@ private fun DashboardOrderOptionPickerRow(
     val typeLabel = when {
         product.itemType == "appointment" -> "Appointment option"
         product.itemType == "service" -> "Service option"
-        product.itemType == "product" && product.trackStock -> "Tracked variant"
+        product.itemType == "product" && variant.trackStock -> "Tracked variant"
+        product.itemType == "product" && product.trackStock -> "Product stock"
         else -> "Variant"
     }
     Surface(
@@ -24522,6 +24523,7 @@ private fun DashboardMobileBookingDetailsContent(
     var addonSessionId by rememberSaveable(order.id) { mutableStateOf<String?>(null) }
     var scheduleSessionId by rememberSaveable(order.id) { mutableStateOf<String?>(null) }
     val upiMethod = state.dashboard.defaultUpiPaymentMethod()
+    val canCollectBalance = order.canCollectDashboardBalancePayment()
     fun updateSession(
         sessionId: String,
         transform: (OrmaOrderSessionDraft) -> OrmaOrderSessionDraft,
@@ -24536,7 +24538,7 @@ private fun DashboardMobileBookingDetailsContent(
         )
     }
     BookingDetailsMobileValueCard(order = order)
-    if (order.balanceDueValue() > 0.0) {
+    if (canCollectBalance && order.balanceDueValue() > 0.0) {
         if (upiMethod != null) {
             BookingDetailsUpiQrSection(
                 order = order,
@@ -24554,7 +24556,7 @@ private fun DashboardMobileBookingDetailsContent(
             DashboardChecklistRow(text = "Add a default UPI payment method in Account to show the payment QR.")
         }
     }
-    if (order.balanceDueValue() > 0.0 || order.refundDueValue() > 0.0) {
+    if ((canCollectBalance && order.balanceDueValue() > 0.0) || order.refundDueValue() > 0.0) {
         BookingDetailsPaymentSettlementCard(order = order)
     }
     BookingDetailsMobileNextActionCard(
@@ -24668,6 +24670,7 @@ private fun BookingDetailsMobileValueCard(
     val partPaid = order.isPartPaidRecord()
     val due = order.balanceDueValue() > 0.0
     val refundDue = order.refundDueValue() > 0.0
+    val canCollectBalance = order.canCollectDashboardBalancePayment()
     val itemCount = order.itemCount.coerceAtLeast(order.items.size)
     val paymentSummary = buildList {
         add("Paid ${dashboardMoney(order.paidTotal, order.currency)}")
@@ -24692,12 +24695,14 @@ private fun BookingDetailsMobileValueCard(
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    text = if (partPaid) {
+                    text = if (partPaid && canCollectBalance) {
                         "${order.balanceDueText()} still payable."
                     } else if (refundDue) {
                         "${order.refundDueText()} return due."
-                    } else if (due) {
+                    } else if (due && canCollectBalance) {
                         "Collect balance before closing."
+                    } else if (due) {
+                        "Confirm before collecting payment."
                     } else {
                         "Payment settled."
                     },
@@ -24740,7 +24745,8 @@ private fun BookingDetailsMobileValueCard(
                     )
                     Text(
                         text = "$paymentSummary · ${when {
-                            due -> "${order.balanceDueText()} due"
+                            due && canCollectBalance -> "${order.balanceDueText()} due"
+                            due -> "payment after confirmation"
                             refundDue -> "${order.refundDueText()} refund"
                             else -> "settled"
                         }}",
@@ -24752,12 +24758,15 @@ private fun BookingDetailsMobileValueCard(
                 }
                 OrmaBadge(
                     text = when {
-                        due -> "DUE"
+                        due && canCollectBalance -> "DUE"
                         refundDue -> "REFUND"
+                        due -> "PENDING"
                         else -> "PAID"
                     },
                     tone = when {
-                        due || refundDue -> OrmaStatusTone.Warning
+                        due && canCollectBalance -> OrmaStatusTone.Warning
+                        refundDue -> OrmaStatusTone.Warning
+                        due -> OrmaStatusTone.Neutral
                         else -> OrmaStatusTone.Success
                     },
                 )
@@ -24777,6 +24786,7 @@ private fun BookingDetailsMobileNextActionCard(
 ) {
     val terminal = order.status in setOf("completed", "cancelled")
     val canAcknowledge = order.status.trim().lowercase() == "new"
+    val canCollectBalance = order.canCollectDashboardBalancePayment()
     DashboardMobileRecordCard {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -24795,7 +24805,7 @@ private fun BookingDetailsMobileNextActionCard(
                 Text(
                     text = when {
                         canAcknowledge -> "Acknowledge this catalog request before fulfilment."
-                        order.balanceDueValue() > 0.0 -> "Collect balance before closing."
+                        order.balanceDueValue() > 0.0 && canCollectBalance -> "Collect balance before closing."
                         terminal -> order.status.dashboardTerminalStatusCopy()
                         order.scheduledAt.isNullOrBlank() -> "Set fulfilment and move the status forward."
                         else -> "Dispatch is scheduled; update status when done."
@@ -24964,6 +24974,7 @@ private fun BookingDetailsSummaryCard(
     val partPaid = order.isPartPaidRecord()
     val refundDue = order.refundDueValue() > 0.0
     val upiMethod = state.dashboard.defaultUpiPaymentMethod()
+    val canCollectBalance = order.canCollectDashboardBalancePayment()
     DashboardRecordCard {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -24996,21 +25007,20 @@ private fun BookingDetailsSummaryCard(
             metrics = listOf(
                 BookingMetric("Total", dashboardMoney(order.total, order.currency), "${order.itemCount} items"),
                 BookingMetric("Paid", dashboardMoney(order.paidTotal, order.currency), order.paymentMode.paymentModeLabel()),
-                BookingMetric(
-                    if (refundDue) "Refund" else "Balance",
-                    if (refundDue) order.refundDueText() else order.balanceDueText(),
-                    when {
-                        refundDue -> "return"
-                        order.balanceDueValue() > 0.0 -> "payable"
-                        else -> "settled"
-                    },
-                ),
+                when {
+                    refundDue -> BookingMetric("Refund", order.refundDueText(), "return")
+                    order.balanceDueValue() > 0.0 && canCollectBalance -> {
+                        BookingMetric("Balance", order.balanceDueText(), "payable")
+                    }
+                    order.balanceDueValue() > 0.0 -> BookingMetric("Payment", "Pending", "confirm first")
+                    else -> BookingMetric("Balance", order.balanceDueText(), "settled")
+                },
             ),
         )
-        if (order.balanceDueValue() > 0.0 || refundDue) {
+        if ((canCollectBalance && order.balanceDueValue() > 0.0) || refundDue) {
             BookingDetailsPaymentSettlementCard(order = order)
         }
-        if (order.balanceDueValue() > 0.0) {
+        if (canCollectBalance && order.balanceDueValue() > 0.0) {
             if (upiMethod != null) {
                 BookingDetailsUpiQrSection(
                     order = order,
@@ -25036,8 +25046,11 @@ private fun BookingDetailsSummaryCard(
                 refundDue -> {
                     "Refund due: return ${order.refundDueText()} because the paid amount is above the order total."
                 }
-                order.balanceDueValue() > 0.0 -> {
+                order.balanceDueValue() > 0.0 && canCollectBalance -> {
                     "Collect ${order.balanceDueText()} before closing this ${order.orderType.orderTypeLabel().lowercase()}."
+                }
+                order.balanceDueValue() > 0.0 -> {
+                    "Confirm this ${order.orderType.orderTypeLabel().lowercase()} before collecting ${order.balanceDueText()}."
                 }
                 else -> {
                     "Payment is fully collected for this ${order.orderType.orderTypeLabel().lowercase()}."
@@ -27220,33 +27233,23 @@ private fun DashboardMobileCustomerRow(
             horizontalArrangement = Arrangement.spacedBy(11.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(modifier = Modifier.size(42.dp)) {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    shape = CircleShape,
-                    color = OrmaColors.Accent.copy(alpha = 0.10f),
-                    contentColor = OrmaColors.Accent,
-                    tonalElevation = 0.dp,
-                    shadowElevation = 0.dp,
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Text(
-                            text = customer.mobileCustomerInitials(),
-                            style = MaterialTheme.typography.labelLarge,
-                            color = OrmaColors.Accent,
-                            maxLines = 1,
-                            overflow = TextOverflow.Clip,
-                        )
-                    }
+            Surface(
+                modifier = Modifier.size(42.dp),
+                shape = CircleShape,
+                color = OrmaColors.Accent.copy(alpha = 0.10f),
+                contentColor = OrmaColors.Accent,
+                tonalElevation = 0.dp,
+                shadowElevation = 0.dp,
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Text(
+                        text = customer.mobileCustomerInitials(),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = OrmaColors.Accent,
+                        maxLines = 1,
+                        overflow = TextOverflow.Clip,
+                    )
                 }
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .size(9.dp)
-                        .clip(CircleShape)
-                        .background(if (hasContact) OrmaColors.Success else OrmaColors.Warning)
-                        .border(1.4.dp, OrmaColors.CardBackground, CircleShape),
-                )
             }
             Column(
                 modifier = Modifier.weight(1f),
@@ -30357,6 +30360,7 @@ private fun ProductEditorScreen(
                                         } else {
                                             ""
                                         },
+                                        trackStock = draft.itemType == "product" && variant.trackStock,
                                         durationMinutes = if (draft.itemType == "product") {
                                             ""
                                         } else {
@@ -30610,6 +30614,18 @@ private fun PackageBuilderScreen(
                 checked = packageDraft.status.normalizedCatalogAvailabilityStatus() == "active",
                 onCheckedChange = { active -> packageDraft = packageDraft.copy(status = if (active) "active" else "inactive") },
             )
+            if (normalizedType == "product") {
+                OrmaSwitchRow(
+                    title = "Track package stock",
+                    body = if (packageDraft.trackStock) {
+                        "Use this package stock for catalog limits, sale validation, and order movement."
+                    } else {
+                        "Let this package sell without its own stock limit."
+                    },
+                    checked = packageDraft.trackStock,
+                    onCheckedChange = { enabled -> packageDraft = packageDraft.copy(trackStock = enabled) },
+                )
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 OrmaTextField(
                     value = packageDraft.name,
@@ -30654,8 +30670,9 @@ private fun PackageBuilderScreen(
                         }
                     },
                     label = if (normalizedType == "product") "Package stock" else "Session duration",
-                    placeholder = if (normalizedType == "product") "Optional" else "Minutes",
+                    placeholder = if (normalizedType == "product" && !packageDraft.trackStock) "Stock not tracked" else if (normalizedType == "product") "Optional" else "Minutes",
                     modifier = Modifier.weight(1f),
+                    enabled = normalizedType != "product" || packageDraft.trackStock,
                     keyboardOptions = KeyboardOptions(keyboardType = if (normalizedType == "product") KeyboardType.Decimal else KeyboardType.Number),
                 )
             }
@@ -30855,8 +30872,24 @@ private fun ProductOptionsEditor(
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                         )
                     }
+                    val isProduct = itemType == "product"
+                    if (isProduct) {
+                        OrmaSwitchRow(
+                            title = "Track variant stock",
+                            body = if (variant.trackStock) {
+                                "Use this option's stock for catalog limits, sale validation, and order movement."
+                            } else {
+                                "Do not limit this option by its own stock."
+                            },
+                            checked = variant.trackStock,
+                            onCheckedChange = { enabled ->
+                                onVariantsChange(variants.mapIndexed { itemIndex, old ->
+                                    if (itemIndex == index) old.copy(trackStock = enabled) else old
+                                })
+                            },
+                        )
+                    }
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        val isProduct = itemType == "product"
                         OrmaTextField(
                             value = if (isProduct) variant.stockQuantity else variant.durationMinutes,
                             onValueChange = { value ->
@@ -30871,8 +30904,9 @@ private fun ProductOptionsEditor(
                                 })
                             },
                             label = if (isProduct) "Option stock" else copy.durationLabel,
-                            placeholder = if (isProduct) "0 ${unit.ifBlank { "pcs" }}" else "Minutes",
+                            placeholder = if (isProduct && !variant.trackStock) "Stock not tracked" else if (isProduct) "0 ${unit.ifBlank { "pcs" }}" else "Minutes",
                             modifier = Modifier.weight(1f),
+                            enabled = !isProduct || variant.trackStock,
                             keyboardOptions = KeyboardOptions(keyboardType = if (isProduct) KeyboardType.Decimal else KeyboardType.Number),
                         )
                         Box(modifier = Modifier.weight(1f))
@@ -30925,6 +30959,7 @@ private fun ProductOptionsEditor(
                 onVariantsChange(
                     variants + OrmaProductVariantDraft(
                         sellingPrice = defaultVariantSellingPrice,
+                        trackStock = itemType == "product",
                         status = "active",
                     ),
                 )
@@ -31311,7 +31346,11 @@ private fun DashboardPackageRecord.packageIdentityLine(): String =
 
 private fun DashboardPackageRecord.packageTimingOrStockLine(): String? =
     when (product.itemType.trim().lowercase()) {
-        "product" -> "${variant.stockQuantity.ifBlank { "0" }} ${product.unit.ifBlank { "units" }} stock"
+        "product" -> if (variant.trackStock) {
+            "${variant.stockQuantity.ifBlank { "0" }} ${product.unit.ifBlank { "units" }} stock"
+        } else {
+            "Stock not tracked"
+        }
         "appointment" -> (variant.durationMinutes ?: product.durationMinutes)?.let { "$it min per session" }
         "service" -> (variant.durationMinutes ?: product.durationMinutes)?.let { "$it min per service" }
         else -> null
@@ -31380,6 +31419,7 @@ private fun OrmaProductVariant.toProductVariantDraft(): OrmaProductVariantDraft 
         sellingPrice = sellingPrice.blankWhenZeroForProductForm(),
         costPrice = costPrice.blankWhenZeroForProductForm(),
         stockQuantity = stockQuantity.blankWhenZeroForProductForm(),
+        trackStock = trackStock,
         durationMinutes = durationMinutes?.toString().orEmpty(),
         includedQuantity = includedQuantity.takeIf { it > 1 }?.toString().orEmpty(),
         addons = addons.map { addon ->
@@ -31443,6 +31483,7 @@ private fun OrmaProductVariantDraft.normalizedPackageVariantDraft(product: OrmaP
         sellingPrice = sellingPrice.trim().ifBlank { product.sellingPrice },
         costPrice = costPrice.trim().ifBlank { product.costPrice },
         stockQuantity = if (normalizedItemType == "product") stockQuantity.trim() else "",
+        trackStock = normalizedItemType == "product" && trackStock,
         durationMinutes = if (normalizedItemType == "product") {
             ""
         } else {
@@ -33880,6 +33921,8 @@ private val DashboardOrderStatuses = listOf(
 private val DashboardActiveOrderStatuses = setOf("new", "draft", "confirmed", "part_paid")
 
 private val DashboardFullPaymentStatuses = setOf("paid", "completed")
+
+private val DashboardBalanceCollectionStatuses = setOf("confirmed", "part_paid")
 
 private val DashboardOrderStatusFilters = listOf("all") + DashboardOrderStatuses
 
@@ -36588,8 +36631,12 @@ private fun OrmaProductVariant.orderSelectionMeta(product: OrmaProduct): String 
     buildList {
         packageDetailLabel(product.itemType, product.unit)?.let { add(it) }
         durationMinutes?.takeIf { it > 0 }?.let { add("$it min") }
-        if (product.itemType == "product" && product.trackStock) {
-            add("${stockQuantity.ifBlank { "0" }} ${product.unit.ifBlank { "unit" }} stock")
+        if (product.itemType == "product") {
+            when {
+                trackStock -> add("${stockQuantity.ifBlank { "0" }} ${product.unit.ifBlank { "unit" }} variant stock")
+                product.trackStock -> add("${product.stockQuantity.ifBlank { "0" }} ${product.unit.ifBlank { "unit" }} product stock")
+                else -> add("Stock not tracked")
+            }
         }
         sku?.takeIf { it.isNotBlank() }?.let { add("SKU $it") }
         barcode?.takeIf { it.isNotBlank() }?.let { add("Barcode $it") }
@@ -36903,6 +36950,9 @@ private fun OrmaOrder.refundDueValue(): Double =
 
 private fun OrmaOrder.refundDueText(): String =
     dashboardMoney(refundDueValue().toDashboardMoneyInput(), currency)
+
+private fun OrmaOrder.canCollectDashboardBalancePayment(): Boolean =
+    status.trim().lowercase() in DashboardBalanceCollectionStatuses
 
 private fun DashboardDataState.defaultUpiPaymentMethod(): OrmaWorkspacePaymentMethod? =
     paymentMethods.firstOrNull { it.isUsableUpiPaymentMethod() && it.isDefault }

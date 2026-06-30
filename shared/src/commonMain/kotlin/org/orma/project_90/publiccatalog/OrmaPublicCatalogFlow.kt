@@ -65,7 +65,6 @@ import org.orma.project_90.backend.OrmaPublicCatalog
 import org.orma.project_90.backend.OrmaPublicCatalogOrderDraft
 import org.orma.project_90.backend.OrmaPublicCatalogOrderItemDraft
 import org.orma.project_90.backend.OrmaPublicCatalogOrderReceipt
-import org.orma.project_90.backend.OrmaPublicCatalogPaymentMethod
 import org.orma.project_90.backend.OrmaPublicCatalogProduct
 import org.orma.project_90.backend.OrmaProductVariant
 import org.orma.project_90.backend.createOrmaBackendClient
@@ -482,7 +481,7 @@ fun OrmaPublicCatalogFlow(
                     notes = notes.trim(),
                     fulfillmentType = effectiveFulfillmentType,
                     scheduledAt = if (appointmentRequired || effectiveFulfillmentType == "scheduled") scheduledAt.trim() else "",
-                    paymentMode = paymentMode,
+                    paymentMode = "pay_on_spot",
                     items = selectedItems.map {
                         OrmaPublicCatalogOrderItemDraft(
                             productId = it.product.id,
@@ -2721,19 +2720,8 @@ private fun PublicCatalogCheckout(
         else -> "Choose pickup timing and send this order to the business."
     }
     val itemCount = selectedItems.sumOf { it.quantity }
-    val currency = catalog?.workspace?.currency ?: selectedItems.firstOrNull()?.product?.currency.orEmpty()
     val offerSavings = selectedItems.publicCatalogOfferSavingsTotal()
-    val upiPaymentMethod = catalog?.paymentMethods?.publicCatalogDefaultUpiPaymentMethod()
-    val selectedPaymentMode = if (paymentMode == "upi" && upiPaymentMethod != null) "upi" else "pay_on_spot"
-    val upiPaymentLink = if (selectedPaymentMode == "upi" && total > 0.0) {
-        upiPaymentMethod?.publicCatalogUpiPaymentValue(
-            amount = money(total),
-            currency = currency.ifBlank { "INR" },
-            note = catalog.workspace.businessName.ifBlank { "ORMA" },
-        )
-    } else {
-        null
-    }
+    val selectedPaymentMode = "pay_on_spot"
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -2825,18 +2813,11 @@ private fun PublicCatalogCheckout(
                     )
                 }
                 OrmaSegmentedRow(
-                    options = if (upiPaymentMethod != null) listOf("pay_on_spot", "upi") else listOf("pay_on_spot"),
+                    options = listOf("pay_on_spot"),
                     selected = selectedPaymentMode,
                     label = { it.publicCatalogCheckoutPaymentLabel(selectedFlow) },
                     onSelected = onPaymentModeChange,
                 )
-                if (upiPaymentMethod != null && upiPaymentLink != null) {
-                    PublicCatalogCheckoutUpiPaymentCard(
-                        method = upiPaymentMethod,
-                        amount = "${currency.ifBlank { "INR" }} ${money(total)}",
-                        paymentLink = upiPaymentLink,
-                    )
-                }
                 OrmaTextField(
                     value = notes,
                     onValueChange = onNotesChange,
@@ -2872,73 +2853,6 @@ private fun PublicCatalogCheckout(
                     textAlign = TextAlign.Center,
                 )
             }
-        }
-    }
-}
-
-@Composable
-private fun PublicCatalogCheckoutUpiPaymentCard(
-    method: OrmaPublicCatalogPaymentMethod,
-    amount: String,
-    paymentLink: String,
-) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = OrmaShapes.SmallCard,
-        color = OrmaColors.ScreenBackground,
-        contentColor = OrmaColors.TextPrimary,
-        border = BorderStroke(0.6.dp, OrmaColors.Hairline),
-        tonalElevation = 0.dp,
-        shadowElevation = 0.dp,
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.Top,
-            ) {
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(3.dp),
-                ) {
-                    Text(
-                        text = "Pay with UPI",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = OrmaColors.TextPrimary,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        text = "Scan this QR or open your UPI app, then place the order so the business can verify payment.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = OrmaColors.TextSecondary,
-                        maxLines = 3,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                OrmaBadge(text = "UPI", tone = OrmaStatusTone.Success)
-            }
-            OrmaQrCode(
-                value = paymentLink,
-                modifier = Modifier.size(196.dp),
-            )
-            OrmaKeyValueList(
-                rows = listOf(
-                    "Amount" to amount,
-                    "UPI ID" to method.upiId.orEmpty(),
-                    "Pay to" to (method.payeeName ?: method.label).ifBlank { method.label },
-                ),
-            )
-            OrmaLightButton(
-                text = "Open UPI app",
-                onClick = { openPublicCatalogPaymentLink(paymentLink) },
-                modifier = Modifier.fillMaxWidth(),
-            )
         }
     }
 }
@@ -3650,6 +3564,7 @@ private fun PublicCatalogCustomerOrderDetail(
 ) {
     val order = receipt?.order
     val balanceDue = order?.publicCatalogBalanceDueValue() ?: 0.0
+    val canCollectBalance = order?.publicCatalogCanCollectBalancePayment() == true
     var changeOpen by remember(order?.id) { mutableStateOf(false) }
     var changeQuantities by remember(order?.id) { mutableStateOf<Map<String, Int>>(emptyMap()) }
     var changePaymentMode by remember(order?.id) { mutableStateOf("") }
@@ -3735,7 +3650,7 @@ private fun PublicCatalogCustomerOrderDetail(
                         if (order.paidTotal.toDoubleOrNull().orZero() > 0.0) {
                             add("Paid" to "${order.currency} ${order.paidTotal}")
                         }
-                        if (balanceDue > 0.0) {
+                        if (canCollectBalance && balanceDue > 0.0) {
                             add("Balance" to order.publicCatalogBalanceDueText())
                         }
                     },
@@ -3827,7 +3742,7 @@ private fun PublicCatalogCustomerOrderDetail(
                         )
                     }
                 }
-                if (receipt.paymentLink?.isNotBlank() == true && balanceDue > 0.0) {
+                if (canCollectBalance && receipt.paymentLink?.isNotBlank() == true && balanceDue > 0.0) {
                     PublicCatalogUpiPaymentCard(
                         receipt = receipt,
                         balanceDue = balanceDue,
@@ -5305,6 +5220,7 @@ private fun PublicCatalogSuccess(
 ) {
     val order = receipt.order
     val balanceDue = order.publicCatalogBalanceDueValue()
+    val canCollectBalance = order.publicCatalogCanCollectBalancePayment()
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         customerStatusNotice
             ?.takeIf { it.orderId == order.id }
@@ -5326,7 +5242,7 @@ private fun PublicCatalogSuccess(
                 if (order.paidTotal.toDoubleOrNull().orZero() > 0.0) {
                     add("Paid" to "${order.currency} ${order.paidTotal}")
                 }
-                if (balanceDue > 0.0) {
+                if (canCollectBalance && balanceDue > 0.0) {
                     add("Balance" to order.publicCatalogBalanceDueText())
                 }
             },
@@ -5343,7 +5259,7 @@ private fun PublicCatalogSuccess(
             modifier = Modifier.fillMaxWidth(),
             enabled = !refreshing,
         )
-        receipt.paymentLink?.takeIf { it.isNotBlank() && balanceDue > 0.0 }?.let { link ->
+        receipt.paymentLink?.takeIf { canCollectBalance && it.isNotBlank() && balanceDue > 0.0 }?.let { link ->
             Surface(
                 modifier = Modifier.fillMaxWidth(),
                 shape = OrmaShapes.SmallCard,
@@ -5414,6 +5330,11 @@ private fun OrmaOrder.publicCatalogBalanceDueValue(): Double =
 
 private fun OrmaOrder.publicCatalogBalanceDueText(): String =
     "${currency.ifBlank { "INR" }} ${money(publicCatalogBalanceDueValue())}"
+
+private fun OrmaOrder.publicCatalogCanCollectBalancePayment(): Boolean =
+    status.trim().lowercase() in PublicCatalogBalanceCollectionStatuses
+
+private val PublicCatalogBalanceCollectionStatuses = setOf("confirmed", "part_paid")
 
 private fun String.publicCatalogQrSafe(): Boolean =
     encodeToByteArray().size <= 106
@@ -5527,7 +5448,7 @@ private fun OrmaOrder.publicCatalogCustomerUpdateBody(): String {
         "cancelled", "canceled", "rejected", "rejected_or_cancelled" -> "The business rejected or cancelled $reference."
         else -> "$reference is now ${publicCatalogStatusLabel().lowercase()}."
     }
-    val balanceLine = if (balance > 0.0 && status.trim().lowercase() in setOf("confirmed", "part_paid")) {
+    val balanceLine = if (balance > 0.0 && publicCatalogCanCollectBalancePayment()) {
         " Balance due: ${publicCatalogBalanceDueText()}."
     } else {
         ""
@@ -6030,47 +5951,6 @@ private fun String.publicCatalogFulfillmentOptions(): List<String> =
         else -> listOf("take_away", "scheduled")
     }
 
-private fun List<OrmaPublicCatalogPaymentMethod>.publicCatalogDefaultUpiPaymentMethod(): OrmaPublicCatalogPaymentMethod? =
-    firstOrNull { it.publicCatalogUsableUpiPaymentMethod() && it.isDefault }
-        ?: firstOrNull { it.publicCatalogUsableUpiPaymentMethod() }
-
-private fun OrmaPublicCatalogPaymentMethod.publicCatalogUsableUpiPaymentMethod(): Boolean =
-    type.trim().lowercase() == "upi" &&
-        upiId.orEmpty().trim().contains("@")
-
-private fun OrmaPublicCatalogPaymentMethod.publicCatalogUpiPaymentValue(
-    amount: String,
-    currency: String,
-    note: String,
-): String? {
-    val upi = upiId?.trim()?.lowercase()?.takeIf { it.contains("@") } ?: return null
-    val paymentAmount = amount.toDoubleOrNull()?.takeIf { it > 0.0 }?.let(::money) ?: return null
-    val cleanCurrency = currency.trim().uppercase().ifBlank { "INR" }
-    val payee = (payeeName ?: label).trim().ifBlank { "ORMA" }
-    val fullValue = buildString {
-        append("upi://pay?pa=")
-        append(upi.publicCatalogUrlQueryEscaped())
-        append("&pn=")
-        append(payee.publicCatalogUrlQueryEscaped())
-        append("&am=")
-        append(paymentAmount.publicCatalogUrlQueryEscaped())
-        append("&cu=")
-        append(cleanCurrency.publicCatalogUrlQueryEscaped())
-        append("&tn=")
-        append(note.trim().ifBlank { "ORMA" }.take(24).publicCatalogUrlQueryEscaped())
-    }
-    if (fullValue.publicCatalogQrSafe()) return fullValue
-    val compactValue = buildString {
-        append("upi://pay?pa=")
-        append(upi.publicCatalogUrlQueryEscaped())
-        append("&am=")
-        append(paymentAmount.publicCatalogUrlQueryEscaped())
-        append("&cu=")
-        append(cleanCurrency.publicCatalogUrlQueryEscaped())
-    }
-    return compactValue.takeIf { it.publicCatalogQrSafe() }
-}
-
 private fun String.publicCatalogItemTypeLabel(): String =
     when (publicCatalogNormalizedItemType()) {
         "service" -> "Service"
@@ -6093,7 +5973,15 @@ private fun OrmaPublicCatalogProduct.publicCatalogMaxSelectableQuantity(variant:
     when {
         !inStock -> 0
         variant != null && variant.status.trim().lowercase() != "active" -> 0
-        itemType.publicCatalogNormalizedItemType() == "product" && trackStock -> (variant?.stockQuantity ?: stockQuantity).toDoubleOrNull()
+        itemType.publicCatalogNormalizedItemType() == "product" && variant?.components?.isNotEmpty() == true -> variant.stockQuantity.toDoubleOrNull()
+            ?.toInt()
+            ?.coerceIn(0, 99)
+            ?: 0
+        itemType.publicCatalogNormalizedItemType() == "product" && variant?.trackStock == true -> variant.stockQuantity.toDoubleOrNull()
+            ?.toInt()
+            ?.coerceIn(0, 99)
+            ?: 0
+        itemType.publicCatalogNormalizedItemType() == "product" && trackStock -> stockQuantity.toDoubleOrNull()
             ?.toInt()
             ?.coerceIn(0, 99)
             ?: 0
@@ -6110,8 +5998,10 @@ private fun OrmaPublicCatalogProduct.publicCatalogAvailabilityLabel(
         "service" -> variant?.publicCatalogPackageDetail(itemType, unit)
             ?: (variant?.durationMinutes ?: durationMinutes)?.let { "$it min service" }
             ?: "service"
-        else -> variant?.publicCatalogPackageDetail(itemType, unit) ?: if (trackStock) {
-            "${(variant?.stockQuantity ?: stockQuantity).publicCatalogQuantityLabel()} ${unit.ifBlank { "unit" }} left"
+        else -> variant?.publicCatalogPackageDetail(itemType, unit) ?: if (variant?.trackStock == true) {
+            "${variant.stockQuantity.publicCatalogQuantityLabel()} ${unit.ifBlank { "unit" }} left"
+        } else if (trackStock) {
+            "${stockQuantity.publicCatalogQuantityLabel()} ${unit.ifBlank { "unit" }} left"
         } else {
             "per ${unit.ifBlank { "unit" }}"
         }

@@ -313,6 +313,7 @@ data class OrmaProductVariant(
     val sellingPrice: String = "0.00",
     val costPrice: String = "0.00",
     val stockQuantity: String = "0",
+    val trackStock: Boolean = true,
     val durationMinutes: Int? = null,
     val includedQuantity: Int = 1,
     val addons: List<OrmaProductVariantAddon> = emptyList(),
@@ -351,6 +352,7 @@ data class OrmaProductVariantDraft(
     val sellingPrice: String = "",
     val costPrice: String = "",
     val stockQuantity: String = "",
+    val trackStock: Boolean = true,
     val durationMinutes: String = "",
     val includedQuantity: String = "",
     val addons: List<OrmaProductVariantAddonDraft> = emptyList(),
@@ -2715,6 +2717,7 @@ private fun String.toProductVariant(): OrmaProductVariant =
         sellingPrice = jsonDecimalString("sellingPrice") ?: "0.00",
         costPrice = jsonDecimalString("costPrice") ?: "0.00",
         stockQuantity = jsonDecimalString("stockQuantity") ?: "0",
+        trackStock = jsonBoolean("trackStock") ?: true,
         durationMinutes = jsonInt("durationMinutes"),
         includedQuantity = (jsonInt("includedQuantity") ?: 1).coerceAtLeast(1),
         addons = jsonObjectsInArray("addons").map { it.toProductVariantAddon() },
@@ -2839,6 +2842,7 @@ private fun String.toPublicCatalogProduct(): OrmaPublicCatalogProduct =
         categoryId = jsonString("categoryId"),
         categoryName = jsonString("categoryName"),
         name = jsonString("name").orEmpty(),
+        itemType = jsonString("itemType") ?: "product",
         description = jsonString("description"),
         unit = jsonString("unit") ?: "pcs",
         sellingPrice = jsonDecimalString("sellingPrice") ?: "0.00",
@@ -2855,13 +2859,19 @@ private fun String.toPublicCatalogProduct(): OrmaPublicCatalogProduct =
         variants = jsonObjectsInArray("variants").map { it.toProductVariant() },
     )
 
-private fun String.toPublicCatalogOrderReceipt(): OrmaPublicCatalogOrderReceipt =
-    OrmaPublicCatalogOrderReceipt(
+private fun String.toPublicCatalogOrderReceipt(): OrmaPublicCatalogOrderReceipt {
+    val order = jsonObject("order")?.toOrder() ?: error("Ordering response is missing order.")
+    val canCollectPayment = order.status.publicCatalogCanCollectBalancePayment()
+    return OrmaPublicCatalogOrderReceipt(
         message = jsonString("message") ?: "Request received.",
-        order = jsonObject("order")?.toOrder() ?: error("Ordering response is missing order."),
-        paymentLink = jsonString("paymentLink"),
-        paymentMethod = jsonObject("paymentMethod")?.toPublicCatalogPaymentMethod(),
+        order = order,
+        paymentLink = jsonString("paymentLink").takeIf { canCollectPayment },
+        paymentMethod = jsonObject("paymentMethod")?.toPublicCatalogPaymentMethod().takeIf { canCollectPayment },
     )
+}
+
+private fun String.publicCatalogCanCollectBalancePayment(): Boolean =
+    trim().lowercase() in setOf("confirmed", "part_paid")
 
 private fun String.toProductExport(): OrmaProductExport =
     OrmaProductExport(
@@ -3214,6 +3224,7 @@ private fun OrmaProductDraft.toProductRequestJson(): String {
                 "sellingPrice" to JsonValue.StringValue(variant.sellingPrice.blankToNull()),
                 "costPrice" to JsonValue.StringValue(variant.costPrice.blankToNull()),
                 "stockQuantity" to JsonValue.StringValue(variant.stockQuantity.blankToNull()),
+                "trackStock" to JsonValue.BooleanValue(variant.trackStock),
                 "durationMinutes" to JsonValue.IntValue(variant.durationMinutes.intValueOrNull()),
                 "includedQuantity" to JsonValue.IntValue(variant.includedQuantity.intValueOrNull() ?: 1),
                 "addons" to JsonValue.RawValue(addonsJson),
