@@ -3114,8 +3114,64 @@ private fun OrmaOrderDraft.toOrderRequestJson(): String {
 }
 
 private fun String.jsonString(key: String): String? {
-    val pattern = Regex("\"${Regex.escape(key)}\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"")
-    return pattern.find(this)?.groupValues?.get(1)?.jsonUnescaped()
+    val colonIndex = jsonKeyColonIndex(key) ?: return null
+    var index = colonIndex + 1
+    while (index < length && this[index].isWhitespace()) index += 1
+    if (index >= length || this[index] != '"') return null
+    return readJsonStringToken(index)?.first
+}
+
+private fun String.jsonKeyColonIndex(key: String): Int? {
+    var index = 0
+    while (index < length) {
+        if (this[index] != '"') {
+            index += 1
+            continue
+        }
+        val token = readJsonStringToken(index) ?: return null
+        index = token.second + 1
+        var afterKey = index
+        while (afterKey < length && this[afterKey].isWhitespace()) afterKey += 1
+        if (afterKey < length && this[afterKey] == ':' && token.first == key) {
+            return afterKey
+        }
+    }
+    return null
+}
+
+private fun String.readJsonStringToken(startIndex: Int): Pair<String, Int>? {
+    if (startIndex >= length || this[startIndex] != '"') return null
+    val builder = StringBuilder()
+    var index = startIndex + 1
+    while (index < length) {
+        val char = this[index]
+        when (char) {
+            '"' -> return builder.toString() to index
+            '\\' -> {
+                index += 1
+                if (index >= length) return null
+                when (val escaped = this[index]) {
+                    '"', '\\', '/' -> builder.append(escaped)
+                    'b' -> builder.append('\b')
+                    'f' -> builder.append('\u000C')
+                    'n' -> builder.append('\n')
+                    'r' -> builder.append('\r')
+                    't' -> builder.append('\t')
+                    'u' -> {
+                        val end = index + 4
+                        if (end >= length) return null
+                        val code = substring(index + 1, end + 1).toIntOrNull(16) ?: return null
+                        builder.append(code.toChar())
+                        index = end
+                    }
+                    else -> builder.append(escaped)
+                }
+            }
+            else -> builder.append(char)
+        }
+        index += 1
+    }
+    return null
 }
 
 private fun String.jsonBoolean(key: String): Boolean? {
@@ -3197,10 +3253,18 @@ private fun String.jsonArray(key: String): String? {
 
 private fun String.jsonStringArray(key: String): List<String> {
     val array = jsonArray(key) ?: return emptyList()
-    return Regex("\"((?:\\\\.|[^\"])*)\"")
-        .findAll(array)
-        .map { it.groupValues[1].jsonUnescaped() }
-        .toList()
+    val values = mutableListOf<String>()
+    var index = 0
+    while (index < array.length) {
+        if (array[index] != '"') {
+            index += 1
+            continue
+        }
+        val token = array.readJsonStringToken(index) ?: return values
+        values += token.first
+        index = token.second + 1
+    }
+    return values
 }
 
 private fun String.jsonObjectsInArray(key: String): List<String> {

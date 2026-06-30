@@ -6,9 +6,7 @@ import org.orma.project_90.designsystem.OrmaWebTypographyProvider
 
 @OptIn(ExperimentalComposeUiApi::class)
 fun main() {
-    waitForOrmaWebFonts {
-        startOrmaWebApp()
-    }
+    startOrmaWebApp()
 }
 
 @OptIn(ExperimentalComposeUiApi::class)
@@ -18,15 +16,16 @@ private fun startOrmaWebApp() {
             App()
         }
     }
+    hideOrmaStartupSplash()
 }
 
-private fun waitForOrmaWebFonts(onReady: () -> Unit): Unit = js(
+private fun hideOrmaStartupSplash(): Unit = js(
     """
-        const ready = window.OrmaWebFontReady;
-        if (ready && typeof ready.then === "function") {
-            ready.then(onReady).catch(onReady);
-        } else {
-            onReady();
-        }
+        window.setTimeout(function () {
+            const splash = document.getElementById("orma-startup-splash");
+            if (splash && splash.parentNode) {
+                splash.parentNode.removeChild(splash);
+            }
+        }, 250);
     """,
 )

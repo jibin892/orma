@@ -72,6 +72,7 @@ import orma.shared.generated.resources.orma_icon_back
 import orma.shared.generated.resources.orma_icon_calendar
 import orma.shared.generated.resources.orma_icon_download
 import orma.shared.generated.resources.orma_icon_edit
+import orma.shared.generated.resources.orma_icon_filter
 import orma.shared.generated.resources.orma_icon_image
 import orma.shared.generated.resources.orma_icon_next
 import orma.shared.generated.resources.orma_icon_print
@@ -165,6 +166,7 @@ enum class OrmaFlatIconKind {
     Download,
     Upload,
     Print,
+    Filter,
     Category,
     Profile,
     Back,
@@ -203,6 +205,7 @@ private fun ormaFlatIconResource(kind: OrmaFlatIconKind): DrawableResource? = wh
     OrmaFlatIconKind.Stock -> Res.drawable.orma_icon_stock
     OrmaFlatIconKind.Download -> Res.drawable.orma_icon_download
     OrmaFlatIconKind.Print -> Res.drawable.orma_icon_print
+    OrmaFlatIconKind.Filter -> Res.drawable.orma_icon_filter
     else -> null
 }
 
@@ -438,6 +441,20 @@ private fun DrawScope.drawOrmaFlatIcon(
                 style = stroke,
             )
             drawCircle(color = color, radius = unit * 0.035f, center = Offset(width * 0.72f, height * 0.46f))
+        }
+        OrmaFlatIconKind.Filter -> {
+            val funnel = Path().apply {
+                moveTo(width * 0.18f, height * 0.24f)
+                lineTo(width * 0.82f, height * 0.24f)
+                lineTo(width * 0.58f, height * 0.52f)
+                lineTo(width * 0.58f, height * 0.76f)
+                lineTo(width * 0.42f, height * 0.84f)
+                lineTo(width * 0.42f, height * 0.52f)
+                close()
+            }
+            drawPath(path = funnel, color = color.copy(alpha = 0.18f))
+            drawPath(path = funnel, color = color, style = stroke)
+            drawLine(color, Offset(width * 0.28f, height * 0.38f), Offset(width * 0.72f, height * 0.38f), strokeWidth * 0.72f, StrokeCap.Round)
         }
         OrmaFlatIconKind.Category -> {
             val box = unit * 0.22f

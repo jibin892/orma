@@ -213,6 +213,7 @@ private fun ormaButtonIconForText(text: String): OrmaFlatIconKind? {
         normalized in setOf("back", "owner") -> OrmaFlatIconKind.Back
         normalized == "previous" -> OrmaFlatIconKind.ChevronLeft
         normalized == "next" -> OrmaFlatIconKind.ChevronRight
+        normalized == "filter" || normalized == "filters" -> OrmaFlatIconKind.Filter
         normalized == "clear" || normalized.startsWith("close") -> OrmaFlatIconKind.Close
         normalized.startsWith("add") || normalized.startsWith("new") || normalized.startsWith("create") -> OrmaFlatIconKind.Plus
         normalized.startsWith("edit") || normalized.startsWith("update") || normalized.startsWith("save") -> OrmaFlatIconKind.Edit

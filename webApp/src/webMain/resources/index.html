@@ -12,10 +12,21 @@
     <link rel="preload" href="fonts/google_sans_medium.woff2" as="font" type="font/woff2" crossorigin>
     <link rel="preload" href="fonts/google_sans_semibold.woff2" as="font" type="font/woff2" crossorigin>
     <link rel="preload" href="fonts/google_sans_bold.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="preload" href="webApp.js" as="script">
     <link type="text/css" rel="stylesheet" href="styles.css">
-    <script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
     <script>
         window.OneSignalDeferred = window.OneSignalDeferred || [];
+        window.OrmaLoadOneSignalSdk = window.OrmaLoadOneSignalSdk || function () {
+            if (document.querySelector("script[data-orma-onesignal-sdk]")) {
+                return;
+            }
+            const script = document.createElement("script");
+            script.src = "https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js";
+            script.async = true;
+            script.defer = true;
+            script.dataset.ormaOnesignalSdk = "true";
+            document.head.appendChild(script);
+        };
         window.OrmaOneSignalReady = window.OrmaOneSignalReady || new Promise((resolve, reject) => {
             window.OneSignalDeferred.push(async function (OneSignal) {
                 try {
@@ -35,14 +46,16 @@
     </script>
 </head>
 <body>
-    <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 50 50" role="presentation">
-        <circle cx="25" cy="25" r="20" stroke="#ccc" stroke-width="4" fill="none"/>
-        <circle cx="25" cy="25" r="20" stroke="#333" stroke-width="4" fill="none" stroke-linecap="round"
-                stroke-dasharray="90 125">
-            <animateTransform attributeName="transform" type="rotate" from="0 25 25" to="360 25 25" dur="1s"
-                repeatCount="indefinite"/>
-        </circle>
-    </svg>
+    <div id="orma-startup-splash" aria-hidden="true">
+        <svg xmlns="http://www.w3.org/2000/svg" width="42" height="42" viewBox="0 0 50 50" role="presentation">
+            <circle cx="25" cy="25" r="20" stroke="#E1E8E8" stroke-width="4" fill="none"/>
+            <circle cx="25" cy="25" r="20" stroke="#003333" stroke-width="4" fill="none" stroke-linecap="round"
+                    stroke-dasharray="90 125">
+                <animateTransform attributeName="transform" type="rotate" from="0 25 25" to="360 25 25" dur="0.9s"
+                    repeatCount="indefinite"/>
+            </circle>
+        </svg>
+    </div>
     <script>
         window.OrmaWebFontReady = (function () {
             if (!document.fonts || typeof document.fonts.load !== "function") {
@@ -503,12 +516,21 @@
     </script>
     <script>
         if (!window.OrmaDesktopAuthBridgeActive) {
-            Promise.resolve(window.OrmaWebFontReady).finally(() => {
-                const webAppScript = document.createElement("script");
-                webAppScript.type = "application/javascript";
-                webAppScript.src = "webApp.js";
-                document.body.appendChild(webAppScript);
-            });
+            const webAppScript = document.createElement("script");
+            webAppScript.type = "application/javascript";
+            webAppScript.src = "webApp.js";
+            document.body.appendChild(webAppScript);
+
+            const startOneSignal = () => window.setTimeout(() => {
+                if (window.OrmaLoadOneSignalSdk) {
+                    window.OrmaLoadOneSignalSdk();
+                }
+            }, 1800);
+            if (typeof window.requestIdleCallback === "function") {
+                window.requestIdleCallback(startOneSignal, { timeout: 4000 });
+            } else {
+                startOneSignal();
+            }
         }
     </script>
 </body>
