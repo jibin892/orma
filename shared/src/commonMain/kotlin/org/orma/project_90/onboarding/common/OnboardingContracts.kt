@@ -147,6 +147,7 @@ internal data class DashboardDataState(
     val hasLoaded: Boolean = false,
     val loading: Boolean = false,
     val actionLoading: Boolean = false,
+    val actionLoadingKeys: Set<String> = emptySet(),
     val errorTitle: String? = null,
     val errorMessage: String? = null,
     val statusMessage: String? = null,
@@ -157,6 +158,7 @@ internal data class DashboardDataState(
     val categories: List<OrmaProductCategory> = emptyList(),
     val offers: List<OrmaProductOffer> = emptyList(),
     val products: List<OrmaProduct> = emptyList(),
+    val saleCatalogProducts: List<OrmaProduct> = emptyList(),
     val marketingProducts: List<OrmaProduct> = emptyList(),
     val orders: List<OrmaOrder> = emptyList(),
     val invoiceOrders: List<OrmaOrder> = emptyList(),
@@ -188,6 +190,7 @@ internal data class DashboardDataState(
     val productImportTemplate: OrmaProductImportTemplate? = null,
     val productImportResult: OrmaProductImportResult? = null,
     val pendingNotificationOrderId: String? = null,
+    val notificationDetailOrder: OrmaOrder? = null,
     val invoiceGstinLookupLoading: Boolean = false,
     val invoiceGstinLookupNumber: String = "",
     val invoiceGstinLookupStatusMessage: String? = null,
@@ -215,6 +218,33 @@ internal fun DashboardDataState.activeFilters(): OrmaDashboardFilters =
 internal fun DashboardDataState.isOrderActionLoading(orderId: String): Boolean =
     orderId.trim().takeIf(String::isNotBlank)?.let { it in orderActionLoadingIds } ?: false
 
+internal fun DashboardDataState.isActionLoading(key: String): Boolean =
+    key.trim().takeIf(String::isNotBlank)?.let { it in actionLoadingKeys } ?: false
+
+internal object DashboardActionKey {
+    const val CustomerCreate = "customer:create"
+    const val SupplierCreate = "supplier:create"
+    const val CategoryCreate = "category:create"
+    const val ProductCreate = "product:create"
+    const val ProductTransfer = "product:transfer"
+    const val OfferCreate = "offer:create"
+    const val TeamInviteCreate = "team:invite:create"
+    const val PaymentCreate = "payment:create"
+    const val PrinterCreate = "printer:create"
+
+    fun customer(id: String): String = "customer:${id.trim()}"
+    fun supplier(id: String): String = "supplier:${id.trim()}"
+    fun product(id: String): String = "product:${id.trim()}"
+    fun productImage(id: String): String = "product:${id.trim()}:image"
+    fun productAvailability(id: String): String = "product:${id.trim()}:availability"
+    fun productStock(id: String): String = "product:${id.trim()}:stock"
+    fun offer(id: String): String = "offer:${id.trim()}"
+    fun teamInvite(id: String): String = "team:invite:${id.trim()}"
+    fun teamMember(id: String): String = "team:member:${id.trim()}"
+    fun payment(id: String): String = "payment:${id.trim()}"
+    fun printer(id: String): String = "printer:${id.trim()}"
+}
+
 internal data class OnboardingActions(
     val onIdentifierTypeChange: (AuthIdentifierType) -> Unit,
     val onCountryChange: (OrmaCountryUi) -> Unit,
@@ -233,6 +263,7 @@ internal data class OnboardingActions(
     val onSetupStepChange: (BusinessSetupStep) -> Unit,
     val onNotificationDecision: (Boolean) -> Unit,
     val onNotificationChannelsChange: (OrmaNotificationChannelPreferences) -> Unit,
+    val onOpenNotificationSetup: () -> Unit,
     val onTeamProfileNameChange: (String) -> Unit,
     val onDashboardRefresh: () -> Unit,
     val onClearDashboardMessage: () -> Unit,
@@ -273,6 +304,7 @@ internal data class OnboardingActions(
     val onUpdateOrder: (String, OrmaOrderDraft) -> Unit,
     val onUpdateOrderStatus: (String, String) -> Unit,
     val onUpdateOrderStatusWithPayment: (String, String, String?) -> Unit,
+    val onResolveOrderChangeRequest: (String, String, Boolean) -> Unit,
     val onCreateTeamInvite: (OrmaTeamInviteDraft) -> Unit,
     val onUpdateTeamMemberAccess: (String, OrmaTeamMemberAccessDraft) -> Unit,
     val onRevokeTeamInvite: (String) -> Unit,

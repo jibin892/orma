@@ -764,6 +764,54 @@ data class PublicCatalogOrderResponse(
 )
 
 @Serializable
+data class OrderChangeRequestRequest(
+    val items: List<OrderChangeRequestItemRequest> = emptyList(),
+    val requestedPaymentMode: String? = null,
+    val requestedPaidTotal: String? = null,
+    val paymentReference: String? = null,
+    val notes: String? = null,
+)
+
+@Serializable
+data class OrderChangeRequestItemRequest(
+    val orderItemId: String,
+    val quantity: String,
+)
+
+@Serializable
+data class OrderChangeRequestResolveRequest(
+    val approved: Boolean,
+    val notes: String? = null,
+)
+
+@Serializable
+data class OrderChangeRequestResponse(
+    val id: String,
+    val status: String,
+    val items: List<OrderChangeRequestItemResponse> = emptyList(),
+    val requestedPaymentMode: String? = null,
+    val requestedPaidTotal: String? = null,
+    val paymentReference: String? = null,
+    val customerNotes: String? = null,
+    val businessNotes: String? = null,
+    val resolvedAt: String? = null,
+    val createdAt: String,
+    val updatedAt: String,
+)
+
+@Serializable
+data class OrderChangeRequestItemResponse(
+    val orderItemId: String,
+    val productId: String? = null,
+    val variantId: String? = null,
+    val name: String,
+    val previousQuantity: String,
+    val requestedQuantity: String,
+    val unitPrice: String,
+    val lineTotal: String,
+)
+
+@Serializable
 data class StockAdjustmentRequest(
     val quantityDelta: String,
     val note: String? = null,
@@ -870,6 +918,7 @@ data class OrderResponse(
     val itemCount: Int,
     val items: List<OrderItemResponse> = emptyList(),
     val sessions: List<OrderSessionResponse> = emptyList(),
+    val changeRequests: List<OrderChangeRequestResponse> = emptyList(),
     val createdAt: String,
     val updatedAt: String,
 )

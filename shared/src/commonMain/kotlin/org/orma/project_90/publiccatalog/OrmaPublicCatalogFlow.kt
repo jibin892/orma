@@ -55,6 +55,9 @@ import org.orma.project_90.auth.OrmaAuthResult
 import org.orma.project_90.auth.OrmaAuthSession
 import org.orma.project_90.auth.createOrmaAuthGateway
 import org.orma.project_90.backend.OrmaBackendResult
+import org.orma.project_90.backend.OrmaOrderChangeRequest
+import org.orma.project_90.backend.OrmaOrderChangeRequestDraft
+import org.orma.project_90.backend.OrmaOrderChangeRequestItemDraft
 import org.orma.project_90.backend.OrmaOrder
 import org.orma.project_90.backend.OrmaOrderItem
 import org.orma.project_90.backend.OrmaOrderSession
@@ -130,6 +133,8 @@ fun OrmaPublicCatalogFlow(
     var customerOrderDetailLoading by remember(workspaceId) { mutableStateOf(false) }
     var customerOrderDetailRefreshing by remember(workspaceId) { mutableStateOf(false) }
     var customerOrderDetailError by remember(workspaceId) { mutableStateOf<String?>(null) }
+    var customerOrderChangeSubmitting by remember(workspaceId) { mutableStateOf(false) }
+    var customerOrderChangeMessage by remember(workspaceId) { mutableStateOf<String?>(null) }
     var customerStatusNotice by remember(workspaceId) { mutableStateOf<PublicCatalogCustomerStatusNotice?>(null) }
     var customerNotificationRegistrationKey by remember(workspaceId) { mutableStateOf("") }
     var customerNotificationDeviceToken by remember(workspaceId) { mutableStateOf("") }
@@ -300,6 +305,33 @@ fun OrmaPublicCatalogFlow(
         }
         customerOrderDetailLoading = false
         customerOrderDetailRefreshing = false
+    }
+
+    suspend fun submitCustomerOrderChangeRequest(
+        order: OrmaOrder,
+        draft: OrmaOrderChangeRequestDraft,
+    ) {
+        if (order.id.isBlank() || customerOrderChangeSubmitting) return
+        customerOrderChangeSubmitting = true
+        customerOrderDetailError = null
+        customerOrderChangeMessage = null
+        when (val result = client.submitPublicCatalogOrderChangeRequest(
+            workspaceId = workspaceId,
+            orderId = order.id,
+            draft = draft,
+            idToken = customerSession?.idToken,
+        )) {
+            is OrmaBackendResult.Success -> {
+                customerOrderChangeMessage = result.value.message
+                customerOrderDetailReceipt = result.value
+                receipt = receipt.publicCatalogReplaceReceipt(result.value)
+                customerOrders = customerOrders.publicCatalogReplaceOrder(result.value.order)
+            }
+            is OrmaBackendResult.Failure -> {
+                customerOrderDetailError = result.publicCatalogMessage(load = false)
+            }
+        }
+        customerOrderChangeSubmitting = false
     }
 
     suspend fun handleCustomerAuthResult(result: OrmaAuthResult) {
@@ -577,6 +609,8 @@ fun OrmaPublicCatalogFlow(
                 customerOrderDetailLoading = customerOrderDetailLoading,
                 customerOrderDetailRefreshing = customerOrderDetailRefreshing,
                 customerOrderDetailError = customerOrderDetailError,
+                customerOrderChangeSubmitting = customerOrderChangeSubmitting,
+                customerOrderChangeMessage = customerOrderChangeMessage,
                 customerProfileOpen = customerProfileOpen,
                 selectedItems = selectedItems,
                 selectedFlow = selectedFlow,
@@ -634,6 +668,9 @@ fun OrmaPublicCatalogFlow(
                 onCustomerOrderDetailRefresh = {
                     val detailOrderId = customerOrderDetailReceipt?.order?.id.orEmpty()
                     scope.launch { loadCustomerOrderDetail(detailOrderId, refresh = true) }
+                },
+                onCustomerOrderChangeRequest = { order, draft ->
+                    scope.launch { submitCustomerOrderChangeRequest(order, draft) }
                 },
                 onSubmit = ::submit,
             )
@@ -657,6 +694,8 @@ fun OrmaPublicCatalogFlow(
                 customerOrderDetailLoading = customerOrderDetailLoading,
                 customerOrderDetailRefreshing = customerOrderDetailRefreshing,
                 customerOrderDetailError = customerOrderDetailError,
+                customerOrderChangeSubmitting = customerOrderChangeSubmitting,
+                customerOrderChangeMessage = customerOrderChangeMessage,
                 customerProfileOpen = customerProfileOpen,
                 selectedItems = selectedItems,
                 selectedFlow = selectedFlow,
@@ -714,6 +753,9 @@ fun OrmaPublicCatalogFlow(
                 onCustomerOrderDetailRefresh = {
                     val detailOrderId = customerOrderDetailReceipt?.order?.id.orEmpty()
                     scope.launch { loadCustomerOrderDetail(detailOrderId, refresh = true) }
+                },
+                onCustomerOrderChangeRequest = { order, draft ->
+                    scope.launch { submitCustomerOrderChangeRequest(order, draft) }
                 },
                 onSubmit = ::submit,
             )
@@ -742,6 +784,8 @@ private fun PublicCatalogMobile(
     customerOrderDetailLoading: Boolean,
     customerOrderDetailRefreshing: Boolean,
     customerOrderDetailError: String?,
+    customerOrderChangeSubmitting: Boolean,
+    customerOrderChangeMessage: String?,
     customerProfileOpen: Boolean,
     customerStatusNotice: PublicCatalogCustomerStatusNotice?,
     selectedItems: List<PublicCatalogSelection>,
@@ -767,6 +811,7 @@ private fun PublicCatalogMobile(
     onCustomerOrderOpen: (OrmaOrder) -> Unit,
     onCustomerOrderDetailBack: () -> Unit,
     onCustomerOrderDetailRefresh: () -> Unit,
+    onCustomerOrderChangeRequest: (OrmaOrder, OrmaOrderChangeRequestDraft) -> Unit,
     onSubmit: () -> Unit,
 ) {
     val scrollState = rememberScrollState()
@@ -789,12 +834,15 @@ private fun PublicCatalogMobile(
             detailLoading = customerOrderDetailLoading,
             detailRefreshing = customerOrderDetailRefreshing,
             detailError = customerOrderDetailError,
+            changeSubmitting = customerOrderChangeSubmitting,
+            changeMessage = customerOrderChangeMessage,
             customerStatusNotice = customerStatusNotice,
             compact = true,
             onBack = onCustomerProfileClose,
             onOrderOpen = onCustomerOrderOpen,
             onDetailBack = onCustomerOrderDetailBack,
             onDetailRefresh = onCustomerOrderDetailRefresh,
+            onChangeRequest = onCustomerOrderChangeRequest,
             modifier = Modifier
                 .widthIn(max = 430.dp)
                 .fillMaxSize()
@@ -1008,6 +1056,8 @@ private fun PublicCatalogWide(
     customerOrderDetailLoading: Boolean,
     customerOrderDetailRefreshing: Boolean,
     customerOrderDetailError: String?,
+    customerOrderChangeSubmitting: Boolean,
+    customerOrderChangeMessage: String?,
     customerProfileOpen: Boolean,
     customerStatusNotice: PublicCatalogCustomerStatusNotice?,
     selectedItems: List<PublicCatalogSelection>,
@@ -1033,6 +1083,7 @@ private fun PublicCatalogWide(
     onCustomerOrderOpen: (OrmaOrder) -> Unit,
     onCustomerOrderDetailBack: () -> Unit,
     onCustomerOrderDetailRefresh: () -> Unit,
+    onCustomerOrderChangeRequest: (OrmaOrder, OrmaOrderChangeRequestDraft) -> Unit,
     onSubmit: () -> Unit,
 ) {
     val wideScrollState = rememberScrollState()
@@ -1062,12 +1113,15 @@ private fun PublicCatalogWide(
                 detailLoading = customerOrderDetailLoading,
                 detailRefreshing = customerOrderDetailRefreshing,
                 detailError = customerOrderDetailError,
+                changeSubmitting = customerOrderChangeSubmitting,
+                changeMessage = customerOrderChangeMessage,
                 customerStatusNotice = customerStatusNotice,
                 compact = false,
                 onBack = onCustomerProfileClose,
                 onOrderOpen = onCustomerOrderOpen,
                 onDetailBack = onCustomerOrderDetailBack,
                 onDetailRefresh = onCustomerOrderDetailRefresh,
+                onChangeRequest = onCustomerOrderChangeRequest,
                 modifier = Modifier
                     .fillMaxHeight()
                     .fillMaxWidth()
@@ -3050,12 +3104,15 @@ private fun PublicCatalogCustomerProfileScreen(
     detailLoading: Boolean,
     detailRefreshing: Boolean,
     detailError: String?,
+    changeSubmitting: Boolean,
+    changeMessage: String?,
     customerStatusNotice: PublicCatalogCustomerStatusNotice?,
     compact: Boolean,
     onBack: () -> Unit,
     onOrderOpen: (OrmaOrder) -> Unit,
     onDetailBack: () -> Unit,
     onDetailRefresh: () -> Unit,
+    onChangeRequest: (OrmaOrder, OrmaOrderChangeRequestDraft) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val session = state.session ?: return
@@ -3149,8 +3206,11 @@ private fun PublicCatalogCustomerProfileScreen(
                     loading = detailLoading,
                     refreshing = detailRefreshing,
                     error = detailError,
+                    changeSubmitting = changeSubmitting,
+                    changeMessage = changeMessage,
                     onBack = onDetailBack,
                     onRefresh = onDetailRefresh,
+                    onChangeRequest = onChangeRequest,
                 )
             } else {
                 PublicCatalogOrderStatusTabs(
@@ -3582,11 +3642,29 @@ private fun PublicCatalogCustomerOrderDetail(
     loading: Boolean,
     refreshing: Boolean,
     error: String?,
+    changeSubmitting: Boolean,
+    changeMessage: String?,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
+    onChangeRequest: (OrmaOrder, OrmaOrderChangeRequestDraft) -> Unit,
 ) {
     val order = receipt?.order
     val balanceDue = order?.publicCatalogBalanceDueValue() ?: 0.0
+    var changeOpen by remember(order?.id) { mutableStateOf(false) }
+    var changeQuantities by remember(order?.id) { mutableStateOf<Map<String, Int>>(emptyMap()) }
+    var changePaymentMode by remember(order?.id) { mutableStateOf("") }
+    var changePaidTotal by remember(order?.id) { mutableStateOf("") }
+    var changePaymentReference by remember(order?.id) { mutableStateOf("") }
+    var changeNotes by remember(order?.id) { mutableStateOf("") }
+    fun ensureChangeDraft(order: OrmaOrder) {
+        if (changeQuantities.isEmpty()) {
+            changeQuantities = order.items.associate { item ->
+                item.id to item.quantity.toDoubleOrNull().orZero().roundToInt().coerceAtLeast(0)
+            }
+            changePaymentMode = order.paymentMode
+            changePaidTotal = order.paidTotal
+        }
+    }
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -3679,6 +3757,76 @@ private fun PublicCatalogCustomerOrderDetail(
                         enabled = !loading,
                     )
                 }
+                changeMessage?.takeIf { it.isNotBlank() }?.let { message ->
+                    PublicCatalogMessageCard(
+                        title = "Change request",
+                        body = message,
+                        error = false,
+                    )
+                }
+                val pendingChange = order.changeRequests.firstOrNull { it.status == "pending" }
+                if (pendingChange != null) {
+                    PublicCatalogPendingChangeRequestCard(
+                        request = pendingChange,
+                        currency = order.currency,
+                    )
+                } else if (order.publicCatalogCanRequestChange()) {
+                    if (changeOpen) {
+                        ensureChangeDraft(order)
+                        PublicCatalogOrderChangeRequestCard(
+                            order = order,
+                            quantities = changeQuantities,
+                            paymentMode = changePaymentMode,
+                            paidTotal = changePaidTotal,
+                            paymentReference = changePaymentReference,
+                            notes = changeNotes,
+                            submitting = changeSubmitting,
+                            onQuantityChange = { itemId, quantity ->
+                                changeQuantities = changeQuantities + (itemId to quantity.coerceAtLeast(0))
+                            },
+                            onPaymentModeChange = { changePaymentMode = it },
+                            onPaidTotalChange = { changePaidTotal = it },
+                            onPaymentReferenceChange = { changePaymentReference = it },
+                            onNotesChange = { changeNotes = it },
+                            onCancel = { changeOpen = false },
+                            onSubmit = {
+                                onChangeRequest(
+                                    order,
+                                    OrmaOrderChangeRequestDraft(
+                                        items = order.items.mapNotNull { item ->
+                                            val requestedQuantity = changeQuantities[item.id]
+                                                ?: item.quantity.toDoubleOrNull().orZero().roundToInt().coerceAtLeast(0)
+                                            val currentQuantity = item.quantity.toDoubleOrNull().orZero().roundToInt().coerceAtLeast(0)
+                                            if (requestedQuantity == currentQuantity) {
+                                                null
+                                            } else {
+                                                OrmaOrderChangeRequestItemDraft(
+                                                    orderItemId = item.id,
+                                                    quantity = requestedQuantity.toString(),
+                                                )
+                                            }
+                                        },
+                                        requestedPaymentMode = changePaymentMode.takeIf { it != order.paymentMode }.orEmpty(),
+                                        requestedPaidTotal = changePaidTotal.takeIf { it != order.paidTotal }.orEmpty(),
+                                        paymentReference = changePaymentReference,
+                                        notes = changeNotes,
+                                    ),
+                                )
+                                changeOpen = false
+                            },
+                        )
+                    } else {
+                        OrmaLightButton(
+                            text = "Request item or payment change",
+                            onClick = {
+                                ensureChangeDraft(order)
+                                changeOpen = true
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = !loading && !refreshing && !changeSubmitting,
+                        )
+                    }
+                }
                 if (receipt.paymentLink?.isNotBlank() == true && balanceDue > 0.0) {
                     PublicCatalogUpiPaymentCard(
                         receipt = receipt,
@@ -3768,6 +3916,166 @@ private fun PublicCatalogUpiPaymentCard(
                 onClick = { openPublicCatalogPaymentLink(link) },
                 modifier = Modifier.fillMaxWidth(),
             )
+        }
+    }
+}
+
+@Composable
+private fun PublicCatalogPendingChangeRequestCard(
+    request: OrmaOrderChangeRequest,
+    currency: String,
+) {
+    PublicCatalogMessageCard(
+        title = "Change request pending",
+        body = buildList {
+            if (request.items.isNotEmpty()) {
+                add(request.items.joinToString("; ") { item ->
+                    "${item.name}: ${item.previousQuantity} to ${item.requestedQuantity}"
+                })
+            }
+            request.requestedPaidTotal?.takeIf { it.isNotBlank() }?.let {
+                add("Paid amount requested: ${currency.ifBlank { "INR" }} $it")
+            }
+            request.paymentReference?.takeIf { it.isNotBlank() }?.let { add("Reference: $it") }
+        }.joinToString(" · ").ifBlank {
+            "The business is reviewing your requested update."
+        },
+        error = false,
+    )
+}
+
+@Composable
+private fun PublicCatalogOrderChangeRequestCard(
+    order: OrmaOrder,
+    quantities: Map<String, Int>,
+    paymentMode: String,
+    paidTotal: String,
+    paymentReference: String,
+    notes: String,
+    submitting: Boolean,
+    onQuantityChange: (String, Int) -> Unit,
+    onPaymentModeChange: (String) -> Unit,
+    onPaidTotalChange: (String) -> Unit,
+    onPaymentReferenceChange: (String) -> Unit,
+    onNotesChange: (String) -> Unit,
+    onCancel: () -> Unit,
+    onSubmit: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = OrmaShapes.SmallCard,
+        color = OrmaColors.ScreenBackground,
+        contentColor = OrmaColors.TextPrimary,
+        border = BorderStroke(0.8.dp, OrmaColors.Hairline),
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top,
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(3.dp),
+                ) {
+                    Text(
+                        text = "Request a change",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = OrmaColors.TextPrimary,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = "Set an item to 0 to request removal. The business must approve changes.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = OrmaColors.TextSecondary,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                OrmaBadge(text = "REVIEW", tone = OrmaStatusTone.Warning)
+            }
+            order.items.forEach { item ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        Text(
+                            text = item.publicCatalogBookedItemTitle(),
+                            style = MaterialTheme.typography.labelLarge,
+                            color = OrmaColors.TextPrimary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            text = "${item.quantity} x ${order.currency.ifBlank { "INR" }} ${item.unitPrice}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = OrmaColors.TextSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    QuantityStepper(
+                        quantity = quantities[item.id]
+                            ?: item.quantity.toDoubleOrNull().orZero().roundToInt().coerceAtLeast(0),
+                        enabled = !submitting,
+                        maxQuantity = 99,
+                        onQuantityChange = { onQuantityChange(item.id, it) },
+                    )
+                }
+            }
+            OrmaSegmentedRow(
+                options = listOf("pay_on_spot", "upi", "cash", "card"),
+                selected = paymentMode.ifBlank { order.paymentMode },
+                label = { it.publicCatalogCheckoutPaymentLabel(order.orderType) },
+                onSelected = onPaymentModeChange,
+            )
+            OrmaTextField(
+                value = paidTotal,
+                onValueChange = onPaidTotalChange,
+                label = "Paid amount",
+                placeholder = order.paidTotal.ifBlank { "0.00" },
+            )
+            OrmaTextField(
+                value = paymentReference,
+                onValueChange = onPaymentReferenceChange,
+                label = "Payment reference",
+                placeholder = "UPI reference or note",
+            )
+            OrmaTextField(
+                value = notes,
+                onValueChange = onNotesChange,
+                label = "Change note",
+                placeholder = "Optional",
+                singleLine = false,
+                minLines = 2,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                OrmaLightButton(
+                    text = "Cancel",
+                    onClick = onCancel,
+                    modifier = Modifier.weight(1f),
+                    enabled = !submitting,
+                )
+                OrmaFullButton(
+                    text = if (submitting) "Sending..." else "Send request",
+                    onClick = onSubmit,
+                    modifier = Modifier.weight(1f),
+                    enabled = !submitting,
+                )
+            }
         }
     }
 }
@@ -5129,6 +5437,11 @@ private fun OrmaOrder.publicCatalogStatusBody(): String =
         "cancelled" -> "The business rejected or cancelled this request."
         else -> "This request is waiting for the business to confirm or reject."
     }
+
+private fun OrmaOrder.publicCatalogCanRequestChange(): Boolean =
+    source == "public_catalog" &&
+        status.trim().lowercase() in setOf("new", "confirmed", "part_paid") &&
+        items.isNotEmpty()
 
 private fun OrmaOrder.publicCatalogStatusLabel(): String =
     when (status.trim().lowercase()) {

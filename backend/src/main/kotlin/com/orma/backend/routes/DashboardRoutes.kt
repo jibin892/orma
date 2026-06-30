@@ -12,6 +12,8 @@ import com.orma.backend.models.DashboardNotificationEventListResponse
 import com.orma.backend.models.ErrorResponse
 import com.orma.backend.models.NotificationDevicePreferenceResponse
 import com.orma.backend.models.NotificationPreferenceRequest
+import com.orma.backend.models.OrderChangeRequestRequest
+import com.orma.backend.models.OrderChangeRequestResolveRequest
 import com.orma.backend.models.OrderListResponse
 import com.orma.backend.models.OrderRequest
 import com.orma.backend.models.OrderStatusRequest
@@ -72,6 +74,22 @@ fun Route.dashboardRoutes(
         val order = repository.publicCatalogOrder(workspaceId, orderId)
             ?: return@post call.publicCatalogNotFound()
         call.respond(order)
+    }
+
+    post("/public/workspaces/{workspaceId}/orders/{orderId}/change-requests") {
+        val repository = dashboardRepository ?: return@post call.dashboardDatabaseNotConfigured()
+        val workspaceId = call.parameters["workspaceId"].orEmpty()
+        val orderId = call.parameters["orderId"].orEmpty()
+        val request = call.receive<OrderChangeRequestRequest>()
+        val firebaseUser = call.optionalVerifiedFirebaseUser(config)
+        val response = try {
+            repository.createPublicCatalogOrderChangeRequest(firebaseUser, workspaceId, orderId, request)
+        } catch (error: DashboardOrderValidationException) {
+            call.respondValidation(error.code, error.message ?: "Check the requested order change.")
+            return@post
+        } ?: return@post call.publicCatalogNotFound()
+        orderNotificationService?.notifyOrderChangeRequested(response.order)
+        call.respond(response)
     }
 
     get("/public/workspaces/{workspaceId}/account/orders") {
@@ -509,6 +527,27 @@ fun Route.dashboardRoutes(
         } catch (error: DashboardOrderValidationException) {
             call.respondValidation(error.code, error.message ?: "Check the order details.")
             return@put
+        }
+        if (order != null) {
+            orderNotificationService?.notifyOrderUpdated(order)
+        }
+        call.respondWorkspaceResult(order)
+    }
+
+    post("/orders/{id}/change-requests/{requestId}") {
+        val repository = dashboardRepository ?: return@post call.dashboardDatabaseNotConfigured()
+        val firebaseUser = call.verifiedFirebaseUser(config) ?: return@post
+        val orderId = call.parameters["id"].orEmpty()
+        val requestId = call.parameters["requestId"].orEmpty()
+        val request = call.receive<OrderChangeRequestResolveRequest>()
+        val order = try {
+            repository.resolveOrderChangeRequest(firebaseUser, orderId, requestId, request)
+        } catch (error: DashboardOrderValidationException) {
+            call.respondValidation(error.code, error.message ?: "Check the customer change request.")
+            return@post
+        }
+        if (order != null) {
+            orderNotificationService?.notifyOrderChangeResolved(order, request.approved)
         }
         call.respondWorkspaceResult(order)
     }

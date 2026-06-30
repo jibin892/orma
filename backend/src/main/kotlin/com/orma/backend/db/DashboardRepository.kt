@@ -12,6 +12,10 @@ import com.orma.backend.models.DashboardRevenuePointResponse
 import com.orma.backend.models.DashboardTaskResponse
 import com.orma.backend.models.DashboardTopItemResponse
 import com.orma.backend.models.NotificationPreferenceRequest
+import com.orma.backend.models.OrderChangeRequestItemResponse
+import com.orma.backend.models.OrderChangeRequestRequest
+import com.orma.backend.models.OrderChangeRequestResolveRequest
+import com.orma.backend.models.OrderChangeRequestResponse
 import com.orma.backend.models.OrderItemRequest
 import com.orma.backend.models.OrderItemResponse
 import com.orma.backend.models.OrderRequest
@@ -298,6 +302,97 @@ class DashboardRepository(
                 ),
                 paymentMethod = paymentMethod,
             )
+        }
+    }
+
+    suspend fun createPublicCatalogOrderChangeRequest(
+        firebaseUser: VerifiedFirebaseUser?,
+        workspaceId: String,
+        orderId: String,
+        request: OrderChangeRequestRequest,
+    ): PublicCatalogOrderResponse? = withContext(Dispatchers.IO) {
+        dataSource.connection.use { connection ->
+            connection.autoCommit = false
+            try {
+                val access = connection.resolvePublicWorkspaceAccess(workspaceId) ?: run {
+                    connection.rollback()
+                    return@withContext null
+                }
+                val cleanOrderId = orderId.cleanUuidOrNull() ?: run {
+                    connection.rollback()
+                    return@withContext null
+                }
+                val order = connection.getOrder(access.workspaceId, cleanOrderId, includeItems = true)
+                    ?.takeIf { it.source == "public_catalog" }
+                    ?: run {
+                        connection.rollback()
+                        return@withContext null
+                    }
+                if (!order.status.allowsPublicCatalogChangeRequest()) {
+                    throw DashboardOrderValidationException(
+                        code = "public_order_change_closed",
+                        publicMessage = "This request is already closed. Contact the business directly for changes.",
+                    )
+                }
+                if (order.changeRequests.any { it.status == "pending" }) {
+                    throw DashboardOrderValidationException(
+                        code = "public_order_change_pending",
+                        publicMessage = "A change request is already waiting for business review.",
+                    )
+                }
+                val changeItems = connection.prepareOrderChangeRequestItems(order, request)
+                val requestedPaymentMode = request.requestedPaymentMode?.cleanOptional()?.cleanPaymentMode()
+                val requestedPaidTotal = request.requestedPaidTotal
+                    ?.cleanOptional()
+                    ?.moneyOrZero()
+                    ?.coerceAtLeast(BigDecimal.ZERO)
+                    ?.scaled()
+                val paymentReference = request.paymentReference.cleanOptional()
+                val customerNotes = request.notes.cleanOptional()
+                val hasPaymentChange = requestedPaymentMode != null || requestedPaidTotal != null || paymentReference != null
+                if (changeItems.isEmpty() && !hasPaymentChange && customerNotes == null) {
+                    throw DashboardOrderValidationException(
+                        code = "public_order_change_empty",
+                        publicMessage = "Change a quantity, payment detail, or note before sending the request.",
+                    )
+                }
+                val requestId = connection.insertOrderChangeRequest(
+                    workspaceId = access.workspaceId,
+                    order = order,
+                    firebaseUid = firebaseUser?.uid,
+                    items = changeItems,
+                    requestedPaymentMode = requestedPaymentMode,
+                    requestedPaidTotal = requestedPaidTotal,
+                    paymentReference = paymentReference,
+                    customerNotes = customerNotes,
+                )
+                connection.insertWorkspaceActivity(
+                    access = access,
+                    activityType = "order_change_requested",
+                    entityType = "order",
+                    entityId = order.id,
+                    entityLabel = order.orderNumber,
+                    title = "Order change requested",
+                    body = "${order.customerName ?: "Customer"} requested an update for ${order.orderNumber}.",
+                    tone = "warning",
+                    actorUserId = null,
+                    actorDisplayName = order.customerName,
+                    actorEmail = order.customerEmail,
+                    actorPhoneNumber = order.customerPhoneNumber,
+                    actorRole = "public_catalog",
+                )
+                connection.commit()
+                publicCatalogOrder(workspaceId, cleanOrderId)?.copy(
+                    message = "Change request sent. The business will review it shortly.",
+                    order = connection.getOrder(access.workspaceId, cleanOrderId, includeItems = true)
+                        ?: order.copy(changeRequests = listOf(connection.getOrderChangeRequest(access.workspaceId, requestId)!!)),
+                )
+            } catch (error: Throwable) {
+                connection.rollback()
+                throw error
+            } finally {
+                connection.autoCommit = true
+            }
         }
     }
 
@@ -1771,6 +1866,120 @@ class DashboardRepository(
                         title = updated.activityStatusTitle(),
                         body = updated.activityStatusBody(),
                         tone = updated.status.dashboardTone(),
+                    )
+                }
+                connection.commit()
+                updated
+            } catch (error: Throwable) {
+                connection.rollback()
+                throw error
+            } finally {
+                connection.autoCommit = true
+            }
+        }
+    }
+
+    suspend fun resolveOrderChangeRequest(
+        firebaseUser: VerifiedFirebaseUser,
+        orderId: String,
+        changeRequestId: String,
+        request: OrderChangeRequestResolveRequest,
+    ): OrderResponse? = withContext(Dispatchers.IO) {
+        dataSource.connection.use { connection ->
+            connection.autoCommit = false
+            try {
+                val access = connection.resolveWorkspaceAccess(firebaseUser) ?: run {
+                    connection.rollback()
+                    return@withContext null
+                }
+                access.requirePermission(PermissionEditSale, "edit sales or bookings")
+                val cleanOrderId = orderId.cleanUuidOrNull() ?: run {
+                    connection.rollback()
+                    return@withContext null
+                }
+                val cleanRequestId = changeRequestId.cleanUuidOrNull() ?: run {
+                    connection.rollback()
+                    return@withContext null
+                }
+                val changeRequest = connection.getOrderChangeRequestForUpdate(
+                    workspaceId = access.workspaceId,
+                    orderId = cleanOrderId,
+                    requestId = cleanRequestId,
+                ) ?: run {
+                    connection.rollback()
+                    return@withContext null
+                }
+                if (changeRequest.status != "pending") {
+                    connection.commit()
+                    return@withContext connection.getOrder(access.workspaceId, cleanOrderId, includeItems = true)
+                }
+                if (request.approved) {
+                    val current = connection.getOrder(access.workspaceId, cleanOrderId, includeItems = true)
+                        ?: run {
+                            connection.rollback()
+                            return@withContext null
+                        }
+                    if (!current.status.allowsBusinessOrderChangeApproval()) {
+                        throw DashboardOrderValidationException(
+                            code = "order_change_closed",
+                            publicMessage = "This order is closed. Reopen it before approving customer changes.",
+                        )
+                    }
+                    val requestedQuantityByItemId = changeRequest.items.associate {
+                        it.orderItemId to it.requestedQuantity.decimalOrZero()
+                    }
+                    val nextItems = current.items.mapNotNull { item ->
+                        val quantity = requestedQuantityByItemId[item.id] ?: item.quantity.decimalOrZero()
+                        if (quantity <= BigDecimal.ZERO) {
+                            null
+                        } else {
+                            OrderItemRequest(
+                                productId = item.productId,
+                                variantId = item.variantId,
+                                description = item.description.ifBlank { item.productName ?: item.variantName ?: "Line item" },
+                                quantity = quantity.decimalString(),
+                                unitPrice = item.unitPrice,
+                                taxRate = item.taxRate,
+                            )
+                        }
+                    }
+                    if (nextItems.isEmpty()) {
+                        throw DashboardOrderValidationException(
+                            code = "order_items_required",
+                            publicMessage = "At least one item must remain on the order.",
+                        )
+                    }
+                    connection.updateOrder(
+                        access = access,
+                        orderId = cleanOrderId,
+                        request = current.toOrderRequestForChangeApproval(
+                            items = nextItems,
+                            paidTotal = changeRequest.requestedPaidTotal ?: current.paidTotal,
+                            paymentMode = changeRequest.requestedPaymentMode ?: current.paymentMode,
+                            businessNotes = request.notes,
+                            changeRequest = changeRequest,
+                        ),
+                    )
+                }
+                connection.markOrderChangeRequestResolved(
+                    workspaceId = access.workspaceId,
+                    orderId = cleanOrderId,
+                    requestId = cleanRequestId,
+                    approved = request.approved,
+                    businessNotes = request.notes.cleanOptional(),
+                    userId = access.userId,
+                )
+                val updated = connection.getOrder(access.workspaceId, cleanOrderId, includeItems = true)
+                if (updated != null) {
+                    connection.insertWorkspaceActivity(
+                        access = access,
+                        activityType = if (request.approved) "order_change_approved" else "order_change_rejected",
+                        entityType = "order",
+                        entityId = updated.id,
+                        entityLabel = updated.orderNumber,
+                        title = if (request.approved) "Order change approved" else "Order change rejected",
+                        body = "${updated.orderNumber} customer change request ${if (request.approved) "approved" else "rejected"}.",
+                        tone = if (request.approved) "success" else "warning",
                     )
                 }
                 connection.commit()
@@ -4556,6 +4765,7 @@ class DashboardRepository(
                             order.copy(
                                 items = listOrderItems(order.id),
                                 sessions = listOrderSessions(workspaceId, order.id),
+                                changeRequests = listOrderChangeRequests(workspaceId, order.id),
                             )
                         } else {
                             order
@@ -4661,6 +4871,7 @@ class DashboardRepository(
                             order.copy(
                                 items = listOrderItems(order.id),
                                 sessions = listOrderSessions(workspaceId, order.id),
+                                changeRequests = listOrderChangeRequests(workspaceId, order.id),
                             )
                         } else {
                             order
@@ -4717,6 +4928,7 @@ class DashboardRepository(
                             order.copy(
                                 items = listOrderItems(order.id),
                                 sessions = listOrderSessions(workspaceId, order.id),
+                                changeRequests = listOrderChangeRequests(workspaceId, order.id),
                             )
                         } else {
                             order
@@ -4823,6 +5035,7 @@ class DashboardRepository(
                         order.copy(
                             items = listOrderItems(order.id),
                             sessions = listOrderSessions(workspaceId, order.id),
+                            changeRequests = listOrderChangeRequests(workspaceId, order.id),
                         )
                     } else {
                         order
@@ -5083,7 +5296,11 @@ class DashboardRepository(
         }
         val inventoryApplied = status.appliesInventory()
         val orderId: String
-        val orderNumber = "ORD-${UUID.randomUUID().toString().replace("-", "").take(8).uppercase()}"
+        val orderNumber = if (source.isBillingDocumentOrderSource()) {
+            nextBillingDocumentOrderNumber(access.workspaceId, source)
+        } else {
+            "ORD-${UUID.randomUUID().toString().replace("-", "").take(8).uppercase()}"
+        }
 
         val insertOrderSql = """
             insert into orders (
@@ -5142,6 +5359,76 @@ class DashboardRepository(
 
         return getOrder(access.workspaceId, orderId, includeItems = true) ?: error("Created order was not found.")
     }
+
+    private fun Connection.nextBillingDocumentOrderNumber(
+        workspaceId: String,
+        source: String,
+    ): String {
+        val current = prepareStatement(
+            """
+            select invoice_prefix, next_invoice_number
+            from business_workspaces
+            where id = ?::uuid
+            for update
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setString(1, workspaceId)
+            statement.executeQuery().use { result ->
+                if (result.next()) {
+                    result.getString("invoice_prefix") to result.getString("next_invoice_number")
+                } else {
+                    "ORMA" to "0001"
+                }
+            }
+        }
+        val prefix = current.first
+            ?.trim()
+            ?.uppercase()
+            ?.filter { it.isLetterOrDigit() }
+            ?.ifBlank { null }
+            ?: "ORMA"
+        val rawNext = current.second.orEmpty().filter(Char::isDigit).ifBlank { "0001" }
+        val width = rawNext.length.coerceAtLeast(4)
+        var nextNumber = rawNext.toLongOrNull()?.coerceAtLeast(1L) ?: 1L
+        val quotation = source == "quotation"
+        var orderNumber: String
+        do {
+            val padded = nextNumber.toString().padStart(width, '0')
+            orderNumber = if (quotation) "$prefix-QTN-$padded" else "$prefix-$padded"
+            nextNumber += 1L
+        } while (orderNumberExists(workspaceId, orderNumber))
+
+        val nextStoredNumber = nextNumber.toString().padStart(width, '0')
+        prepareStatement(
+            """
+            update business_workspaces
+            set next_invoice_number = ?, updated_at = now()
+            where id = ?::uuid
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setString(1, nextStoredNumber)
+            statement.setString(2, workspaceId)
+            statement.executeUpdate()
+        }
+        return orderNumber
+    }
+
+    private fun Connection.orderNumberExists(
+        workspaceId: String,
+        orderNumber: String,
+    ): Boolean =
+        prepareStatement(
+            """
+            select 1
+            from orders
+            where workspace_id = ?::uuid and lower(order_number) = lower(?)
+            limit 1
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setString(1, workspaceId)
+            statement.setString(2, orderNumber)
+            statement.executeQuery().use { result -> result.next() }
+        }
 
     private fun Connection.lockOrderClientRequest(
         workspaceId: String,
@@ -5457,6 +5744,176 @@ class DashboardRepository(
                     while (result.next()) add(result.toOrderItemResponse())
                 }
             }
+        }
+    }
+
+    private fun Connection.listOrderChangeRequests(
+        workspaceId: String,
+        orderId: String,
+    ): List<OrderChangeRequestResponse> {
+        val sql = """
+            select
+                id::text,
+                status,
+                requested_items::text,
+                requested_payment_mode,
+                requested_paid_total,
+                payment_reference,
+                customer_notes,
+                business_notes,
+                resolved_at::text,
+                created_at::text,
+                updated_at::text
+            from order_change_requests
+            where workspace_id = ?::uuid and order_id = ?::uuid
+            order by
+                case when status = 'pending' then 0 else 1 end,
+                created_at desc
+            limit 12
+        """.trimIndent()
+        return prepareStatement(sql).use { statement ->
+            statement.setString(1, workspaceId)
+            statement.setString(2, orderId)
+            statement.executeQuery().use { result ->
+                buildList {
+                    while (result.next()) {
+                        add(result.toOrderChangeRequestResponse())
+                    }
+                }
+            }
+        }
+    }
+
+    private fun Connection.getOrderChangeRequest(
+        workspaceId: String,
+        requestId: String,
+    ): OrderChangeRequestResponse? {
+        val sql = """
+            select
+                id::text,
+                status,
+                requested_items::text,
+                requested_payment_mode,
+                requested_paid_total,
+                payment_reference,
+                customer_notes,
+                business_notes,
+                resolved_at::text,
+                created_at::text,
+                updated_at::text
+            from order_change_requests
+            where workspace_id = ?::uuid and id = ?::uuid
+        """.trimIndent()
+        return prepareStatement(sql).use { statement ->
+            statement.setString(1, workspaceId)
+            statement.setString(2, requestId)
+            statement.executeQuery().use { result ->
+                if (result.next()) result.toOrderChangeRequestResponse() else null
+            }
+        }
+    }
+
+    private fun Connection.getOrderChangeRequestForUpdate(
+        workspaceId: String,
+        orderId: String,
+        requestId: String,
+    ): OrderChangeRequestResponse? {
+        val sql = """
+            select
+                id::text,
+                status,
+                requested_items::text,
+                requested_payment_mode,
+                requested_paid_total,
+                payment_reference,
+                customer_notes,
+                business_notes,
+                resolved_at::text,
+                created_at::text,
+                updated_at::text
+            from order_change_requests
+            where workspace_id = ?::uuid and order_id = ?::uuid and id = ?::uuid
+            for update
+        """.trimIndent()
+        return prepareStatement(sql).use { statement ->
+            statement.setString(1, workspaceId)
+            statement.setString(2, orderId)
+            statement.setString(3, requestId)
+            statement.executeQuery().use { result ->
+                if (result.next()) result.toOrderChangeRequestResponse() else null
+            }
+        }
+    }
+
+    private fun Connection.insertOrderChangeRequest(
+        workspaceId: String,
+        order: OrderResponse,
+        firebaseUid: String?,
+        items: List<OrderChangeRequestItemResponse>,
+        requestedPaymentMode: String?,
+        requestedPaidTotal: BigDecimal?,
+        paymentReference: String?,
+        customerNotes: String?,
+    ): String {
+        val sql = """
+            insert into order_change_requests (
+                workspace_id,
+                order_id,
+                customer_id,
+                firebase_uid,
+                requested_items,
+                requested_payment_mode,
+                requested_paid_total,
+                payment_reference,
+                customer_notes,
+                updated_at
+            )
+            values (?::uuid, ?::uuid, ?::uuid, ?, ?::jsonb, ?, ?, ?, ?, now())
+            returning id::text
+        """.trimIndent()
+        return prepareStatement(sql).use { statement ->
+            statement.setString(1, workspaceId)
+            statement.setString(2, order.id)
+            statement.setNullableUuid(3, order.customerId)
+            statement.setNullableString(4, firebaseUid?.cleanOptional())
+            statement.setString(5, DashboardRepositoryJson.encodeToString(items))
+            statement.setNullableString(6, requestedPaymentMode)
+            statement.setNullableBigDecimal(7, requestedPaidTotal)
+            statement.setNullableString(8, paymentReference)
+            statement.setNullableString(9, customerNotes)
+            statement.executeQuery().use { result ->
+                result.next()
+                result.getString("id")
+            }
+        }
+    }
+
+    private fun Connection.markOrderChangeRequestResolved(
+        workspaceId: String,
+        orderId: String,
+        requestId: String,
+        approved: Boolean,
+        businessNotes: String?,
+        userId: String,
+    ) {
+        prepareStatement(
+            """
+            update order_change_requests
+            set status = ?,
+                business_notes = ?,
+                resolved_by_user_id = ?::uuid,
+                resolved_at = now(),
+                updated_at = now()
+            where workspace_id = ?::uuid and order_id = ?::uuid and id = ?::uuid
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setString(1, if (approved) "approved" else "rejected")
+            statement.setNullableString(2, businessNotes)
+            statement.setString(3, userId)
+            statement.setString(4, workspaceId)
+            statement.setString(5, orderId)
+            statement.setString(6, requestId)
+            statement.executeUpdate()
         }
     }
 
@@ -6134,6 +6591,7 @@ class DashboardRepository(
     private fun ResultSet.toOrderResponse(
         items: List<OrderItemResponse>,
         sessions: List<OrderSessionResponse>,
+        changeRequests: List<OrderChangeRequestResponse> = emptyList(),
     ): OrderResponse {
         val status = getString("status")
         val total = getBigDecimal("total")
@@ -6171,6 +6629,32 @@ class DashboardRepository(
             itemCount = getInt("item_count"),
             items = items,
             sessions = sessions,
+            changeRequests = changeRequests,
+            createdAt = getString("created_at"),
+            updatedAt = getString("updated_at"),
+        )
+    }
+
+    private fun ResultSet.toOrderChangeRequestResponse(): OrderChangeRequestResponse {
+        val paidTotal = getBigDecimal("requested_paid_total")
+        val requestedPaidTotal = if (wasNull()) null else paidTotal.moneyString()
+        return OrderChangeRequestResponse(
+            id = getString("id"),
+            status = getString("status") ?: "pending",
+            items = getString("requested_items")
+                ?.takeIf { it.isNotBlank() }
+                ?.let { json ->
+                    runCatching {
+                        DashboardRepositoryJson.decodeFromString<List<OrderChangeRequestItemResponse>>(json)
+                    }.getOrDefault(emptyList())
+                }
+                .orEmpty(),
+            requestedPaymentMode = getString("requested_payment_mode"),
+            requestedPaidTotal = requestedPaidTotal,
+            paymentReference = getString("payment_reference"),
+            customerNotes = getString("customer_notes"),
+            businessNotes = getString("business_notes"),
+            resolvedAt = getString("resolved_at"),
             createdAt = getString("created_at"),
             updatedAt = getString("updated_at"),
         )
@@ -6191,6 +6675,85 @@ class DashboardRepository(
             lineSubtotal = getBigDecimal("line_subtotal").moneyString(),
             lineTax = getBigDecimal("line_tax").moneyString(),
             lineTotal = getBigDecimal("line_total").moneyString(),
+        )
+
+    private fun Connection.prepareOrderChangeRequestItems(
+        order: OrderResponse,
+        request: OrderChangeRequestRequest,
+    ): List<OrderChangeRequestItemResponse> {
+        val orderItemsById = order.items.associateBy { it.id }
+        return request.items
+            .mapNotNull { item ->
+                val cleanItemId = item.orderItemId.cleanUuidOrNull() ?: return@mapNotNull null
+                val existing = orderItemsById[cleanItemId] ?: return@mapNotNull null
+                val requestedQuantity = item.quantity.decimalOrZero().coerceAtLeast(BigDecimal.ZERO).scaled()
+                val previousQuantity = existing.quantity.decimalOrZero().scaled()
+                if (requestedQuantity == previousQuantity) return@mapNotNull null
+                val lineTotal = requestedQuantity
+                    .multiply(existing.unitPrice.moneyOrZero())
+                    .scaled()
+                OrderChangeRequestItemResponse(
+                    orderItemId = existing.id,
+                    productId = existing.productId,
+                    variantId = existing.variantId,
+                    name = existing.productName
+                        ?.takeIf { it.isNotBlank() }
+                        ?: existing.variantName?.takeIf { it.isNotBlank() }
+                        ?: existing.description.ifBlank { "Line item" },
+                    previousQuantity = previousQuantity.decimalString(),
+                    requestedQuantity = requestedQuantity.decimalString(),
+                    unitPrice = existing.unitPrice,
+                    lineTotal = lineTotal.moneyString(),
+                )
+            }
+    }
+
+    private fun OrderResponse.toOrderRequestForChangeApproval(
+        items: List<OrderItemRequest>,
+        paidTotal: String,
+        paymentMode: String,
+        businessNotes: String?,
+        changeRequest: OrderChangeRequestResponse,
+    ): OrderRequest =
+        OrderRequest(
+            customerId = customerId,
+            customerName = customerName,
+            customerPhoneNumber = customerPhoneNumber,
+            customerEmail = customerEmail,
+            customerTaxNumber = customerTaxNumber,
+            customerAddressLine = customerAddressLine,
+            customerCity = customerCity,
+            customerRegion = customerRegion,
+            customerCountry = customerCountry,
+            customerPostalCode = customerPostalCode,
+            orderType = orderType,
+            status = status,
+            scheduledAt = scheduledAt,
+            paidTotal = paidTotal,
+            discountTotal = discountTotal,
+            currency = currency,
+            notes = appendOrderChangeApprovalNotes(
+                existing = notes,
+                changeRequest = changeRequest,
+                businessNotes = businessNotes,
+            ),
+            fulfillmentType = fulfillmentType,
+            paymentMode = paymentMode,
+            source = source,
+            items = items,
+            sessions = sessions.map { session ->
+                OrderSessionRequest(
+                    id = session.id,
+                    orderItemId = null,
+                    sequenceNumber = session.sequenceNumber,
+                    title = session.title,
+                    scheduledAt = session.scheduledAt,
+                    status = session.status,
+                    addonTotal = session.addonTotal,
+                    paidTotal = session.paidTotal,
+                    notes = session.notes,
+                )
+            },
         )
 
     private fun ResultSet.toOrderSessionResponse(): OrderSessionResponse =
@@ -6770,6 +7333,14 @@ class DashboardRepository(
         }
     }
 
+    private fun PreparedStatement.setNullableBigDecimal(index: Int, value: BigDecimal?) {
+        if (value == null) {
+            setNull(index, Types.NUMERIC)
+        } else {
+            setBigDecimal(index, value)
+        }
+    }
+
     private fun PreparedStatement.setNullableUuid(index: Int, value: String?) {
         if (value.cleanUuidOrNull() == null) {
             setNull(index, Types.OTHER)
@@ -7285,8 +7856,11 @@ class DashboardRepository(
 
     private fun String.cleanOrderSource(): String {
         val normalized = trim().lowercase().replace("-", "_").filter { it.isLetterOrDigit() || it == '_' }
-        return if (normalized in setOf("dashboard", "public_catalog", "api", "import")) normalized else "dashboard"
+        return if (normalized in setOf("dashboard", "public_catalog", "api", "import", "invoice", "quotation")) normalized else "dashboard"
     }
+
+    private fun String.isBillingDocumentOrderSource(): Boolean =
+        this == "invoice" || this == "quotation"
 
     private fun String.cleanUpiId(): String? =
         trim()
@@ -7326,6 +7900,24 @@ class DashboardRepository(
             "cancelled" -> "The business rejected or cancelled this ${orderType.cleanOrderType().publicCatalogWorkLabel()}."
             else -> "Your ${orderType.cleanOrderType().publicCatalogWorkLabel()} is waiting for business confirmation."
         }
+
+    private fun appendOrderChangeApprovalNotes(
+        existing: String?,
+        changeRequest: OrderChangeRequestResponse,
+        businessNotes: String?,
+    ): String =
+        buildList {
+            existing.cleanOptional()?.let(::add)
+            changeRequest.items
+                .takeIf { it.isNotEmpty() }
+                ?.joinToString("; ") { item ->
+                    "${item.name}: ${item.previousQuantity} -> ${item.requestedQuantity}"
+                }
+                ?.let { add("Approved customer change: $it.") }
+            changeRequest.paymentReference.cleanOptional()?.let { add("Customer payment reference: $it.") }
+            changeRequest.customerNotes.cleanOptional()?.let { add("Customer note: $it") }
+            businessNotes.cleanOptional()?.let { add("Business note: $it") }
+        }.joinToString("\n").take(2000)
 
     private fun String.publicCatalogWorkLabel(): String =
         when (cleanOrderType()) {
@@ -7411,6 +8003,12 @@ class DashboardRepository(
         val normalized = trim().lowercase().filter { it.isLetterOrDigit() || it == '_' }
         return if (normalized in AllowedOrderStatuses) normalized else "confirmed"
     }
+
+    private fun String.allowsPublicCatalogChangeRequest(): Boolean =
+        normalizedOrderStatus() in setOf("new", "confirmed", "part_paid")
+
+    private fun String.allowsBusinessOrderChangeApproval(): Boolean =
+        normalizedOrderStatus() !in setOf("completed", "cancelled")
 
     private fun String.appliesInventory(): Boolean =
         this in InventoryApplyingStatuses

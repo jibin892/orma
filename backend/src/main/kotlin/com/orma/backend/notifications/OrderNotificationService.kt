@@ -50,6 +50,33 @@ class OrderNotificationService(
         }
     }
 
+    suspend fun notifyOrderUpdated(order: OrderResponse) {
+        runCatching {
+            notifyOrderEventInternal(order, OrderNotificationEventKind.Updated)
+        }.onFailure { error ->
+            logger.warn("Order update notification failed for order ${order.id}: ${error.message}", error)
+        }
+    }
+
+    suspend fun notifyOrderChangeRequested(order: OrderResponse) {
+        runCatching {
+            notifyOrderEventInternal(order, OrderNotificationEventKind.ChangeRequested)
+        }.onFailure { error ->
+            logger.warn("Order change request notification failed for order ${order.id}: ${error.message}", error)
+        }
+    }
+
+    suspend fun notifyOrderChangeResolved(order: OrderResponse, approved: Boolean) {
+        runCatching {
+            notifyOrderEventInternal(
+                order = order,
+                kind = if (approved) OrderNotificationEventKind.ChangeApproved else OrderNotificationEventKind.ChangeRejected,
+            )
+        }.onFailure { error ->
+            logger.warn("Order change resolution notification failed for order ${order.id}: ${error.message}", error)
+        }
+    }
+
     private suspend fun notifyOrderEventInternal(
         order: OrderResponse,
         kind: OrderNotificationEventKind,
@@ -586,6 +613,52 @@ class OrderNotificationService(
                 append(" for ")
                 append("${context.currency} ${context.total}")
             }
+        },
+        Updated("order_updated", "status_updates", notifiesPublicCatalogCustomer = true) {
+            override fun title(context: OrderNotificationContext): String =
+                "${orderWorkLabel(context.orderType).replaceFirstChar { it.uppercase() }} ${context.orderNumber} updated"
+
+            override fun body(context: OrderNotificationContext): String =
+                "${context.customerName?.takeIf { it.isNotBlank() } ?: "Customer"}'s ${orderWorkLabel(context.orderType)} details were updated."
+
+            override fun customerTitle(context: OrderNotificationContext): String =
+                "Your ${orderWorkLabel(context.orderType)} was updated"
+
+            override fun customerBody(context: OrderNotificationContext): String =
+                "The business updated ${context.orderNumber}. Open details to review the latest items and payment."
+        },
+        ChangeRequested("order_change_requested", "catalog_orders") {
+            override fun title(context: OrderNotificationContext): String =
+                "Change requested for ${context.orderNumber}"
+
+            override fun body(context: OrderNotificationContext): String =
+                "${context.customerName?.takeIf { it.isNotBlank() } ?: "Customer"} requested an item or payment change."
+        },
+        ChangeApproved("order_change_approved", "status_updates", notifiesPublicCatalogCustomer = true) {
+            override fun title(context: OrderNotificationContext): String =
+                "Change approved for ${context.orderNumber}"
+
+            override fun body(context: OrderNotificationContext): String =
+                "${context.orderNumber} customer change request was approved."
+
+            override fun customerTitle(context: OrderNotificationContext): String =
+                "Your change request was approved"
+
+            override fun customerBody(context: OrderNotificationContext): String =
+                "The business updated ${context.orderNumber}. Open details to check the latest total and payment."
+        },
+        ChangeRejected("order_change_rejected", "status_updates", notifiesPublicCatalogCustomer = true) {
+            override fun title(context: OrderNotificationContext): String =
+                "Change rejected for ${context.orderNumber}"
+
+            override fun body(context: OrderNotificationContext): String =
+                "${context.orderNumber} customer change request was rejected."
+
+            override fun customerTitle(context: OrderNotificationContext): String =
+                "Your change request was not accepted"
+
+            override fun customerBody(context: OrderNotificationContext): String =
+                "The business did not apply the requested change for ${context.orderNumber}."
         },
         StatusUpdated("order_status_updated", "status_updates", notifiesPublicCatalogCustomer = true) {
             override fun title(context: OrderNotificationContext): String =

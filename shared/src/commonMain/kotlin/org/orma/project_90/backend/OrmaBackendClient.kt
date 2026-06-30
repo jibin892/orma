@@ -511,6 +511,19 @@ data class OrmaPublicCatalogOrderItemDraft(
     val quantity: String,
 )
 
+data class OrmaOrderChangeRequestDraft(
+    val items: List<OrmaOrderChangeRequestItemDraft> = emptyList(),
+    val requestedPaymentMode: String = "",
+    val requestedPaidTotal: String = "",
+    val paymentReference: String = "",
+    val notes: String = "",
+)
+
+data class OrmaOrderChangeRequestItemDraft(
+    val orderItemId: String,
+    val quantity: String,
+)
+
 internal fun ormaClientRequestId(prefix: String): String {
     val safePrefix = prefix
         .lowercase()
@@ -609,8 +622,34 @@ data class OrmaOrder(
     val itemCount: Int,
     val items: List<OrmaOrderItem> = emptyList(),
     val sessions: List<OrmaOrderSession> = emptyList(),
+    val changeRequests: List<OrmaOrderChangeRequest> = emptyList(),
     val createdAt: String = "",
     val updatedAt: String = "",
+)
+
+data class OrmaOrderChangeRequest(
+    val id: String,
+    val status: String,
+    val items: List<OrmaOrderChangeRequestItem> = emptyList(),
+    val requestedPaymentMode: String? = null,
+    val requestedPaidTotal: String? = null,
+    val paymentReference: String? = null,
+    val customerNotes: String? = null,
+    val businessNotes: String? = null,
+    val resolvedAt: String? = null,
+    val createdAt: String = "",
+    val updatedAt: String = "",
+)
+
+data class OrmaOrderChangeRequestItem(
+    val orderItemId: String,
+    val productId: String?,
+    val variantId: String?,
+    val name: String,
+    val previousQuantity: String,
+    val requestedQuantity: String,
+    val unitPrice: String,
+    val lineTotal: String,
 )
 
 data class OrmaOrderSession(
@@ -740,6 +779,7 @@ data class OrmaOrderDraft(
     val notes: String = "",
     val fulfillmentType: String = "standard",
     val paymentMode: String = "pay_on_spot",
+    val source: String = "dashboard",
     val items: List<OrmaOrderItemDraft> = listOf(OrmaOrderItemDraft()),
     val sessions: List<OrmaOrderSessionDraft> = emptyList(),
 )
@@ -1646,6 +1686,21 @@ class OrmaBackendClient(
             parse = { body -> body.toPagedList("orders") { it.toOrder() } },
         )
 
+    suspend fun loadOrder(
+        idToken: String,
+        orderId: String,
+    ): OrmaBackendResult<OrmaOrder> =
+        executeBackendRequest(
+            actionTitle = "Load order details",
+            request = {
+                ormaGetAuthorized(
+                    url = config.url("/orders/${orderId.urlPathEscaped()}"),
+                    bearerToken = idToken,
+                )
+            },
+            parse = { it.toOrder() },
+        )
+
     suspend fun createOrder(
         idToken: String,
         draft: OrmaOrderDraft,
@@ -1694,6 +1749,28 @@ class OrmaBackendClient(
                     body = buildJsonObject(
                         "status" to JsonValue.StringValue(status),
                         "paidTotal" to JsonValue.StringValue(paidTotal?.blankToZero()),
+                    ),
+                )
+            },
+            parse = { it.toOrder() },
+        )
+
+    suspend fun resolveOrderChangeRequest(
+        idToken: String,
+        orderId: String,
+        requestId: String,
+        approved: Boolean,
+        notes: String = "",
+    ): OrmaBackendResult<OrmaOrder> =
+        executeBackendRequest(
+            actionTitle = if (approved) "Approve order change" else "Reject order change",
+            request = {
+                ormaPostJsonAuthorized(
+                    url = config.url("/orders/$orderId/change-requests/$requestId"),
+                    bearerToken = idToken,
+                    body = buildJsonObject(
+                        "approved" to JsonValue.BooleanValue(approved),
+                        "notes" to JsonValue.StringValue(notes.blankToNull()),
                     ),
                 )
             },
@@ -2081,6 +2158,40 @@ class OrmaBackendClient(
                 )
             },
             parse = { it.toPagedList("orders") { orderJson -> orderJson.toOrder() } },
+        )
+
+    suspend fun submitPublicCatalogOrderChangeRequest(
+        workspaceId: String,
+        orderId: String,
+        draft: OrmaOrderChangeRequestDraft,
+        idToken: String? = null,
+    ): OrmaBackendResult<OrmaPublicCatalogOrderReceipt> =
+        executeBackendRequest(
+            actionTitle = "Send change request",
+            request = {
+                val itemsJson = draft.items
+                    .filter { it.orderItemId.isNotBlank() && it.quantity.isNotBlank() }
+                    .joinToString(prefix = "[", postfix = "]") { item ->
+                        buildJsonObject(
+                            "orderItemId" to JsonValue.StringValue(item.orderItemId),
+                            "quantity" to JsonValue.StringValue(item.quantity.blankToZero()),
+                        )
+                    }
+                val url = config.url(
+                    "/public/workspaces/${workspaceId.urlQueryEscaped()}/orders/${orderId.urlQueryEscaped()}/change-requests",
+                )
+                val body = buildJsonObject(
+                    "items" to JsonValue.RawValue(itemsJson),
+                    "requestedPaymentMode" to JsonValue.StringValue(draft.requestedPaymentMode.blankToNull()),
+                    "requestedPaidTotal" to JsonValue.StringValue(draft.requestedPaidTotal.blankToNull()),
+                    "paymentReference" to JsonValue.StringValue(draft.paymentReference.blankToNull()),
+                    "notes" to JsonValue.StringValue(draft.notes.blankToNull()),
+                )
+                idToken?.takeIf { it.isNotBlank() }?.let { token ->
+                    ormaPostJsonAuthorized(url = url, body = body, bearerToken = token)
+                } ?: ormaPostJson(url = url, body = body)
+            },
+            parse = { it.toPublicCatalogOrderReceipt() },
         )
 
     suspend fun updatePublicCatalogCustomerNotifications(
@@ -2811,8 +2922,36 @@ private fun String.toOrder(): OrmaOrder =
         itemCount = jsonInt("itemCount") ?: 0,
         items = jsonObjectsInArray("items").map { it.toOrderItem() },
         sessions = jsonObjectsInArray("sessions").map { it.toOrderSession() },
+        changeRequests = jsonObjectsInArray("changeRequests").map { it.toOrderChangeRequest() },
         createdAt = jsonString("createdAt").orEmpty(),
         updatedAt = jsonString("updatedAt").orEmpty(),
+    )
+
+private fun String.toOrderChangeRequest(): OrmaOrderChangeRequest =
+    OrmaOrderChangeRequest(
+        id = jsonString("id").orEmpty(),
+        status = jsonString("status") ?: "pending",
+        items = jsonObjectsInArray("items").map { it.toOrderChangeRequestItem() },
+        requestedPaymentMode = jsonString("requestedPaymentMode"),
+        requestedPaidTotal = jsonDecimalString("requestedPaidTotal"),
+        paymentReference = jsonString("paymentReference"),
+        customerNotes = jsonString("customerNotes"),
+        businessNotes = jsonString("businessNotes"),
+        resolvedAt = jsonString("resolvedAt"),
+        createdAt = jsonString("createdAt").orEmpty(),
+        updatedAt = jsonString("updatedAt").orEmpty(),
+    )
+
+private fun String.toOrderChangeRequestItem(): OrmaOrderChangeRequestItem =
+    OrmaOrderChangeRequestItem(
+        orderItemId = jsonString("orderItemId").orEmpty(),
+        productId = jsonString("productId"),
+        variantId = jsonString("variantId"),
+        name = jsonString("name").orEmpty(),
+        previousQuantity = jsonDecimalString("previousQuantity") ?: "0",
+        requestedQuantity = jsonDecimalString("requestedQuantity") ?: "0",
+        unitPrice = jsonDecimalString("unitPrice") ?: "0.00",
+        lineTotal = jsonDecimalString("lineTotal") ?: "0.00",
     )
 
 private fun String.toOrderSession(): OrmaOrderSession =
@@ -3171,6 +3310,7 @@ private fun OrmaOrderDraft.toOrderRequestJson(): String {
         "notes" to JsonValue.StringValue(notes.blankToNull()),
         "fulfillmentType" to JsonValue.StringValue(fulfillmentType),
         "paymentMode" to JsonValue.StringValue(paymentMode),
+        "source" to JsonValue.StringValue(source.ifBlank { "dashboard" }),
         "clientRequestId" to JsonValue.StringValue(clientRequestId.blankToNull()),
         "items" to JsonValue.RawValue(itemsJson),
         "sessions" to JsonValue.RawValue(sessionsJson),
