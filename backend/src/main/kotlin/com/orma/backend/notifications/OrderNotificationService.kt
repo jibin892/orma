@@ -36,48 +36,60 @@ class OrderNotificationService(
 
     suspend fun notifyOrderCreated(order: OrderResponse) {
         runCatching {
-            notifyOrderCreatedInternal(order)
+            notifyOrderEventInternal(order, OrderNotificationEventKind.Created)
         }.onFailure { error ->
             logger.warn("Order notification failed for order ${order.id}: ${error.message}", error)
         }
     }
 
-    private suspend fun notifyOrderCreatedInternal(order: OrderResponse) = withContext(Dispatchers.IO) {
+    suspend fun notifyOrderStatusUpdated(order: OrderResponse) {
+        runCatching {
+            notifyOrderEventInternal(order, OrderNotificationEventKind.StatusUpdated)
+        }.onFailure { error ->
+            logger.warn("Order status notification failed for order ${order.id}: ${error.message}", error)
+        }
+    }
+
+    private suspend fun notifyOrderEventInternal(
+        order: OrderResponse,
+        kind: OrderNotificationEventKind,
+    ) = withContext(Dispatchers.IO) {
         val context = dataSource.connection.use { connection ->
             connection.orderNotificationContext(order.id)
         } ?: return@withContext
 
-        val workLabel = context.orderType.orderWorkLabel()
-        val title = if (context.source == "public_catalog") {
-            "New catalog $workLabel ${context.orderNumber}"
-        } else {
-            "New $workLabel ${context.orderNumber}"
-        }
-        val body = buildString {
-            append(context.customerName?.takeIf { it.isNotBlank() } ?: "A customer")
-            append(" placed a ")
-            append(workLabel)
-            append(" for ")
-            append("${context.currency} ${context.total}")
-        }
+        val title = kind.title(context)
+        val body = kind.body(context)
         val payload = mapOf(
-            "type" to "order_created",
+            "type" to kind.eventType,
+            "channel" to kind.channel,
             "orderId" to context.orderId,
             "orderNumber" to context.orderNumber,
             "orderType" to context.orderType,
+            "status" to context.status,
             "workspaceId" to context.workspaceId,
         )
         val externalUserIds = dataSource.connection.use { connection ->
-            connection.activeOneSignalExternalUserIds(context.workspaceId)
+            connection.activeOneSignalExternalUserIds(context.workspaceId, kind.channel)
         }
         val apnsDeviceTokens = dataSource.connection.use { connection ->
-            connection.activeApnsDeviceTokens(context.workspaceId)
+            connection.activeApnsDeviceTokens(context.workspaceId, kind.channel)
         }
-        val targetCount = externalUserIds.size + apnsDeviceTokens.size
+        val customerExternalUserIds = dataSource.connection.use { connection ->
+            connection.activePublicCatalogCustomerOneSignalExternalUserIds(context, kind)
+        }
+        val customerApnsDeviceTokens = dataSource.connection.use { connection ->
+            connection.activePublicCatalogCustomerApnsDeviceTokens(context, kind)
+        }
+        val targetCount = externalUserIds.size +
+            apnsDeviceTokens.size +
+            customerExternalUserIds.size +
+            customerApnsDeviceTokens.size
 
         val eventId = dataSource.connection.use { connection ->
             connection.insertNotificationEvent(
                 context = context,
+                eventType = kind.eventType,
                 title = title,
                 body = body,
                 payload = payload,
@@ -105,7 +117,7 @@ class OrderNotificationService(
                         payload = payload,
                     )
                 }.onFailure { error ->
-                    logger.warn("OneSignal send failed for order ${context.orderNumber}: ${error.message}")
+                    logger.warn("OneSignal send failed for ${kind.eventType} ${context.orderNumber}: ${error.message}")
                 }.isSuccess
                 if (sent) {
                     successCount += externalUserIds.size
@@ -114,6 +126,28 @@ class OrderNotificationService(
                 }
             } else {
                 failureCount += externalUserIds.size
+            }
+        }
+
+        if (customerExternalUserIds.isNotEmpty()) {
+            if (config.oneSignalPushConfigured) {
+                val sent = runCatching {
+                    sendOneSignalNotification(
+                        externalUserIds = customerExternalUserIds,
+                        title = kind.customerTitle(context),
+                        body = kind.customerBody(context),
+                        payload = payload + ("audience" to "customer"),
+                    )
+                }.onFailure { error ->
+                    logger.warn("OneSignal customer send failed for ${kind.eventType} ${context.orderNumber}: ${error.message}")
+                }.isSuccess
+                if (sent) {
+                    successCount += customerExternalUserIds.size
+                } else {
+                    failureCount += customerExternalUserIds.size
+                }
+            } else {
+                failureCount += customerExternalUserIds.size
             }
         }
 
@@ -128,7 +162,7 @@ class OrderNotificationService(
                             payload = payload,
                         )
                     }.onFailure { error ->
-                        logger.warn("APNs send failed for order ${context.orderNumber}: ${error.message}")
+                        logger.warn("APNs send failed for ${kind.eventType} ${context.orderNumber}: ${error.message}")
                     }.isSuccess
                     if (sent) {
                         successCount += 1
@@ -138,6 +172,30 @@ class OrderNotificationService(
                 }
             } else {
                 failureCount += apnsDeviceTokens.size
+            }
+        }
+
+        if (customerApnsDeviceTokens.isNotEmpty()) {
+            if (config.apnsPushConfigured) {
+                customerApnsDeviceTokens.forEach { token ->
+                    val sent = runCatching {
+                        sendApnsNotification(
+                            deviceToken = token,
+                            title = kind.customerTitle(context),
+                            body = kind.customerBody(context),
+                            payload = payload + ("audience" to "customer"),
+                        )
+                    }.onFailure { error ->
+                        logger.warn("APNs customer send failed for ${kind.eventType} ${context.orderNumber}: ${error.message}")
+                    }.isSuccess
+                    if (sent) {
+                        successCount += 1
+                    } else {
+                        failureCount += 1
+                    }
+                }
+            } else {
+                failureCount += customerApnsDeviceTokens.size
             }
         }
 
@@ -284,7 +342,10 @@ class OrderNotificationService(
                 o.order_number,
                 o.order_type,
                 o.source,
+                o.status,
                 c.name as customer_name,
+                c.email as customer_email,
+                c.phone_number as customer_phone_number,
                 o.total,
                 o.currency
             from orders o
@@ -300,7 +361,8 @@ class OrderNotificationService(
         }
     }
 
-    private fun Connection.activeOneSignalExternalUserIds(workspaceId: String): List<String> {
+    private fun Connection.activeOneSignalExternalUserIds(workspaceId: String, channel: String): List<String> {
+        val channelColumn = channel.notificationPreferenceColumn()
         val sql = """
             select distinct au.firebase_uid as external_user_id
             from notification_device_tokens ndt
@@ -311,6 +373,8 @@ class OrderNotificationService(
              and wm.status = 'active'
             where ndt.workspace_id = ?::uuid
               and ndt.enabled = true
+              and au.notifications_enabled = true
+              and au.$channelColumn = true
               and lower(ndt.platform) in ('android', 'web')
               and coalesce(au.firebase_uid, '') <> ''
         """.trimIndent()
@@ -326,7 +390,8 @@ class OrderNotificationService(
         }
     }
 
-    private fun Connection.activeApnsDeviceTokens(workspaceId: String): List<String> {
+    private fun Connection.activeApnsDeviceTokens(workspaceId: String, channel: String): List<String> {
+        val channelColumn = channel.notificationPreferenceColumn()
         val sql = """
             select distinct regexp_replace(ndt.token, '^apns:', '') as device_token
             from notification_device_tokens ndt
@@ -337,6 +402,8 @@ class OrderNotificationService(
              and wm.status = 'active'
             where ndt.workspace_id = ?::uuid
               and ndt.enabled = true
+              and au.notifications_enabled = true
+              and au.$channelColumn = true
               and lower(ndt.platform) = 'ios'
               and ndt.token like 'apns:%'
         """.trimIndent()
@@ -352,8 +419,81 @@ class OrderNotificationService(
         }
     }
 
+    private fun Connection.activePublicCatalogCustomerOneSignalExternalUserIds(
+        context: OrderNotificationContext,
+        kind: OrderNotificationEventKind,
+    ): List<String> {
+        if (!kind.notifiesPublicCatalogCustomer || context.source != "public_catalog") return emptyList()
+        val customerEmail = context.customerEmail.orEmpty().lowercase()
+        val customerPhone = context.customerPhoneNumber.orEmpty()
+        if (customerEmail.isBlank() && customerPhone.isBlank()) return emptyList()
+        val sql = """
+            select distinct regexp_replace(token, '^onesignal-external:', '') as external_user_id
+            from public_catalog_notification_device_tokens
+            where workspace_id = ?::uuid
+              and enabled = true
+              and lower(platform) in ('android', 'web')
+              and token like 'onesignal-external:%'
+              and (
+                (? <> '' and lower(coalesce(email, '')) = ?)
+                or (? <> '' and coalesce(phone_number, '') = ?)
+              )
+        """.trimIndent()
+        return prepareStatement(sql).use { statement ->
+            statement.setString(1, context.workspaceId)
+            statement.setString(2, customerEmail)
+            statement.setString(3, customerEmail)
+            statement.setString(4, customerPhone)
+            statement.setString(5, customerPhone)
+            statement.executeQuery().use { result ->
+                buildList {
+                    while (result.next()) {
+                        result.getString("external_user_id")?.takeIf { it.isNotBlank() }?.let(::add)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun Connection.activePublicCatalogCustomerApnsDeviceTokens(
+        context: OrderNotificationContext,
+        kind: OrderNotificationEventKind,
+    ): List<String> {
+        if (!kind.notifiesPublicCatalogCustomer || context.source != "public_catalog") return emptyList()
+        val customerEmail = context.customerEmail.orEmpty().lowercase()
+        val customerPhone = context.customerPhoneNumber.orEmpty()
+        if (customerEmail.isBlank() && customerPhone.isBlank()) return emptyList()
+        val sql = """
+            select distinct regexp_replace(token, '^apns:', '') as device_token
+            from public_catalog_notification_device_tokens
+            where workspace_id = ?::uuid
+              and enabled = true
+              and lower(platform) = 'ios'
+              and token like 'apns:%'
+              and (
+                (? <> '' and lower(coalesce(email, '')) = ?)
+                or (? <> '' and coalesce(phone_number, '') = ?)
+              )
+        """.trimIndent()
+        return prepareStatement(sql).use { statement ->
+            statement.setString(1, context.workspaceId)
+            statement.setString(2, customerEmail)
+            statement.setString(3, customerEmail)
+            statement.setString(4, customerPhone)
+            statement.setString(5, customerPhone)
+            statement.executeQuery().use { result ->
+                buildList {
+                    while (result.next()) {
+                        result.getString("device_token")?.takeIf { it.isNotBlank() }?.let(::add)
+                    }
+                }
+            }
+        }
+    }
+
     private fun Connection.insertNotificationEvent(
         context: OrderNotificationContext,
+        eventType: String,
         title: String,
         body: String,
         payload: Map<String, String>,
@@ -371,7 +511,7 @@ class OrderNotificationService(
         return prepareStatement(sql).use { statement ->
             statement.setString(1, context.workspaceId)
             statement.setString(2, context.orderId)
-            statement.setString(3, "order_created")
+            statement.setString(3, eventType)
             statement.setString(4, title)
             statement.setString(5, body)
             statement.setString(6, payload.toJsonObjectString())
@@ -416,16 +556,89 @@ class OrderNotificationService(
             orderNumber = getString("order_number"),
             orderType = getString("order_type"),
             source = getString("source"),
+            status = getString("status"),
             customerName = getString("customer_name"),
+            customerEmail = getString("customer_email"),
+            customerPhoneNumber = getString("customer_phone_number"),
             total = getBigDecimal("total").setScale(2).toPlainString(),
             currency = getString("currency"),
         )
 
-    private fun String.orderWorkLabel(): String =
+    private enum class OrderNotificationEventKind(
+        val eventType: String,
+        val channel: String,
+        val notifiesPublicCatalogCustomer: Boolean = false,
+    ) {
+        Created("order_created", "catalog_orders") {
+            override fun title(context: OrderNotificationContext): String {
+                val workLabel = orderWorkLabel(context.orderType)
+                return if (context.source == "public_catalog") {
+                    "New catalog $workLabel ${context.orderNumber}"
+                } else {
+                    "New $workLabel ${context.orderNumber}"
+                }
+            }
+
+            override fun body(context: OrderNotificationContext): String = buildString {
+                append(context.customerName?.takeIf { it.isNotBlank() } ?: "A customer")
+                append(" placed a ")
+                append(orderWorkLabel(context.orderType))
+                append(" for ")
+                append("${context.currency} ${context.total}")
+            }
+        },
+        StatusUpdated("order_status_updated", "status_updates", notifiesPublicCatalogCustomer = true) {
+            override fun title(context: OrderNotificationContext): String =
+                "${orderWorkLabel(context.orderType).replaceFirstChar { it.uppercase() }} ${context.orderNumber} ${orderStatusLabel(context.status)}"
+
+            override fun body(context: OrderNotificationContext): String = buildString {
+                append(context.customerName?.takeIf { it.isNotBlank() } ?: "Customer")
+                append("'s ")
+                append(orderWorkLabel(context.orderType))
+                append(" is now ")
+                append(orderStatusLabel(context.status).lowercase())
+                append(".")
+            }
+
+            override fun customerTitle(context: OrderNotificationContext): String =
+                "${orderWorkLabel(context.orderType).replaceFirstChar { it.uppercase() }} ${context.orderNumber} ${orderStatusLabel(context.status)}"
+
+            override fun customerBody(context: OrderNotificationContext): String =
+                "Your ${orderWorkLabel(context.orderType)} is now ${orderStatusLabel(context.status).lowercase()}."
+        };
+
+        abstract fun title(context: OrderNotificationContext): String
+        abstract fun body(context: OrderNotificationContext): String
+
+        open fun customerTitle(context: OrderNotificationContext): String = title(context)
+
+        open fun customerBody(context: OrderNotificationContext): String = body(context)
+
+        protected fun orderWorkLabel(orderType: String): String =
+            when (orderType.trim().lowercase()) {
+                "appointment" -> "appointment"
+                "service" -> "service request"
+                else -> "order"
+            }
+
+        protected fun orderStatusLabel(status: String): String =
+            status.trim()
+                .replace('_', ' ')
+                .lowercase()
+                .split(' ')
+                .filter { it.isNotBlank() }
+                .joinToString(" ") { word -> word.replaceFirstChar { it.uppercase() } }
+                .ifBlank { "Updated" }
+    }
+
+    private fun String.notificationPreferenceColumn(): String =
         when (trim().lowercase()) {
-            "appointment" -> "appointment"
-            "service" -> "service request"
-            else -> "order"
+            "status_updates" -> "notification_status_updates_enabled"
+            "billing" -> "notification_billing_enabled"
+            "stock" -> "notification_stock_enabled"
+            "team" -> "notification_team_enabled"
+            "marketing" -> "notification_marketing_enabled"
+            else -> "notification_catalog_orders_enabled"
         }
 
     private fun Map<String, String>.toJsonObjectString(): String =
@@ -503,7 +716,10 @@ class OrderNotificationService(
         val orderNumber: String,
         val orderType: String,
         val source: String,
+        val status: String,
         val customerName: String?,
+        val customerEmail: String?,
+        val customerPhoneNumber: String?,
         val total: String,
         val currency: String,
     )

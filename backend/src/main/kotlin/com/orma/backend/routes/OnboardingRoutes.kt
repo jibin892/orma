@@ -145,7 +145,7 @@ fun Route.onboardingRoutes(
 
     post("/onboarding/notifications") {
         val request = call.receive<NotificationPreferenceRequest>()
-        if (request.enabled && request.deviceToken.isNullOrBlank()) {
+        if (request.enabled && request.deviceToken.isNullOrBlank() && request.channels == null) {
             call.respond(
                 HttpStatusCode.BadRequest,
                 ErrorResponse(
@@ -164,6 +164,7 @@ fun Route.onboardingRoutes(
             deviceToken = request.deviceToken,
             platform = request.platform,
             deviceName = request.deviceName,
+            channels = request.channels,
         )
         call.respond(session.toMutationResponse(config))
     }

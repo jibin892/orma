@@ -31,6 +31,7 @@ import org.orma.project_90.backend.OrmaMetaAccessTokenDraft
 import org.orma.project_90.backend.OrmaMetaConnectionDraft
 import org.orma.project_90.backend.OrmaMetaOrderUpdateDraft
 import org.orma.project_90.backend.OrmaMetaWhatsAppTemplateDraft
+import org.orma.project_90.backend.OrmaNotificationChannelPreferences
 import org.orma.project_90.backend.OrmaOrder
 import org.orma.project_90.backend.OrmaOrderDraft
 import org.orma.project_90.backend.OrmaPagedList
@@ -78,11 +79,13 @@ import org.orma.project_90.onboarding.OnboardingStep
 import org.orma.project_90.onboarding.OnboardingUiState
 import org.orma.project_90.onboarding.activeFilters
 import org.orma.project_90.onboarding.filtersForScope
+import org.orma.project_90.onboarding.isOrderActionLoading
 import org.orma.project_90.onboarding.isGstinNumberComplete
 import org.orma.project_90.onboarding.isOtpValid
 import org.orma.project_90.onboarding.normalizeGstinNumber
 import org.orma.project_90.onboarding.desktop.OrmaOnboardingDesktopUi
 import org.orma.project_90.onboarding.mobile.OrmaOnboardingMobileUi
+import org.orma.project_90.notifications.currentOrmaNotificationPermission
 import org.orma.project_90.notifications.requestOrmaNotificationPermission
 import org.orma.project_90.notifications.currentOrmaNotificationDeviceToken
 import org.orma.project_90.notifications.OrmaNotificationMessage
@@ -98,6 +101,30 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
     val authGateway = remember { createOrmaAuthGateway() }
     val backendClient = remember { createOrmaBackendClient() }
     val scope = rememberCoroutineScope()
+
+    fun isOrmaMobileNotificationGatePlatform(): Boolean {
+        val platform = getPlatform().name.lowercase()
+        return platform.contains("android") || platform.contains("ios")
+    }
+
+    suspend fun refreshMobileNotificationPermissionGate() {
+        val snapshot = state
+        if (!isOrmaMobileNotificationGatePlatform()) return
+        if (snapshot.authIdToken.isBlank() || snapshot.workspaceId.isBlank()) return
+        if (snapshot.step != OnboardingStep.Dashboard && snapshot.step != OnboardingStep.Notification) return
+
+        val permission = currentOrmaNotificationPermission()
+        if (!permission.enabled) {
+            state = state.copy(
+                step = OnboardingStep.Notification,
+                notificationsEnabled = false,
+                notificationPermissionRequired = true,
+                onboardingLoading = false,
+            )
+        } else if (snapshot.notificationPermissionRequired) {
+            state = state.copy(notificationPermissionRequired = false)
+        }
+    }
 
     suspend fun unregisterCurrentNotificationDeviceBeforeLogout(snapshot: OnboardingUiState) {
         val idToken = when (val refreshed = runCatching { authGateway.refreshSession() }.getOrNull()) {
@@ -170,6 +197,7 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
             workspaceCoverFileName = workspace?.coverFileName.orEmpty(),
             workspaceCoverUrl = workspace?.coverUrl.orEmpty(),
             notificationsEnabled = backendSession.user.notificationsEnabled,
+            notificationChannels = backendSession.user.notificationChannels,
             teamProfileName = if (resolvedPath == AccessPath.TeamMember) profileName else "",
             inviteLoading = false,
             inviteStatusMessage = null,
@@ -729,9 +757,22 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
     fun saveNotificationDecision(enabled: Boolean) {
         val snapshot = state
         if (snapshot.onboardingLoading) return
+        if (!enabled && snapshot.notificationPermissionRequired && isOrmaMobileNotificationGatePlatform()) {
+            state = snapshot.copy(
+                authErrorTitle = "Notifications required",
+                authErrorMessage = "Enable notifications on this device so ORMA can alert you about catalog orders and workspace updates.",
+                authErrorCode = "MOBILE_NOTIFICATION_PERMISSION_REQUIRED",
+            )
+            return
+        }
         val idToken = backendTokenOrError(snapshot) ?: return
         state = snapshot.copy(
             notificationsEnabled = if (enabled) snapshot.notificationsEnabled else false,
+            notificationPermissionRequired = if (enabled) {
+                snapshot.notificationPermissionRequired
+            } else {
+                false
+            },
             onboardingLoading = true,
             authErrorTitle = null,
             authErrorMessage = null,
@@ -744,6 +785,7 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
                 if (!permission.enabled) {
                     state = state.copy(
                         notificationsEnabled = false,
+                        notificationPermissionRequired = isOrmaMobileNotificationGatePlatform(),
                         onboardingLoading = false,
                         authErrorTitle = permission.title,
                         authErrorMessage = permission.message,
@@ -759,6 +801,7 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
                     val tokenError = tokenResult.exceptionOrNull() as? OrmaNotificationTokenException
                     state = state.copy(
                         notificationsEnabled = false,
+                        notificationPermissionRequired = isOrmaMobileNotificationGatePlatform(),
                         onboardingLoading = false,
                         authErrorTitle = tokenError?.title ?: "Notifications are not connected",
                         authErrorMessage = tokenError?.message
@@ -786,6 +829,7 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
                     state = routeAfterBackendSession(
                         state.copy(
                             notificationsEnabled = requestedEnabled,
+                            notificationPermissionRequired = false,
                             onboardingLoading = false,
                             authStatusMessage = null,
                             authErrorTitle = null,
@@ -796,6 +840,48 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
                     )
                 }
                 is OrmaBackendResult.Failure -> applyBackendFailure(result.title, result.message, result.code)
+            }
+        }
+    }
+
+    fun saveNotificationChannels(channels: OrmaNotificationChannelPreferences) {
+        val snapshot = state
+        if (snapshot.onboardingLoading) return
+        val idToken = backendTokenOrError(snapshot) ?: return
+        state = snapshot.copy(
+            notificationChannels = channels,
+            onboardingLoading = true,
+            authErrorTitle = null,
+            authErrorMessage = null,
+            authErrorCode = null,
+        )
+        scope.launch {
+            when (val result = backendClient.updateNotificationPreference(
+                idToken = idToken,
+                enabled = snapshot.notificationsEnabled,
+                channels = channels,
+            )) {
+                is OrmaBackendResult.Success -> {
+                    state = routeAfterBackendSession(
+                        state.copy(
+                            notificationChannels = channels,
+                            onboardingLoading = false,
+                            authStatusMessage = "Notification settings updated.",
+                            authErrorTitle = null,
+                            authErrorMessage = null,
+                            authErrorCode = null,
+                        ),
+                        result.value,
+                    )
+                }
+                is OrmaBackendResult.Failure -> {
+                    state = snapshot.copy(
+                        onboardingLoading = false,
+                        authErrorTitle = result.title,
+                        authErrorMessage = result.message,
+                        authErrorCode = result.code,
+                    )
+                }
             }
         }
     }
@@ -816,7 +902,7 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
             .filter { it.id.isNotBlank() && it.id !in desktopKnownNotificationIds }
         desktopKnownNotificationIds = desktopKnownNotificationIds + nextIds
         if (!state.notificationsEnabled) return
-        newNotifications.forEach { notification ->
+        newNotifications.filter { state.notificationChannels.allows(it.channel) }.forEach { notification ->
             showOrmaNativeNotification(
                 title = notification.title,
                 body = notification.body,
@@ -834,6 +920,8 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
                 loading = false,
                 pendingRefresh = false,
                 actionLoading = false,
+                orderCreateLoading = false,
+                orderActionLoadingIds = emptySet(),
                 errorTitle = title,
                 errorMessage = message,
                 statusMessage = null,
@@ -1062,6 +1150,8 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
                     loading = false,
                     pendingRefresh = false,
                     actionLoading = false,
+                    orderCreateLoading = false,
+                    orderActionLoadingIds = emptySet(),
                     errorTitle = null,
                     errorMessage = null,
                     statusMessage = statusMessage,
@@ -1323,6 +1413,46 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
                 errorTitle = null,
                 errorMessage = null,
                 statusMessage = null,
+            ),
+        )
+    }
+
+    fun markDashboardOrderCreateLoading() {
+        state = state.copy(
+            dashboard = state.dashboard.copy(
+                orderCreateLoading = true,
+                errorTitle = null,
+                errorMessage = null,
+                statusMessage = null,
+            ),
+        )
+    }
+
+    fun markDashboardOrderActionLoading(orderId: String) {
+        val cleanOrderId = orderId.trim().takeIf { it.isNotBlank() } ?: return
+        state = state.copy(
+            dashboard = state.dashboard.copy(
+                orderActionLoadingIds = state.dashboard.orderActionLoadingIds + cleanOrderId,
+                errorTitle = null,
+                errorMessage = null,
+                statusMessage = null,
+            ),
+        )
+    }
+
+    fun clearDashboardOrderCreateLoading() {
+        state = state.copy(
+            dashboard = state.dashboard.copy(
+                orderCreateLoading = false,
+            ),
+        )
+    }
+
+    fun clearDashboardOrderActionLoading(orderId: String) {
+        val cleanOrderId = orderId.trim().takeIf { it.isNotBlank() } ?: return
+        state = state.copy(
+            dashboard = state.dashboard.copy(
+                orderActionLoadingIds = state.dashboard.orderActionLoadingIds - cleanOrderId,
             ),
         )
     }
@@ -1688,12 +1818,13 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
 
     fun createDashboardOrder(draft: OrmaOrderDraft) {
         val snapshot = state
-        if (snapshot.dashboard.actionLoading || draft.items.none { it.description.isNotBlank() || it.productId.isNotBlank() }) return
-        markDashboardActionLoading()
+        if (snapshot.dashboard.orderCreateLoading || draft.items.none { it.description.isNotBlank() || it.productId.isNotBlank() }) return
+        markDashboardOrderCreateLoading()
         scope.launch {
             val idToken = freshDashboardTokenOrError(snapshot) ?: return@launch
             when (val result = backendClient.createOrder(idToken, draft.copy(currency = draft.currency.ifBlank { snapshot.dashboard.summary.currency }))) {
                 is OrmaBackendResult.Success -> {
+                    clearDashboardOrderCreateLoading()
                     resetDashboardOrderPage()
                     val whatsAppMessage = sendAutomaticWhatsAppOrderUpdate(
                         idToken = idToken,
@@ -1711,17 +1842,18 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
     fun updateDashboardOrder(orderId: String, draft: OrmaOrderDraft) {
         val snapshot = state
         if (
-            snapshot.dashboard.actionLoading ||
+            snapshot.dashboard.isOrderActionLoading(orderId) ||
             orderId.isBlank() ||
             draft.items.none { it.description.isNotBlank() || it.productId.isNotBlank() }
         ) {
             return
         }
-        markDashboardActionLoading()
+        markDashboardOrderActionLoading(orderId)
         scope.launch {
             val idToken = freshDashboardTokenOrError(snapshot) ?: return@launch
             when (val result = backendClient.updateOrder(idToken, orderId, draft.copy(currency = draft.currency.ifBlank { snapshot.dashboard.summary.currency }))) {
                 is OrmaBackendResult.Success -> {
+                    clearDashboardOrderActionLoading(orderId)
                     resetDashboardOrderPage()
                     refreshDashboard("Booking details saved.")
                 }
@@ -1732,8 +1864,8 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
 
     fun updateDashboardOrderStatus(orderId: String, status: String, paidTotal: String? = null) {
         val snapshot = state
-        if (snapshot.dashboard.actionLoading || orderId.isBlank() || status.isBlank()) return
-        markDashboardActionLoading()
+        if (snapshot.dashboard.isOrderActionLoading(orderId) || orderId.isBlank() || status.isBlank()) return
+        markDashboardOrderActionLoading(orderId)
         scope.launch {
             val idToken = freshDashboardTokenOrError(snapshot) ?: return@launch
             when (val result = backendClient.updateOrderStatus(idToken, orderId, status, paidTotal)) {
@@ -1745,6 +1877,7 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
                         scenario = automaticWhatsAppScenarioForOrder(result.value, status),
                         snapshot = snapshot,
                     ).orEmpty()
+                    clearDashboardOrderActionLoading(orderId)
                     refreshDashboard("Order updated.$whatsAppMessage")
                 }
                 is OrmaBackendResult.Failure -> applyDashboardFailure(result.title, result.message, result.code)
@@ -1755,7 +1888,7 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
     fun handleDashboardNotificationMessage(message: OrmaNotificationMessage) {
         val workspaceId = state.workspaceId
         val matchesWorkspace = message.workspaceId.isBlank() || message.workspaceId == workspaceId
-        if (message.type != "order_created" || !matchesWorkspace) return
+        if (message.type !in setOf("order_created", "order_status_updated") || !matchesWorkspace) return
         val orderId = message.orderId.trim().takeIf { it.isNotBlank() }
         val orderFilters = state.dashboard.filtersForScope(DashboardFilterScopeOrders).copy(
             query = "",
@@ -2362,7 +2495,9 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
                 }
             }
             OnboardingStep.Notification -> {
-                if (state.accessPath == AccessPath.BusinessOwner) {
+                if (state.notificationPermissionRequired && isOrmaMobileNotificationGatePlatform()) {
+                    state.copy(onboardingLoading = false)
+                } else if (state.accessPath == AccessPath.BusinessOwner) {
                     state.copy(step = OnboardingStep.BusinessSetup)
                 } else {
                     state.copy(step = OnboardingStep.Team)
@@ -2389,7 +2524,14 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
                 }
             }
             OnboardingStep.Notification,
-            OnboardingStep.Complete -> state.copy(step = OnboardingStep.Dashboard)
+            OnboardingStep.Complete -> if (
+                state.notificationPermissionRequired &&
+                isOrmaMobileNotificationGatePlatform()
+            ) {
+                state
+            } else {
+                state.copy(step = OnboardingStep.Dashboard)
+            }
             OnboardingStep.Dashboard -> state
         }
     }
@@ -2399,6 +2541,23 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
 
     LaunchedEffect(Unit) {
         restoreSavedSession()
+    }
+
+    LaunchedEffect(state.step, state.authIdToken, state.workspaceId) {
+        if (
+            isOrmaMobileNotificationGatePlatform() &&
+            state.authIdToken.isNotBlank() &&
+            state.workspaceId.isNotBlank() &&
+            (state.step == OnboardingStep.Dashboard || state.step == OnboardingStep.Notification)
+        ) {
+            while (
+                state.step == OnboardingStep.Dashboard ||
+                state.step == OnboardingStep.Notification
+            ) {
+                refreshMobileNotificationPermissionGate()
+                delay(5_000)
+            }
+        }
     }
 
     LaunchedEffect(state.step, state.authIdToken, state.workspaceId, state.dashboard.hasLoaded) {
@@ -2555,6 +2714,7 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
         },
         onSetupStepChange = { state = state.copy(setupStep = it) },
         onNotificationDecision = ::saveNotificationDecision,
+        onNotificationChannelsChange = ::saveNotificationChannels,
         onTeamProfileNameChange = {
             state = state.copy(
                 teamProfileName = it.take(120),
@@ -3007,6 +3167,16 @@ private fun String.allowedDashboardItemTypes(): List<String> =
         "appointment" -> listOf("appointment")
         "mixed" -> listOf("product", "service", "appointment")
         else -> listOf("product")
+    }
+
+private fun OrmaNotificationChannelPreferences.allows(channel: String): Boolean =
+    when (channel.trim().lowercase()) {
+        "status_updates" -> statusUpdates
+        "billing" -> billing
+        "stock" -> stock
+        "team" -> team
+        "marketing" -> marketing
+        else -> catalogOrders
     }
 
 private fun String.dashboardWhatsAppScenarioLabel(): String =

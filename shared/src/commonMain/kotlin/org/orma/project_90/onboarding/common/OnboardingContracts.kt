@@ -11,6 +11,7 @@ import org.orma.project_90.backend.OrmaMetaConnectionStatus
 import org.orma.project_90.backend.OrmaMetaWhatsAppTemplate
 import org.orma.project_90.backend.OrmaMetaWhatsAppTemplateDraft
 import org.orma.project_90.backend.OrmaMetaWhatsAppTemplateSyncItem
+import org.orma.project_90.backend.OrmaNotificationChannelPreferences
 import org.orma.project_90.backend.OrmaOrder
 import org.orma.project_90.backend.OrmaOrderDraft
 import org.orma.project_90.backend.OrmaPagination
@@ -110,6 +111,8 @@ internal data class OnboardingUiState(
     val gstinLookupErrorMessage: String? = null,
     val setupStep: BusinessSetupStep = BusinessSetupStep.TaxDetails,
     val notificationsEnabled: Boolean = false,
+    val notificationChannels: OrmaNotificationChannelPreferences = OrmaNotificationChannelPreferences(),
+    val notificationPermissionRequired: Boolean = false,
     val draft: BusinessSetupDraft = BusinessSetupDraft(),
     val dashboard: DashboardDataState = DashboardDataState(),
 ) {
@@ -167,6 +170,8 @@ internal data class DashboardDataState(
     val invoicePagination: OrmaPagination = OrmaPagination(),
     val printerPagination: OrmaPagination = OrmaPagination(),
     val paymentMethodPagination: OrmaPagination = OrmaPagination(),
+    val orderCreateLoading: Boolean = false,
+    val orderActionLoadingIds: Set<String> = emptySet(),
     val customerOrderHistory: Map<String, List<OrmaOrder>> = emptyMap(),
     val customerOrderHistoryPagination: Map<String, OrmaPagination> = emptyMap(),
     val customerOrderHistoryLoading: Set<String> = emptySet(),
@@ -207,6 +212,9 @@ internal fun DashboardDataState.filtersForScope(scope: String): OrmaDashboardFil
 internal fun DashboardDataState.activeFilters(): OrmaDashboardFilters =
     filtersForScope(filterScope)
 
+internal fun DashboardDataState.isOrderActionLoading(orderId: String): Boolean =
+    orderId.trim().takeIf(String::isNotBlank)?.let { it in orderActionLoadingIds } ?: false
+
 internal data class OnboardingActions(
     val onIdentifierTypeChange: (AuthIdentifierType) -> Unit,
     val onCountryChange: (OrmaCountryUi) -> Unit,
@@ -224,6 +232,7 @@ internal data class OnboardingActions(
     val onCoverUploadRequest: () -> Unit,
     val onSetupStepChange: (BusinessSetupStep) -> Unit,
     val onNotificationDecision: (Boolean) -> Unit,
+    val onNotificationChannelsChange: (OrmaNotificationChannelPreferences) -> Unit,
     val onTeamProfileNameChange: (String) -> Unit,
     val onDashboardRefresh: () -> Unit,
     val onClearDashboardMessage: () -> Unit,

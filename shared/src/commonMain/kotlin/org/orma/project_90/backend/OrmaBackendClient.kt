@@ -13,6 +13,25 @@ import org.orma.project_90.media.OrmaPickedImage
 import org.orma.project_90.onboarding.BusinessSetupDraft
 import kotlin.random.Random
 
+data class OrmaNotificationChannelPreferences(
+    val catalogOrders: Boolean = true,
+    val statusUpdates: Boolean = true,
+    val billing: Boolean = true,
+    val stock: Boolean = true,
+    val team: Boolean = true,
+    val marketing: Boolean = false,
+)
+
+private fun OrmaNotificationChannelPreferences.toJsonObjectLiteral(): String =
+    buildJsonObject(
+        "catalogOrders" to JsonValue.BooleanValue(catalogOrders),
+        "statusUpdates" to JsonValue.BooleanValue(statusUpdates),
+        "billing" to JsonValue.BooleanValue(billing),
+        "stock" to JsonValue.BooleanValue(stock),
+        "team" to JsonValue.BooleanValue(team),
+        "marketing" to JsonValue.BooleanValue(marketing),
+    )
+
 data class OrmaBackendUser(
     val id: String,
     val email: String?,
@@ -20,6 +39,7 @@ data class OrmaBackendUser(
     val displayName: String?,
     val role: String,
     val notificationsEnabled: Boolean,
+    val notificationChannels: OrmaNotificationChannelPreferences = OrmaNotificationChannelPreferences(),
 )
 
 data class OrmaBackendWorkspace(
@@ -206,6 +226,7 @@ data class OrmaDashboardTask(
 data class OrmaDashboardNotificationPreview(
     val id: String,
     val eventType: String = "notification",
+    val channel: String = "catalog_orders",
     val orderId: String? = null,
     val workspaceId: String? = null,
     val title: String,
@@ -1113,6 +1134,7 @@ class OrmaBackendClient(
         deviceToken: String? = null,
         platform: String? = null,
         deviceName: String? = null,
+        channels: OrmaNotificationChannelPreferences? = null,
     ): OrmaBackendResult<OrmaBackendSession> {
         val actionTitle = "Save notifications"
         return executeBackendSessionRequest(actionTitle) {
@@ -1124,6 +1146,7 @@ class OrmaBackendClient(
                     "deviceToken" to JsonValue.StringValue(deviceToken),
                     "platform" to JsonValue.StringValue(platform),
                     "deviceName" to JsonValue.StringValue(deviceName),
+                    "channels" to JsonValue.RawValue(channels?.toJsonObjectLiteral() ?: "null"),
                 ),
             )
         }
@@ -2060,6 +2083,31 @@ class OrmaBackendClient(
             parse = { it.toPagedList("orders") { orderJson -> orderJson.toOrder() } },
         )
 
+    suspend fun updatePublicCatalogCustomerNotifications(
+        workspaceId: String,
+        idToken: String,
+        enabled: Boolean,
+        deviceToken: String? = null,
+        platform: String? = null,
+        deviceName: String? = null,
+    ): OrmaBackendResult<Unit> =
+        executeBackendRequest(
+            actionTitle = "Save catalog notifications",
+            request = {
+                ormaPostJsonAuthorized(
+                    url = config.url("/public/workspaces/${workspaceId.urlQueryEscaped()}/account/notifications"),
+                    bearerToken = idToken,
+                    body = buildJsonObject(
+                        "enabled" to JsonValue.BooleanValue(enabled),
+                        "deviceToken" to JsonValue.StringValue(deviceToken),
+                        "platform" to JsonValue.StringValue(platform),
+                        "deviceName" to JsonValue.StringValue(deviceName),
+                    ),
+                )
+            },
+            parse = {},
+        )
+
     suspend fun loadPublicCatalogOrderStatus(
         workspaceId: String,
         orderId: String,
@@ -2197,6 +2245,7 @@ private fun String.toBackendSession(): OrmaBackendSession {
             displayName = userJson.jsonString("displayName"),
             role = userJson.jsonString("role").orEmpty(),
             notificationsEnabled = userJson.jsonBoolean("notificationsEnabled") ?: false,
+            notificationChannels = userJson.jsonObject("notificationChannels").toNotificationChannelPreferences(),
         ),
         workspace = workspaceJson?.let {
             OrmaBackendWorkspace(
@@ -2232,6 +2281,20 @@ private fun String.toBackendSession(): OrmaBackendSession {
         accessPath = jsonString("accessPath").orEmpty(),
     )
 }
+
+private fun String?.toNotificationChannelPreferences(): OrmaNotificationChannelPreferences =
+    if (isNullOrBlank()) {
+        OrmaNotificationChannelPreferences()
+    } else {
+        OrmaNotificationChannelPreferences(
+            catalogOrders = jsonBoolean("catalogOrders") ?: true,
+            statusUpdates = jsonBoolean("statusUpdates") ?: true,
+            billing = jsonBoolean("billing") ?: true,
+            stock = jsonBoolean("stock") ?: true,
+            team = jsonBoolean("team") ?: true,
+            marketing = jsonBoolean("marketing") ?: false,
+        )
+    }
 
 private fun String.toBackendWorkspace(): OrmaBackendWorkspace =
     OrmaBackendWorkspace(
@@ -2411,6 +2474,7 @@ private fun String.toDashboardNotificationPreview(): OrmaDashboardNotificationPr
     OrmaDashboardNotificationPreview(
         id = jsonString("id").orEmpty(),
         eventType = jsonString("eventType") ?: "notification",
+        channel = jsonString("channel") ?: "catalog_orders",
         orderId = jsonString("orderId"),
         workspaceId = jsonString("workspaceId"),
         title = jsonString("title").orEmpty(),

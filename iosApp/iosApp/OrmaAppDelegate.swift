@@ -3,6 +3,11 @@ import UserNotifications
 
 private let ormaApnsTokenKey = "orma.notifications.apnsToken"
 private let ormaApnsRegistrationErrorKey = "orma.notifications.apnsRegistrationError"
+private let ormaNotificationMessageSequenceKey = "orma.notifications.lastMessageSequence"
+private let ormaNotificationMessageTypeKey = "orma.notifications.lastMessageType"
+private let ormaNotificationMessageOrderIdKey = "orma.notifications.lastMessageOrderId"
+private let ormaNotificationMessageWorkspaceIdKey = "orma.notifications.lastMessageWorkspaceId"
+private let ormaNotificationMessageTimestampKey = "orma.notifications.lastMessageTimestamp"
 
 final class OrmaAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     func application(
@@ -41,5 +46,27 @@ final class OrmaAppDelegate: NSObject, UIApplicationDelegate, UNUserNotification
         } else {
             completionHandler([.alert, .sound, .badge])
         }
+    }
+
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        let userInfo = response.notification.request.content.userInfo
+        let type = userInfo["type"] as? String ?? ""
+        let orderId = userInfo["orderId"] as? String ?? ""
+        let workspaceId = userInfo["workspaceId"] as? String ?? ""
+
+        if !type.isEmpty || !orderId.isEmpty {
+            let defaults = UserDefaults.standard
+            defaults.set(defaults.integer(forKey: ormaNotificationMessageSequenceKey) + 1, forKey: ormaNotificationMessageSequenceKey)
+            defaults.set(type, forKey: ormaNotificationMessageTypeKey)
+            defaults.set(orderId, forKey: ormaNotificationMessageOrderIdKey)
+            defaults.set(workspaceId, forKey: ormaNotificationMessageWorkspaceIdKey)
+            defaults.set(Date().timeIntervalSince1970, forKey: ormaNotificationMessageTimestampKey)
+        }
+
+        completionHandler()
     }
 }

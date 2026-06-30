@@ -7,4 +7,6 @@ data class OrmaNotificationPermissionResult(
     val code: String? = null,
 )
 
+expect suspend fun currentOrmaNotificationPermission(): OrmaNotificationPermissionResult
+
 expect suspend fun requestOrmaNotificationPermission(): OrmaNotificationPermissionResult

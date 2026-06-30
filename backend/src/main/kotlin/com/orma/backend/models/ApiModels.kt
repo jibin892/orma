@@ -17,6 +17,7 @@ data class HealthResponse(
     val firebaseAuthConfigured: Boolean,
     val firebaseMessagingConfigured: Boolean,
     val oneSignalPushConfigured: Boolean = false,
+    val apnsPushConfigured: Boolean = false,
     val firebaseStorageConfigured: Boolean,
     val mediaStorageProvider: String,
     val mediaStorageConfigured: Boolean,
@@ -66,6 +67,27 @@ data class UserResponse(
     val displayName: String?,
     val role: String,
     val notificationsEnabled: Boolean,
+    val notificationChannels: NotificationChannelPreferenceResponse = NotificationChannelPreferenceResponse(),
+)
+
+@Serializable
+data class NotificationChannelPreferenceResponse(
+    val catalogOrders: Boolean = true,
+    val statusUpdates: Boolean = true,
+    val billing: Boolean = true,
+    val stock: Boolean = true,
+    val team: Boolean = true,
+    val marketing: Boolean = false,
+)
+
+@Serializable
+data class NotificationChannelPreferenceRequest(
+    val catalogOrders: Boolean? = null,
+    val statusUpdates: Boolean? = null,
+    val billing: Boolean? = null,
+    val stock: Boolean? = null,
+    val team: Boolean? = null,
+    val marketing: Boolean? = null,
 )
 
 @Serializable
@@ -181,6 +203,12 @@ data class NotificationPreferenceRequest(
     val deviceToken: String? = null,
     val platform: String? = null,
     val deviceName: String? = null,
+    val channels: NotificationChannelPreferenceRequest? = null,
+)
+
+@Serializable
+data class NotificationDevicePreferenceResponse(
+    val enabled: Boolean,
 )
 
 @Serializable
@@ -300,6 +328,7 @@ data class DashboardTaskResponse(
 data class DashboardNotificationPreviewResponse(
     val id: String,
     val eventType: String = "notification",
+    val channel: String = "catalog_orders",
     val orderId: String? = null,
     val workspaceId: String? = null,
     val title: String,

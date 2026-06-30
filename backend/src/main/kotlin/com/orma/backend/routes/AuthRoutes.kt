@@ -5,6 +5,7 @@ import com.orma.backend.config.AppConfig
 import com.orma.backend.db.OnboardingRepository
 import com.orma.backend.db.OnboardingSessionRecord
 import com.orma.backend.models.ErrorResponse
+import com.orma.backend.models.NotificationChannelPreferenceResponse
 import com.orma.backend.models.SessionRequest
 import com.orma.backend.models.SessionResponse
 import com.orma.backend.models.UserResponse
@@ -83,6 +84,14 @@ fun com.orma.backend.db.AppUserRecord.toResponse(): UserResponse =
         displayName = displayName,
         role = role,
         notificationsEnabled = notificationsEnabled,
+        notificationChannels = NotificationChannelPreferenceResponse(
+            catalogOrders = notificationChannels.catalogOrders,
+            statusUpdates = notificationChannels.statusUpdates,
+            billing = notificationChannels.billing,
+            stock = notificationChannels.stock,
+            team = notificationChannels.team,
+            marketing = notificationChannels.marketing,
+        ),
     )
 
 fun com.orma.backend.db.WorkspaceRecord.toResponse(): WorkspaceResponse =

@@ -91,6 +91,7 @@ class MainActivity : ComponentActivity() {
             OrmaAndroidGoogleAuthRegistry.requestIdToken = null
             pendingGoogleContinuation = null
             OrmaAndroidGoogleAuthRegistry.clearSession = null
+            OrmaAndroidNotificationPermissionRegistry.currentPermission = null
             OrmaAndroidNotificationPermissionRegistry.requestPermission = null
             pendingNotificationContinuation = null
         }
@@ -136,6 +137,13 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun installNotificationPermissionProvider() {
+        OrmaAndroidNotificationPermissionRegistry.currentPermission = {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+                true
+            } else {
+                checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+            }
+        }
         OrmaAndroidNotificationPermissionRegistry.requestPermission = {
             suspendCoroutine { continuation ->
                 if (pendingNotificationContinuation != null) {

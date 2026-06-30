@@ -11,6 +11,7 @@ import com.orma.backend.models.DashboardSummaryResponse
 import com.orma.backend.models.DashboardRevenuePointResponse
 import com.orma.backend.models.DashboardTaskResponse
 import com.orma.backend.models.DashboardTopItemResponse
+import com.orma.backend.models.NotificationPreferenceRequest
 import com.orma.backend.models.OrderItemRequest
 import com.orma.backend.models.OrderItemResponse
 import com.orma.backend.models.OrderRequest
@@ -317,6 +318,33 @@ class DashboardRepository(
                 filters = filters,
                 includeItems = true,
             )
+        }
+    }
+
+    suspend fun updatePublicCatalogNotificationPreference(
+        firebaseUser: VerifiedFirebaseUser,
+        workspaceId: String,
+        request: NotificationPreferenceRequest,
+    ): Boolean? = withContext(Dispatchers.IO) {
+        dataSource.connection.use { connection ->
+            val access = connection.resolvePublicWorkspaceAccess(workspaceId) ?: return@withContext null
+            val identifiers = firebaseUser.publicCatalogCustomerIdentifiers()
+            if (request.enabled) {
+                connection.upsertPublicCatalogNotificationDeviceToken(
+                    workspaceId = access.workspaceId,
+                    firebaseUser = firebaseUser,
+                    identifiers = identifiers,
+                    request = request,
+                )
+            } else {
+                connection.disablePublicCatalogNotificationDeviceToken(
+                    workspaceId = access.workspaceId,
+                    firebaseUser = firebaseUser,
+                    identifiers = identifiers,
+                    token = request.deviceToken,
+                )
+            }
+            request.enabled
         }
     }
 
@@ -2758,6 +2786,7 @@ class DashboardRepository(
                 workspace_id::text,
                 order_id::text,
                 event_type,
+                coalesce(nullif(payload ->> 'channel', ''), 'catalog_orders') as channel,
                 title,
                 body,
                 status,
@@ -2778,6 +2807,7 @@ class DashboardRepository(
                             DashboardNotificationPreviewResponse(
                                 id = result.getString("id"),
                                 eventType = result.getString("event_type") ?: "notification",
+                                channel = result.getString("channel") ?: "catalog_orders",
                                 orderId = result.getString("order_id"),
                                 workspaceId = result.getString("workspace_id"),
                                 title = result.getString("title"),
@@ -4695,6 +4725,83 @@ class DashboardRepository(
                 }
                 items.toPagedResult(filters.copy(limit = filters.limit.coerceAtMost(20)), totalItems)
             }
+        }
+    }
+
+    private fun Connection.upsertPublicCatalogNotificationDeviceToken(
+        workspaceId: String,
+        firebaseUser: VerifiedFirebaseUser,
+        identifiers: PublicCatalogCustomerIdentifiers,
+        request: NotificationPreferenceRequest,
+    ) {
+        val cleanToken = request.deviceToken?.trim()?.takeIf { it.isNotBlank() } ?: return
+        val cleanPlatform = request.platform?.trim()?.lowercase()?.takeIf { it.isNotBlank() } ?: "unknown"
+        val cleanDeviceName = request.deviceName?.trim()?.takeIf { it.isNotBlank() }?.take(120)
+        prepareStatement(
+            """
+            insert into public_catalog_notification_device_tokens (
+                workspace_id, firebase_uid, email, phone_number, token, platform, device_name,
+                enabled, last_seen_at, updated_at
+            )
+            values (?::uuid, ?, ?, ?, ?, ?, ?, true, now(), now())
+            on conflict (token) do update set
+                workspace_id = excluded.workspace_id,
+                firebase_uid = excluded.firebase_uid,
+                email = excluded.email,
+                phone_number = excluded.phone_number,
+                platform = excluded.platform,
+                device_name = excluded.device_name,
+                enabled = true,
+                last_seen_at = now(),
+                updated_at = now()
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setString(1, workspaceId)
+            statement.setString(2, firebaseUser.uid)
+            statement.setNullableString(3, identifiers.email)
+            statement.setNullableString(4, identifiers.phoneNumber)
+            statement.setString(5, cleanToken)
+            statement.setString(6, cleanPlatform)
+            statement.setNullableString(7, cleanDeviceName)
+            statement.executeUpdate()
+        }
+    }
+
+    private fun Connection.disablePublicCatalogNotificationDeviceToken(
+        workspaceId: String,
+        firebaseUser: VerifiedFirebaseUser,
+        identifiers: PublicCatalogCustomerIdentifiers,
+        token: String?,
+    ) {
+        val cleanToken = token?.trim()?.takeIf { it.isNotBlank() }
+        val email = identifiers.email.orEmpty()
+        val phoneNumber = identifiers.phoneNumber.orEmpty()
+        val sql = buildString {
+            append(
+                """
+                update public_catalog_notification_device_tokens
+                set enabled = false, updated_at = now()
+                where workspace_id = ?::uuid
+                  and (
+                    firebase_uid = ?
+                    or (? <> '' and lower(coalesce(email, '')) = ?)
+                    or (? <> '' and coalesce(phone_number, '') = ?)
+                  )
+                """.trimIndent(),
+            )
+            if (cleanToken != null) {
+                append(" and token = ?")
+            }
+        }
+        prepareStatement(sql).use { statement ->
+            statement.setString(1, workspaceId)
+            statement.setString(2, firebaseUser.uid)
+            statement.setString(3, email)
+            statement.setString(4, email)
+            statement.setString(5, phoneNumber)
+            statement.setString(6, phoneNumber)
+            cleanToken?.let { statement.setString(7, it) }
+            statement.executeUpdate()
         }
     }
 

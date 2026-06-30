@@ -2,6 +2,7 @@ package com.orma.backend.db
 
 import com.orma.backend.auth.VerifiedFirebaseUser
 import com.orma.backend.models.BusinessSetupRequest
+import com.orma.backend.models.NotificationChannelPreferenceRequest
 import com.orma.backend.models.TeamInviteRequest
 import com.orma.backend.models.TeamMemberAccessRequest
 import java.sql.Connection
@@ -20,6 +21,16 @@ data class AppUserRecord(
     val displayName: String?,
     val role: String,
     val notificationsEnabled: Boolean,
+    val notificationChannels: NotificationChannelPreferencesRecord = NotificationChannelPreferencesRecord(),
+)
+
+data class NotificationChannelPreferencesRecord(
+    val catalogOrders: Boolean = true,
+    val statusUpdates: Boolean = true,
+    val billing: Boolean = true,
+    val stock: Boolean = true,
+    val team: Boolean = true,
+    val marketing: Boolean = false,
 )
 
 data class WorkspaceRecord(
@@ -375,6 +386,7 @@ class OnboardingRepository(
         deviceToken: String? = null,
         platform: String? = null,
         deviceName: String? = null,
+        channels: NotificationChannelPreferenceRequest? = null,
     ): OnboardingSessionRecord = withContext(Dispatchers.IO) {
         dataSource.connection.use { connection ->
             val user = connection.upsertUser(
@@ -386,13 +398,15 @@ class OnboardingRepository(
             )
             val workspace = connection.findPrimaryWorkspace(user.id)
             val updatedUser = if (enabled) {
-                connection.upsertNotificationDeviceToken(
-                    userId = user.id,
-                    workspaceId = workspace?.id,
-                    token = deviceToken,
-                    platform = platform,
-                    deviceName = deviceName,
-                )
+                if (!deviceToken.isNullOrBlank()) {
+                    connection.upsertNotificationDeviceToken(
+                        userId = user.id,
+                        workspaceId = workspace?.id,
+                        token = deviceToken,
+                        platform = platform,
+                        deviceName = deviceName,
+                    )
+                }
                 connection.updateNotificationPreference(user.id, true)
             } else {
                 val hasDeviceToken = !deviceToken.isNullOrBlank()
@@ -406,7 +420,10 @@ class OnboardingRepository(
                     enabled = if (hasDeviceToken) connection.hasEnabledNotificationDeviceTokens(user.id) else false,
                 )
             }
-            updatedUser.toSession(workspace)
+            val userWithChannels = channels?.let {
+                connection.updateNotificationChannelPreferences(updatedUser.id, it)
+            } ?: updatedUser
+            userWithChannels.toSession(workspace)
         }
     }
 
@@ -515,7 +532,13 @@ class OnboardingRepository(
                 phone_number,
                 display_name,
                 role,
-                notifications_enabled
+                notifications_enabled,
+                notification_catalog_orders_enabled,
+                notification_status_updates_enabled,
+                notification_billing_enabled,
+                notification_stock_enabled,
+                notification_team_enabled,
+                notification_marketing_enabled
         """.trimIndent()
 
         return prepareStatement(sql).use { statement ->
@@ -1165,7 +1188,13 @@ class OnboardingRepository(
                 phone_number,
                 display_name,
                 role,
-                notifications_enabled
+                notifications_enabled,
+                notification_catalog_orders_enabled,
+                notification_status_updates_enabled,
+                notification_billing_enabled,
+                notification_stock_enabled,
+                notification_team_enabled,
+                notification_marketing_enabled
         """.trimIndent()
         return prepareStatement(sql).use { statement ->
             statement.setBoolean(1, promoteToOwner)
@@ -1195,11 +1224,62 @@ class OnboardingRepository(
                 phone_number,
                 display_name,
                 role,
-                notifications_enabled
+                notifications_enabled,
+                notification_catalog_orders_enabled,
+                notification_status_updates_enabled,
+                notification_billing_enabled,
+                notification_stock_enabled,
+                notification_team_enabled,
+                notification_marketing_enabled
         """.trimIndent()
         return prepareStatement(sql).use { statement ->
             statement.setBoolean(1, enabled)
             statement.setString(2, userId)
+            statement.executeQuery().use { result ->
+                result.next()
+                result.toUserRecord()
+            }
+        }
+    }
+
+    private fun Connection.updateNotificationChannelPreferences(
+        userId: String,
+        channels: NotificationChannelPreferenceRequest,
+    ): AppUserRecord {
+        val sql = """
+            update app_users
+            set
+                notification_catalog_orders_enabled = coalesce(?::boolean, notification_catalog_orders_enabled),
+                notification_status_updates_enabled = coalesce(?::boolean, notification_status_updates_enabled),
+                notification_billing_enabled = coalesce(?::boolean, notification_billing_enabled),
+                notification_stock_enabled = coalesce(?::boolean, notification_stock_enabled),
+                notification_team_enabled = coalesce(?::boolean, notification_team_enabled),
+                notification_marketing_enabled = coalesce(?::boolean, notification_marketing_enabled),
+                updated_at = now()
+            where id = ?::uuid
+            returning
+                id::text,
+                firebase_uid,
+                email,
+                phone_number,
+                display_name,
+                role,
+                notifications_enabled,
+                notification_catalog_orders_enabled,
+                notification_status_updates_enabled,
+                notification_billing_enabled,
+                notification_stock_enabled,
+                notification_team_enabled,
+                notification_marketing_enabled
+        """.trimIndent()
+        return prepareStatement(sql).use { statement ->
+            statement.setObject(1, channels.catalogOrders)
+            statement.setObject(2, channels.statusUpdates)
+            statement.setObject(3, channels.billing)
+            statement.setObject(4, channels.stock)
+            statement.setObject(5, channels.team)
+            statement.setObject(6, channels.marketing)
+            statement.setString(7, userId)
             statement.executeQuery().use { result ->
                 result.next()
                 result.toUserRecord()
@@ -1564,7 +1644,18 @@ class OnboardingRepository(
             displayName = getString("display_name"),
             role = getString("role"),
             notificationsEnabled = getBoolean("notifications_enabled"),
+            notificationChannels = NotificationChannelPreferencesRecord(
+                catalogOrders = getBooleanOrDefault("notification_catalog_orders_enabled", true),
+                statusUpdates = getBooleanOrDefault("notification_status_updates_enabled", true),
+                billing = getBooleanOrDefault("notification_billing_enabled", true),
+                stock = getBooleanOrDefault("notification_stock_enabled", true),
+                team = getBooleanOrDefault("notification_team_enabled", true),
+                marketing = getBooleanOrDefault("notification_marketing_enabled", false),
+            ),
         )
+
+    private fun ResultSet.getBooleanOrDefault(column: String, default: Boolean): Boolean =
+        runCatching { getBoolean(column) }.getOrNull() ?: default
 
     private fun ResultSet.toWorkspaceRecord(): WorkspaceRecord =
         WorkspaceRecord(

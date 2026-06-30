@@ -3,6 +3,35 @@ package org.orma.project_90.notifications
 import kotlin.js.Promise
 import kotlinx.coroutines.await
 
+actual suspend fun currentOrmaNotificationPermission(): OrmaNotificationPermissionResult {
+    val result = currentWebNotificationPermission().await()
+    return when (result.permission) {
+        "granted" -> OrmaNotificationPermissionResult(
+            enabled = true,
+            title = "Notifications enabled",
+            message = "ORMA can send OneSignal workspace updates in this browser.",
+        )
+        "denied" -> OrmaNotificationPermissionResult(
+            enabled = false,
+            title = "Notifications are blocked",
+            message = "Allow notifications for this site in browser settings to receive invoice, order, tax, and workspace alerts.",
+            code = "WEB_NOTIFICATION_PERMISSION_DENIED",
+        )
+        "unsupported" -> OrmaNotificationPermissionResult(
+            enabled = false,
+            title = "Notifications are not supported",
+            message = "This browser does not support web push notifications for ORMA.",
+            code = "WEB_NOTIFICATION_UNSUPPORTED",
+        )
+        else -> OrmaNotificationPermissionResult(
+            enabled = false,
+            title = "Notifications are off",
+            message = "Allow notifications when the browser asks to receive ORMA workspace alerts.",
+            code = "WEB_NOTIFICATION_PERMISSION_DEFAULT",
+        )
+    }
+}
+
 actual suspend fun requestOrmaNotificationPermission(): OrmaNotificationPermissionResult {
     val result = requestWebNotificationPermission().await()
     return when (result.permission) {
@@ -36,6 +65,18 @@ private external interface JsNotificationPermissionResult {
     val permission: String
     val errorMessage: String?
 }
+
+private fun currentWebNotificationPermission(): Promise<JsNotificationPermissionResult> = js(
+    """
+    new Promise(function(resolve) {
+      if (typeof window === 'undefined' || !('Notification' in window)) {
+        resolve({ permission: 'unsupported', errorMessage: null });
+        return;
+      }
+      resolve({ permission: Notification.permission, errorMessage: null });
+    })
+    """,
+)
 
 private fun requestWebNotificationPermission(): Promise<JsNotificationPermissionResult> = js(
     """

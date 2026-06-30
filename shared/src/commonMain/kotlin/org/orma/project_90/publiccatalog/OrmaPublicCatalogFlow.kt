@@ -87,6 +87,7 @@ import org.orma.project_90.designsystem.OrmaStatusTone
 import org.orma.project_90.designsystem.OrmaTextField
 import org.orma.project_90.designsystem.OrmaWindowClass
 import org.orma.project_90.media.OrmaRemoteImage
+import org.orma.project_90.notifications.currentOrmaNotificationDeviceToken
 import org.orma.project_90.onboarding.OrmaCountryPhoneField
 import org.orma.project_90.onboarding.isOrmaInternationalPhoneValid
 import kotlin.math.roundToInt
@@ -130,6 +131,8 @@ fun OrmaPublicCatalogFlow(
     var customerOrderDetailRefreshing by remember(workspaceId) { mutableStateOf(false) }
     var customerOrderDetailError by remember(workspaceId) { mutableStateOf<String?>(null) }
     var customerStatusNotice by remember(workspaceId) { mutableStateOf<PublicCatalogCustomerStatusNotice?>(null) }
+    var customerNotificationRegistrationKey by remember(workspaceId) { mutableStateOf("") }
+    var customerNotificationDeviceToken by remember(workspaceId) { mutableStateOf("") }
 
     fun updateQuantity(cartKey: String, quantity: Int) {
         val productId = cartKey.publicCatalogCartProductId()
@@ -242,6 +245,37 @@ fun OrmaPublicCatalogFlow(
         if (showLoading) customerOrdersLoading = false
     }
 
+    suspend fun registerCustomerNotificationDevice(session: OrmaAuthSession) {
+        val registrationKey = listOf(workspaceId, session.uid, session.idToken.take(16)).joinToString("|")
+        if (customerNotificationRegistrationKey == registrationKey) return
+        val deviceToken = runCatching { currentOrmaNotificationDeviceToken(session.uid) }.getOrNull() ?: return
+        when (client.updatePublicCatalogCustomerNotifications(
+            workspaceId = workspaceId,
+            idToken = session.idToken,
+            enabled = true,
+            deviceToken = deviceToken.token,
+            platform = deviceToken.platform,
+            deviceName = deviceToken.deviceName,
+        )) {
+            is OrmaBackendResult.Success -> {
+                customerNotificationRegistrationKey = registrationKey
+                customerNotificationDeviceToken = deviceToken.token
+            }
+            is OrmaBackendResult.Failure -> Unit
+        }
+    }
+
+    suspend fun unregisterCustomerNotificationDevice(session: OrmaAuthSession) {
+        client.updatePublicCatalogCustomerNotifications(
+            workspaceId = workspaceId,
+            idToken = session.idToken,
+            enabled = false,
+            deviceToken = customerNotificationDeviceToken.takeIf { it.isNotBlank() },
+        )
+        customerNotificationRegistrationKey = ""
+        customerNotificationDeviceToken = ""
+    }
+
     suspend fun loadCustomerOrderDetail(orderId: String, refresh: Boolean) {
         if (orderId.isBlank()) return
         if (refresh) {
@@ -318,6 +352,11 @@ fun OrmaPublicCatalogFlow(
             null -> Unit
         }
         customerAuthBusy = false
+    }
+
+    LaunchedEffect(customerSession?.idToken) {
+        val activeSession = customerSession ?: return@LaunchedEffect
+        registerCustomerNotificationDevice(activeSession)
     }
 
     LaunchedEffect(customerSession?.idToken) {
@@ -500,6 +539,7 @@ fun OrmaPublicCatalogFlow(
             onLogout = {
                 scope.launch {
                     customerAuthBusy = true
+                    customerSession?.let { unregisterCustomerNotificationDevice(it) }
                     authGateway.clearStoredSession()
                     customerSession = null
                     customerOrders = emptyList()

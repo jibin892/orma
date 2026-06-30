@@ -10,6 +10,8 @@ import com.orma.backend.models.CustomerListResponse
 import com.orma.backend.models.CustomerRequest
 import com.orma.backend.models.DashboardNotificationEventListResponse
 import com.orma.backend.models.ErrorResponse
+import com.orma.backend.models.NotificationDevicePreferenceResponse
+import com.orma.backend.models.NotificationPreferenceRequest
 import com.orma.backend.models.OrderListResponse
 import com.orma.backend.models.OrderRequest
 import com.orma.backend.models.OrderStatusRequest
@@ -82,6 +84,23 @@ fun Route.dashboardRoutes(
             filters = call.dashboardFilters().copy(limit = 100),
         ) ?: return@get call.publicCatalogNotFound()
         call.respond(OrderListResponse(orders.items, orders.pagination))
+    }
+
+    post("/public/workspaces/{workspaceId}/account/notifications") {
+        val repository = dashboardRepository ?: return@post call.dashboardDatabaseNotConfigured()
+        val firebaseUser = call.verifiedFirebaseUser(config) ?: return@post
+        val workspaceId = call.parameters["workspaceId"].orEmpty()
+        val request = call.receive<NotificationPreferenceRequest>()
+        if (request.enabled && request.deviceToken.isNullOrBlank()) {
+            call.respondValidation(
+                code = "public_notification_device_token_required",
+                message = "Allow notifications on this device and try again.",
+            )
+            return@post
+        }
+        val enabled = repository.updatePublicCatalogNotificationPreference(firebaseUser, workspaceId, request)
+            ?: return@post call.publicCatalogNotFound()
+        call.respond(NotificationDevicePreferenceResponse(enabled = enabled))
     }
 
     post("/public/workspaces/{workspaceId}/orders") {
@@ -510,6 +529,9 @@ fun Route.dashboardRoutes(
             call.respondValidation(error.code, error.message ?: "Check the order status.")
             return@put
         }
+        if (order != null) {
+            orderNotificationService?.notifyOrderStatusUpdated(order)
+        }
         call.respondWorkspaceResult(order)
     }
 
@@ -528,6 +550,9 @@ fun Route.dashboardRoutes(
         } catch (error: DashboardOrderValidationException) {
             call.respondValidation(error.code, error.message ?: "Check the order status.")
             return@post
+        }
+        if (order != null) {
+            orderNotificationService?.notifyOrderStatusUpdated(order)
         }
         call.respondWorkspaceResult(order)
     }
