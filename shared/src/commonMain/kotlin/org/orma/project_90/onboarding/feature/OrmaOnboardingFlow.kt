@@ -101,6 +101,8 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
     var desktopKnownNotificationIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var desktopNotificationSeeded by remember { mutableStateOf(false) }
     var mobileNotificationPromptKey by remember { mutableStateOf<String?>(null) }
+    var pendingDashboardRefreshRequested by remember { mutableStateOf(false) }
+    var pendingDashboardRefreshScope by remember { mutableStateOf<String?>(null) }
     val authGateway = remember { createOrmaAuthGateway() }
     val backendClient = remember { createOrmaBackendClient() }
     val scope = rememberCoroutineScope()
@@ -1066,10 +1068,242 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
         is OrmaBackendResult.Failure -> result
     }
 
-    fun refreshDashboard(statusMessage: String? = null) {
+    fun finishScopedDashboardRefresh(
+        refreshScope: String,
+        requestedFilters: OrmaDashboardFilters,
+        fetchedFilters: OrmaDashboardFilters,
+        statusMessage: String?,
+        update: DashboardDataState.() -> DashboardDataState,
+    ) {
+        val currentDashboard = state.dashboard
+        val currentFilters = currentDashboard.filtersForScope(refreshScope)
+        val nextScopedFilters = currentDashboard.scopedFilters + (
+            refreshScope to if (currentFilters == requestedFilters) fetchedFilters else currentFilters
+        )
+        val activeFilters = nextScopedFilters[currentDashboard.filterScope] ?: currentDashboard.filters
+        state = state.copy(
+            dashboard = currentDashboard.update().copy(
+                loading = false,
+                pendingRefresh = false,
+                actionLoading = currentDashboard.actionLoadingKeys.isNotEmpty(),
+                errorTitle = null,
+                errorMessage = null,
+                statusMessage = statusMessage,
+                scopedFilters = nextScopedFilters,
+                filters = activeFilters,
+            ),
+        )
+    }
+
+    suspend fun refreshDashboardScope(
+        idToken: String,
+        snapshot: OnboardingUiState,
+        refreshScope: String,
+        statusMessage: String?,
+    ): Boolean {
+        val businessMode = snapshot.dashboard.summary.businessMode.ifBlank { snapshot.draft.businessMode }
+        val neutralFilters = OrmaDashboardFilters().forBusinessMode(businessMode)
+        when (refreshScope) {
+            DashboardFilterScopeHome -> {
+                val rawHomeFilters = snapshot.dashboard.filtersForScope(DashboardFilterScopeHome)
+                val summary = when (val result = backendClient.getDashboardSummary(idToken, rawHomeFilters)) {
+                    is OrmaBackendResult.Success -> result.value
+                    is OrmaBackendResult.Failure -> {
+                        applyDashboardFailure(result.title, result.message, result.code)
+                        return true
+                    }
+                }
+                val homeFilters = rawHomeFilters.forBusinessMode(summary.businessMode.ifBlank { businessMode })
+                finishScopedDashboardRefresh(
+                    refreshScope = DashboardFilterScopeHome,
+                    requestedFilters = rawHomeFilters,
+                    fetchedFilters = homeFilters,
+                    statusMessage = statusMessage,
+                ) {
+                    copy(summary = summary)
+                }
+                return true
+            }
+            DashboardFilterScopeCustomers -> {
+                val requestedFilters = snapshot.dashboard.filtersForScope(DashboardFilterScopeCustomers)
+                val customerFilters = requestedFilters.forBusinessMode(businessMode)
+                val customers = when (val result = listWithPageRecovery(snapshot.dashboard.customerPagination.page) { page ->
+                    backendClient.listCustomers(idToken, customerFilters.copy(page = page))
+                }) {
+                    is OrmaBackendResult.Success -> result.value
+                    is OrmaBackendResult.Failure -> {
+                        applyDashboardFailure(result.title, result.message, result.code)
+                        return true
+                    }
+                }
+                finishScopedDashboardRefresh(
+                    refreshScope = DashboardFilterScopeCustomers,
+                    requestedFilters = requestedFilters,
+                    fetchedFilters = customerFilters,
+                    statusMessage = statusMessage,
+                ) {
+                    copy(
+                        customers = customers.items,
+                        customerPagination = customers.pagination,
+                    )
+                }
+                return true
+            }
+            DashboardFilterScopeProducts -> {
+                val requestedFilters = snapshot.dashboard.filtersForScope(DashboardFilterScopeProducts)
+                val productFilters = requestedFilters.forBusinessMode(businessMode).copy(limit = 50)
+                val suppliers = when (val result = listWithPageRecovery(snapshot.dashboard.supplierPagination.page) { page ->
+                    backendClient.listSuppliers(idToken, productFilters.copy(page = page))
+                }) {
+                    is OrmaBackendResult.Success -> result.value
+                    is OrmaBackendResult.Failure -> {
+                        applyDashboardFailure(result.title, result.message, result.code)
+                        return true
+                    }
+                }
+                val categories = when (val result = listWithPageRecovery(snapshot.dashboard.categoryPagination.page) { page ->
+                    backendClient.listProductCategories(idToken, neutralFilters.copy(page = page))
+                }) {
+                    is OrmaBackendResult.Success -> result.value
+                    is OrmaBackendResult.Failure -> null
+                }
+                val offers = when (val result = listWithPageRecovery(snapshot.dashboard.offerPagination.page) { page ->
+                    backendClient.listProductOffers(idToken, productFilters.copy(page = page))
+                }) {
+                    is OrmaBackendResult.Success -> result.value
+                    is OrmaBackendResult.Failure -> null
+                }
+                val products = when (val result = listWithPageRecovery(snapshot.dashboard.productPagination.page) { page ->
+                    backendClient.listProducts(idToken, productFilters.copy(page = page))
+                }) {
+                    is OrmaBackendResult.Success -> result.value
+                    is OrmaBackendResult.Failure -> {
+                        applyDashboardFailure(result.title, result.message, result.code)
+                        return true
+                    }
+                }
+                val saleCatalogProducts = when (val result = listWithPageRecovery(1) { page ->
+                    backendClient.listProducts(idToken, neutralFilters.copy(page = page, limit = 500))
+                }) {
+                    is OrmaBackendResult.Success -> result.value.items
+                    is OrmaBackendResult.Failure -> emptyList()
+                }
+                finishScopedDashboardRefresh(
+                    refreshScope = DashboardFilterScopeProducts,
+                    requestedFilters = requestedFilters,
+                    fetchedFilters = productFilters,
+                    statusMessage = statusMessage,
+                ) {
+                    copy(
+                        suppliers = suppliers.items,
+                        categories = categories?.items ?: this.categories,
+                        offers = offers?.items ?: this.offers,
+                        products = products.items,
+                        saleCatalogProducts = saleCatalogProducts.ifEmpty { this.saleCatalogProducts },
+                        supplierPagination = suppliers.pagination,
+                        categoryPagination = categories?.pagination ?: this.categoryPagination,
+                        offerPagination = offers?.pagination ?: this.offerPagination,
+                        productPagination = products.pagination,
+                    )
+                }
+                return true
+            }
+            DashboardFilterScopeMarketing -> {
+                val requestedFilters = snapshot.dashboard.filtersForScope(DashboardFilterScopeMarketing)
+                val marketingFilters = requestedFilters.forBusinessMode(businessMode)
+                val offers = when (val result = listWithPageRecovery(snapshot.dashboard.offerPagination.page) { page ->
+                    backendClient.listProductOffers(idToken, marketingFilters.copy(page = page))
+                }) {
+                    is OrmaBackendResult.Success -> result.value
+                    is OrmaBackendResult.Failure -> null
+                }
+                val marketingProducts = when (val result = listWithPageRecovery(snapshot.dashboard.marketingProductPagination.page) { page ->
+                    backendClient.listProducts(idToken, marketingFilters.copy(page = page))
+                }) {
+                    is OrmaBackendResult.Success -> result.value
+                    is OrmaBackendResult.Failure -> {
+                        applyDashboardFailure(result.title, result.message, result.code)
+                        return true
+                    }
+                }
+                finishScopedDashboardRefresh(
+                    refreshScope = DashboardFilterScopeMarketing,
+                    requestedFilters = requestedFilters,
+                    fetchedFilters = marketingFilters,
+                    statusMessage = statusMessage,
+                ) {
+                    copy(
+                        offers = offers?.items ?: this.offers,
+                        marketingProducts = marketingProducts.items,
+                        offerPagination = offers?.pagination ?: this.offerPagination,
+                        marketingProductPagination = marketingProducts.pagination,
+                    )
+                }
+                return true
+            }
+            DashboardFilterScopeOrders -> {
+                val requestedFilters = snapshot.dashboard.filtersForScope(DashboardFilterScopeOrders)
+                val orderFilters = requestedFilters.forBusinessMode(businessMode)
+                val orders = when (val result = listWithPageRecovery(snapshot.dashboard.orderPagination.page) { page ->
+                    backendClient.listOrders(idToken, orderFilters.copy(page = page))
+                }) {
+                    is OrmaBackendResult.Success -> result.value
+                    is OrmaBackendResult.Failure -> {
+                        applyDashboardFailure(result.title, result.message, result.code)
+                        return true
+                    }
+                }
+                finishScopedDashboardRefresh(
+                    refreshScope = DashboardFilterScopeOrders,
+                    requestedFilters = requestedFilters,
+                    fetchedFilters = orderFilters,
+                    statusMessage = statusMessage,
+                ) {
+                    copy(
+                        orders = orders.items,
+                        orderPagination = orders.pagination,
+                    )
+                }
+                return true
+            }
+            DashboardFilterScopeInvoices -> {
+                val requestedFilters = snapshot.dashboard.filtersForScope(DashboardFilterScopeInvoices)
+                val invoiceFilters = requestedFilters.forBusinessMode(businessMode).copy(excludeCancelled = true)
+                val invoiceOrders = when (val result = listWithPageRecovery(snapshot.dashboard.invoicePagination.page) { page ->
+                    backendClient.listOrders(idToken, invoiceFilters.copy(page = page))
+                }) {
+                    is OrmaBackendResult.Success -> result.value
+                    is OrmaBackendResult.Failure -> {
+                        applyDashboardFailure(result.title, result.message, result.code)
+                        return true
+                    }
+                }
+                finishScopedDashboardRefresh(
+                    refreshScope = DashboardFilterScopeInvoices,
+                    requestedFilters = requestedFilters,
+                    fetchedFilters = invoiceFilters,
+                    statusMessage = statusMessage,
+                ) {
+                    copy(
+                        invoiceOrders = invoiceOrders.items,
+                        invoicePagination = invoiceOrders.pagination,
+                    )
+                }
+                return true
+            }
+        }
+        return false
+    }
+
+    fun refreshDashboard(statusMessage: String? = null, refreshScope: String? = null) {
         val snapshot = state
         if (snapshot.step != OnboardingStep.Dashboard) return
+        val normalizedRequestedRefreshScope = refreshScope
+            ?.normalizedDashboardFilterScope()
+            ?.takeIf { snapshot.dashboard.hasLoaded }
         if (snapshot.dashboard.loading) {
+            pendingDashboardRefreshRequested = true
+            pendingDashboardRefreshScope = normalizedRequestedRefreshScope
             state = snapshot.copy(
                 dashboard = snapshot.dashboard.copy(pendingRefresh = true),
             )
@@ -1090,6 +1324,22 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
         )
         scope.launch {
             val idToken = freshDashboardTokenOrError(snapshot) ?: return@launch
+            if (normalizedRequestedRefreshScope != null &&
+                refreshDashboardScope(
+                    idToken = idToken,
+                    snapshot = snapshot,
+                    refreshScope = normalizedRequestedRefreshScope,
+                    statusMessage = statusMessage,
+                )
+            ) {
+                if (pendingDashboardRefreshRequested) {
+                    val pendingRefreshScope = pendingDashboardRefreshScope
+                    pendingDashboardRefreshRequested = false
+                    pendingDashboardRefreshScope = null
+                    refreshDashboard(refreshScope = pendingRefreshScope)
+                }
+                return@launch
+            }
             val rawHomeFilters = snapshot.dashboard.filtersForScope(DashboardFilterScopeHome)
             val summary = when (val result = backendClient.getDashboardSummary(idToken, rawHomeFilters)) {
                 is OrmaBackendResult.Success -> result.value
@@ -1108,7 +1358,7 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
                 .forBusinessMode(businessMode)
             val productFilters = snapshot.dashboard.filtersForScope(DashboardFilterScopeProducts)
                 .forBusinessMode(businessMode)
-                .copy(limit = 200)
+                .copy(limit = 50)
             val marketingFilters = snapshot.dashboard.filtersForScope(DashboardFilterScopeMarketing)
                 .forBusinessMode(businessMode)
             val orderFilters = snapshot.dashboard.filtersForScope(DashboardFilterScopeOrders)
@@ -1230,7 +1480,6 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
                 (DashboardFilterScopeOrders to mergedFilters(DashboardFilterScopeOrders, snapshot.dashboard.filtersForScope(DashboardFilterScopeOrders), orderFilters)) +
                 (DashboardFilterScopeInvoices to mergedFilters(DashboardFilterScopeInvoices, snapshot.dashboard.filtersForScope(DashboardFilterScopeInvoices), invoiceFilters))
             val activeFilters = nextScopedFilters[currentDashboard.filterScope] ?: currentDashboard.filters
-            val shouldRefreshAgain = currentDashboard.pendingRefresh
             val nextSaleCatalogProducts = saleCatalogProducts
                 .ifEmpty { currentDashboard.saleCatalogProducts }
                 .ifEmpty { (products.items + marketingProducts.items).distinctBy { it.id } }
@@ -1277,7 +1526,12 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
                     filters = activeFilters,
                 ),
             )
-            if (shouldRefreshAgain) refreshDashboard()
+            if (pendingDashboardRefreshRequested) {
+                val pendingRefreshScope = pendingDashboardRefreshScope
+                pendingDashboardRefreshRequested = false
+                pendingDashboardRefreshScope = null
+                refreshDashboard(refreshScope = pendingRefreshScope)
+            }
         }
     }
 
@@ -1500,6 +1754,14 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
         val nextPage = page.coerceAtLeast(1)
         val snapshot = state
         if (snapshot.step != OnboardingStep.Dashboard) return
+        val refreshScope = when (target) {
+            DashboardPageTarget.Orders -> DashboardFilterScopeOrders
+            DashboardPageTarget.Invoices -> DashboardFilterScopeInvoices
+            DashboardPageTarget.Customers -> DashboardFilterScopeCustomers
+            DashboardPageTarget.Suppliers,
+            DashboardPageTarget.Offers,
+            DashboardPageTarget.Products -> DashboardFilterScopeProducts
+        }
         state = snapshot.copy(
             dashboard = when (target) {
                 DashboardPageTarget.Orders -> snapshot.dashboard.copy(
@@ -1522,7 +1784,7 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
                 )
             },
         )
-        refreshDashboard()
+        refreshDashboard(refreshScope = refreshScope)
     }
 
     fun markDashboardActionLoading(key: String) {
@@ -3052,36 +3314,39 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
             )
         },
         onDashboardSearchChange = { rawQuery ->
-            val scope = state.dashboard.filterScope.normalizedDashboardFilterScope()
+            val filterScope = state.dashboard.filterScope.normalizedDashboardFilterScope()
             val query = rawQuery.take(80)
             val filters = state.dashboard
-                .filtersForScope(scope)
-                .withAllDefaultsForSearch(scope = scope, query = query)
+                .filtersForScope(filterScope)
+                .withAllDefaultsForSearch(scope = filterScope, query = query)
             state = state.copy(
                 dashboard = state.dashboard.withResetPagination(
                     filters = filters,
-                    scope = scope,
+                    scope = filterScope,
                 ),
             )
-            refreshDashboard()
+            refreshDashboard(refreshScope = filterScope)
         },
         onOrderStatusFilterChange = {
+            val filterScope = state.dashboard.filterScope.normalizedDashboardFilterScope()
             state = state.copy(
                 dashboard = state.dashboard.withResetPagination(
                     filters = state.dashboard.activeFilters().copy(orderStatus = it),
                 ),
             )
-            refreshDashboard()
+            refreshDashboard(refreshScope = filterScope)
         },
         onOrderTypeFilterChange = {
+            val filterScope = state.dashboard.filterScope.normalizedDashboardFilterScope()
             state = state.copy(
                 dashboard = state.dashboard.withResetPagination(
                     filters = state.dashboard.activeFilters().copy(orderType = it),
                 ),
             )
-            refreshDashboard()
+            refreshDashboard(refreshScope = filterScope)
         },
         onDashboardDatePresetChange = { preset, dateFrom, dateTo ->
+            val filterScope = state.dashboard.filterScope.normalizedDashboardFilterScope()
             val normalizedPreset = preset.take(24).takeIf { it != "all" }.orEmpty()
             state = state.copy(
                 dashboard = state.dashboard.withResetPagination(
@@ -3092,9 +3357,10 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
                     ),
                 ),
             )
-            refreshDashboard()
+            refreshDashboard(refreshScope = filterScope)
         },
         onDashboardDateFilterChange = { dateFrom, dateTo ->
+            val filterScope = state.dashboard.filterScope.normalizedDashboardFilterScope()
             state = state.copy(
                 dashboard = state.dashboard.withResetPagination(
                     filters = state.dashboard.activeFilters().copy(
@@ -3104,31 +3370,34 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
                     ),
                 ),
             )
-            refreshDashboard()
+            refreshDashboard(refreshScope = filterScope)
         },
         onProductItemTypeFilterChange = {
+            val filterScope = state.dashboard.filterScope.normalizedDashboardFilterScope()
             state = state.copy(
                 dashboard = state.dashboard.withResetPagination(
                     filters = state.dashboard.activeFilters().copy(itemType = it),
                 ),
             )
-            refreshDashboard()
+            refreshDashboard(refreshScope = filterScope)
         },
         onProductLowStockFilterChange = {
+            val filterScope = state.dashboard.filterScope.normalizedDashboardFilterScope()
             state = state.copy(
                 dashboard = state.dashboard.withResetPagination(
                     filters = state.dashboard.activeFilters().copy(lowStockOnly = it),
                 ),
             )
-            refreshDashboard()
+            refreshDashboard(refreshScope = filterScope)
         },
         onProductCategoryFilterChange = {
+            val filterScope = state.dashboard.filterScope.normalizedDashboardFilterScope()
             state = state.copy(
                 dashboard = state.dashboard.withResetPagination(
                     filters = state.dashboard.activeFilters().copy(categoryId = it.trim().take(80)),
                 ),
             )
-            refreshDashboard()
+            refreshDashboard(refreshScope = filterScope)
         },
         onDashboardPageChange = ::changeDashboardPage,
         onLoadCustomerOrders = ::loadDashboardCustomerOrders,

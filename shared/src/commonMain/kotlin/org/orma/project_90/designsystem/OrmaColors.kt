@@ -61,8 +61,8 @@ object OrmaColors {
 
     val Divider = Accent.copy(alpha = 0.032f)
     val Hairline = Accent.copy(alpha = 0.052f)
-    val SkeletonBase = Accent.copy(alpha = 0.08f)
-    val SkeletonHighlight = Accent.copy(alpha = 0.13f)
+    val SkeletonBase = Color(0xFFE7EEF2)
+    val SkeletonHighlight = Color(0xFFF8FBFC)
     val Info = OrmaThemePreset.Info
     val Success = OrmaThemePreset.Success
     val Warning = OrmaThemePreset.Warning

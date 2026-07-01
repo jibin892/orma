@@ -5334,7 +5334,18 @@ private fun OrmaOrder.publicCatalogBalanceDueText(): String =
 private fun OrmaOrder.publicCatalogCanCollectBalancePayment(): Boolean =
     status.trim().lowercase() in PublicCatalogBalanceCollectionStatuses
 
-private val PublicCatalogBalanceCollectionStatuses = setOf("confirmed", "part_paid")
+private val PublicCatalogBalanceCollectionStatuses = setOf(
+    "confirmed",
+    "preparing",
+    "ready",
+    "packed",
+    "out_for_delivery",
+    "delivered",
+    "scheduled",
+    "checked_in",
+    "in_progress",
+    "part_paid",
+)
 
 private fun String.publicCatalogQrSafe(): Boolean =
     encodeToByteArray().size <= 106
@@ -5342,9 +5353,18 @@ private fun String.publicCatalogQrSafe(): Boolean =
 private fun OrmaOrder.publicCatalogStatusTitle(): String =
     when (status.trim().lowercase()) {
         "confirmed" -> "${orderType.publicCatalogWorkTitle()} confirmed"
+        "preparing" -> "${orderType.publicCatalogWorkTitle()} preparing"
+        "ready" -> "${orderType.publicCatalogWorkTitle()} ready"
+        "packed" -> "${orderType.publicCatalogWorkTitle()} packed"
+        "out_for_delivery" -> "Out for delivery"
+        "delivered" -> "Delivered"
+        "scheduled" -> "${orderType.publicCatalogWorkTitle()} scheduled"
+        "checked_in" -> "Checked in"
+        "in_progress" -> "${orderType.publicCatalogWorkTitle()} in progress"
         "part_paid" -> "Payment partly received"
         "paid" -> "Payment received"
         "completed" -> "${orderType.publicCatalogWorkTitle()} completed"
+        "no_show" -> "No-show"
         "cancelled" -> "${orderType.publicCatalogWorkTitle()} cancelled"
         else -> "${orderType.publicCatalogWorkTitle()} sent"
     }
@@ -5352,9 +5372,18 @@ private fun OrmaOrder.publicCatalogStatusTitle(): String =
 private fun OrmaOrder.publicCatalogStatusBody(): String =
     when (status.trim().lowercase()) {
         "confirmed" -> "The business accepted this request and will prepare the next step."
+        "preparing" -> "The business is preparing your request."
+        "ready" -> "Your request is ready for pickup or handover."
+        "packed" -> "Your request is packed."
+        "out_for_delivery" -> "Your order is out for delivery."
+        "delivered" -> "Your order was delivered."
+        "scheduled" -> "The business scheduled this request."
+        "checked_in" -> "Your appointment check-in is recorded."
+        "in_progress" -> "This request is in progress."
         "part_paid" -> "The business recorded a partial payment. They may contact you for the balance."
         "paid" -> "Payment is recorded. The business will prepare or complete the request."
         "completed" -> "This request is completed."
+        "no_show" -> "This appointment was marked as no-show."
         "cancelled" -> "The business rejected or cancelled this request."
         else -> "This request is waiting for the business to confirm or reject."
     }
@@ -5368,9 +5397,18 @@ private fun OrmaOrder.publicCatalogStatusLabel(): String =
     when (status.trim().lowercase()) {
         "draft" -> "Waiting for confirmation"
         "confirmed" -> "Confirmed"
+        "preparing" -> "Preparing"
+        "ready" -> "Ready"
+        "packed" -> "Packed"
+        "out_for_delivery" -> "Out for delivery"
+        "delivered" -> "Delivered"
+        "scheduled" -> "Scheduled"
+        "checked_in" -> "Checked in"
+        "in_progress" -> "In progress"
         "part_paid" -> "Part paid"
         "paid" -> "Paid"
         "completed" -> "Completed"
+        "no_show" -> "No-show"
         "cancelled" -> "Rejected or cancelled"
         else -> status.ifBlank { "Pending" }.replace('_', ' ').replaceFirstChar { it.uppercase() }
     }
@@ -5378,10 +5416,10 @@ private fun OrmaOrder.publicCatalogStatusLabel(): String =
 private fun OrmaOrder.publicCatalogStatusTone(): OrmaStatusTone =
     when (status.trim().lowercase()) {
         "new", "draft", "pending" -> OrmaStatusTone.Neutral
-        "confirmed" -> OrmaStatusTone.Info
+        "confirmed", "preparing", "scheduled", "checked_in", "in_progress" -> OrmaStatusTone.Info
         "part_paid" -> OrmaStatusTone.Warning
-        "paid", "completed", "fulfilled" -> OrmaStatusTone.Success
-        "cancelled", "canceled", "rejected", "rejected_or_cancelled", "failed" -> OrmaStatusTone.Danger
+        "ready", "packed", "out_for_delivery", "delivered", "paid", "completed", "fulfilled" -> OrmaStatusTone.Success
+        "no_show", "cancelled", "canceled", "rejected", "rejected_or_cancelled", "failed" -> OrmaStatusTone.Danger
         else -> OrmaStatusTone.Neutral
     }
 
@@ -5430,9 +5468,18 @@ private fun String.publicCatalogShouldPollForCustomerStatus(): Boolean =
 private fun OrmaOrder.publicCatalogCustomerUpdateTitle(): String =
     when (status.trim().lowercase()) {
         "confirmed" -> "${orderType.publicCatalogWorkTitle()} confirmed"
+        "preparing" -> "${orderType.publicCatalogWorkTitle()} preparing"
+        "ready" -> "${orderType.publicCatalogWorkTitle()} ready"
+        "packed" -> "${orderType.publicCatalogWorkTitle()} packed"
+        "out_for_delivery" -> "Out for delivery"
+        "delivered" -> "Delivered"
+        "scheduled" -> "${orderType.publicCatalogWorkTitle()} scheduled"
+        "checked_in" -> "Checked in"
+        "in_progress" -> "${orderType.publicCatalogWorkTitle()} in progress"
         "part_paid" -> "Payment update received"
         "paid" -> "Payment marked as paid"
         "completed" -> "${orderType.publicCatalogWorkTitle()} completed"
+        "no_show" -> "Marked no-show"
         "cancelled", "canceled", "rejected", "rejected_or_cancelled" -> "${orderType.publicCatalogWorkTitle()} cancelled"
         else -> "Status updated"
     }
@@ -5442,9 +5489,18 @@ private fun OrmaOrder.publicCatalogCustomerUpdateBody(): String {
     val balance = publicCatalogBalanceDueValue()
     val statusLine = when (status.trim().lowercase()) {
         "confirmed" -> "The business accepted $reference and will prepare the next step."
+        "preparing" -> "$reference is being prepared."
+        "ready" -> "$reference is ready for pickup or handover."
+        "packed" -> "$reference is packed."
+        "out_for_delivery" -> "$reference is out for delivery."
+        "delivered" -> "$reference was delivered."
+        "scheduled" -> "$reference is scheduled."
+        "checked_in" -> "Check-in is recorded for $reference."
+        "in_progress" -> "$reference is in progress."
         "part_paid" -> "The business recorded a partial payment for $reference."
         "paid" -> "The business marked payment as received for $reference."
         "completed" -> "$reference is completed."
+        "no_show" -> "$reference was marked as no-show."
         "cancelled", "canceled", "rejected", "rejected_or_cancelled" -> "The business rejected or cancelled $reference."
         else -> "$reference is now ${publicCatalogStatusLabel().lowercase()}."
     }
@@ -5470,11 +5526,19 @@ private fun List<OrmaOrder>.publicCatalogStatusFilterOptions(): List<PublicCatal
             "new" -> 0
             "draft" -> 1
             "confirmed" -> 2
-            "part_paid" -> 3
-            "paid" -> 4
-            "completed" -> 5
-            "cancelled", "canceled", "rejected", "rejected_or_cancelled" -> 6
-            else -> 7
+            "preparing" -> 3
+            "ready" -> 4
+            "packed" -> 5
+            "out_for_delivery" -> 6
+            "delivered" -> 7
+            "scheduled" -> 8
+            "checked_in" -> 9
+            "in_progress" -> 10
+            "part_paid" -> 11
+            "paid" -> 12
+            "completed" -> 13
+            "no_show", "cancelled", "canceled", "rejected", "rejected_or_cancelled" -> 14
+            else -> 15
         }
     }, { it }))
     return listOf(PublicCatalogOrderStatusFilterOption("all", "All", size)) +
@@ -5537,8 +5601,8 @@ private fun String.publicCatalogCheckoutPaymentLabel(selectedFlow: String): Stri
 private fun String.publicCatalogSessionStatusTone(): OrmaStatusTone =
     when (trim().lowercase()) {
         "completed" -> OrmaStatusTone.Success
-        "cancelled", "canceled", "missed" -> OrmaStatusTone.Danger
-        "confirmed", "scheduled" -> OrmaStatusTone.Info
+        "cancelled", "canceled", "missed", "no_show" -> OrmaStatusTone.Danger
+        "confirmed", "scheduled", "in_progress" -> OrmaStatusTone.Info
         "part_paid" -> OrmaStatusTone.Warning
         else -> OrmaStatusTone.Neutral
     }

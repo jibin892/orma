@@ -8,6 +8,8 @@ import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.hardware.usb.UsbConstants
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbEndpoint
@@ -29,8 +31,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import java.io.ByteArrayOutputStream
 import java.net.InetSocketAddress
+import java.net.URL
 import java.net.Socket
 import java.util.UUID
+import kotlin.math.min
+import kotlin.math.roundToInt
 
 @Composable
 actual fun rememberOrmaOrderDocumentExporter(): OrmaOrderDocumentExporter {
@@ -188,9 +193,9 @@ private fun printEscPosBluetooth(
         if (!adapter.isEnabled) return@runCatching false
         val device = adapter.bondedDevices.orEmpty().firstOrNull { it.matchesPrintTarget(target) }
             ?: return@runCatching false
-        val bytes = receiptPrintBytes(text)
         Thread {
             runCatching {
+                val bytes = receiptPrintBytes(text)
                 device.createRfcommSocketToServiceRecord(SerialPortProfileUuid).use { socket ->
                     socket.connect()
                     socket.outputStream.use { output ->
@@ -215,9 +220,9 @@ private fun printEscPosUsb(
             manager.requestPermission(outputTarget.device, context.usbPermissionIntent(outputTarget.device))
             return@runCatching false
         }
-        val bytes = receiptPrintBytes(text)
         Thread {
             runCatching {
+                val bytes = receiptPrintBytes(text)
                 val connection = manager.openDevice(outputTarget.device) ?: return@runCatching
                 try {
                     if (!connection.claimInterface(outputTarget.usbInterface, true)) return@runCatching
@@ -240,9 +245,9 @@ private fun printEscPosNetwork(
 ): Boolean =
     runCatching {
         val endpoint = target.address.orEmpty().toPrinterNetworkEndpoint() ?: return@runCatching false
-        val bytes = receiptPrintBytes(text)
         Thread {
             runCatching {
+                val bytes = receiptPrintBytes(text)
                 Socket().use { socket ->
                     socket.connect(InetSocketAddress(endpoint.host, endpoint.port), 3_000)
                     socket.getOutputStream().use { output ->
@@ -256,17 +261,26 @@ private fun printEscPosNetwork(
     }.getOrDefault(false)
 
 private const val ReceiptQrMarkerPrefix = "[[ORMA_QR:"
+private const val ReceiptLogoMarkerPrefix = "[[ORMA_LOGO:"
 private const val ReceiptQrMarkerSuffix = "]]"
+
+private data class ReceiptLogoMarker(
+    val url: String,
+    val maxWidthDots: Int,
+)
 
 private fun receiptPrintBytes(text: String): ByteArray =
     ByteArrayOutputStream().use { output ->
         output.write(byteArrayOf(0x1B, 0x40))
         text.lineSequence().forEach { rawLine ->
             val line = rawLine.trim()
+            val logoMarker = line.receiptLogoMarkerOrNull()
             val qrValue = line.takeIf {
                 it.startsWith(ReceiptQrMarkerPrefix) && it.endsWith(ReceiptQrMarkerSuffix)
             }?.removePrefix(ReceiptQrMarkerPrefix)?.removeSuffix(ReceiptQrMarkerSuffix)?.trim()
-            if (!qrValue.isNullOrBlank()) {
+            if (logoMarker != null) {
+                output.writeEscPosLogo(logoMarker)
+            } else if (!qrValue.isNullOrBlank()) {
                 output.writeEscPosQr(qrValue)
             } else {
                 output.write(rawLine.toByteArray(Charsets.UTF_8))
@@ -276,6 +290,92 @@ private fun receiptPrintBytes(text: String): ByteArray =
         output.write(byteArrayOf(0x0A, 0x0A, 0x1D, 0x56, 0x42, 0x00))
         output.toByteArray()
     }
+
+private fun String.receiptLogoMarkerOrNull(): ReceiptLogoMarker? {
+    if (!startsWith(ReceiptLogoMarkerPrefix) || !endsWith(ReceiptQrMarkerSuffix)) return null
+    val payload = removePrefix(ReceiptLogoMarkerPrefix)
+        .removeSuffix(ReceiptQrMarkerSuffix)
+        .trim()
+    if (payload.isBlank()) return null
+    val url = payload.substringBeforeLast("|", payload).trim()
+    val maxWidthDots = payload.substringAfterLast("|", "")
+        .toIntOrNull()
+        ?.coerceIn(160, 576)
+        ?: 384
+    return ReceiptLogoMarker(url = url, maxWidthDots = maxWidthDots)
+}
+
+private fun ByteArrayOutputStream.writeEscPosLogo(marker: ReceiptLogoMarker) {
+    val bitmap = runCatching {
+        URL(marker.url).openStream().use { input -> BitmapFactory.decodeStream(input) }
+    }.getOrNull() ?: return
+    val scaled = bitmap.scaledReceiptLogo(marker.maxWidthDots)
+    write(byteArrayOf(0x1B, 0x61, 0x01))
+    writeEscPosBitmap(scaled)
+    write(0x0A)
+    write(byteArrayOf(0x1B, 0x61, 0x00))
+    if (scaled !== bitmap) scaled.recycle()
+    bitmap.recycle()
+}
+
+private fun Bitmap.scaledReceiptLogo(maxWidthDots: Int): Bitmap {
+    val maxHeightDots = 180
+    val scale = min(
+        1f,
+        min(
+            maxWidthDots.toFloat() / width.coerceAtLeast(1).toFloat(),
+            maxHeightDots.toFloat() / height.coerceAtLeast(1).toFloat(),
+        ),
+    )
+    val targetWidth = (width * scale).roundToInt().coerceAtLeast(1)
+    val targetHeight = (height * scale).roundToInt().coerceAtLeast(1)
+    return if (targetWidth == width && targetHeight == height) {
+        this
+    } else {
+        Bitmap.createScaledBitmap(this, targetWidth, targetHeight, true)
+    }
+}
+
+private fun ByteArrayOutputStream.writeEscPosBitmap(bitmap: Bitmap) {
+    val width = bitmap.width
+    val height = bitmap.height
+    val bytesPerRow = (width + 7) / 8
+    write(
+        byteArrayOf(
+            0x1D,
+            0x76,
+            0x30,
+            0x00,
+            (bytesPerRow and 0xFF).toByte(),
+            ((bytesPerRow shr 8) and 0xFF).toByte(),
+            (height and 0xFF).toByte(),
+            ((height shr 8) and 0xFF).toByte(),
+        ),
+    )
+    for (y in 0 until height) {
+        for (byteX in 0 until bytesPerRow) {
+            var value = 0
+            for (bit in 0 until 8) {
+                val x = byteX * 8 + bit
+                if (x < width && bitmap.isDarkPixel(x, y)) {
+                    value = value or (0x80 shr bit)
+                }
+            }
+            write(value)
+        }
+    }
+}
+
+private fun Bitmap.isDarkPixel(x: Int, y: Int): Boolean {
+    val pixel = getPixel(x, y)
+    val alpha = (pixel ushr 24) and 0xFF
+    if (alpha < 128) return false
+    val red = (pixel ushr 16) and 0xFF
+    val green = (pixel ushr 8) and 0xFF
+    val blue = pixel and 0xFF
+    val luminance = (red * 30 + green * 59 + blue * 11) / 100
+    return luminance < 180
+}
 
 private fun ByteArrayOutputStream.writeEscPosQr(value: String) {
     val bytes = value.toByteArray(Charsets.UTF_8)

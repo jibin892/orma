@@ -3,6 +3,8 @@ package org.orma.project_90.documents
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import java.awt.Desktop
+import java.awt.Image
+import java.awt.image.BufferedImage
 import java.io.ByteArrayOutputStream
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -11,13 +13,17 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.nio.file.StandardOpenOption
 import java.util.Base64
 import java.util.concurrent.TimeUnit
+import javax.imageio.ImageIO
 import javax.print.DocFlavor
 import javax.print.PrintService
 import javax.print.PrintServiceLookup
 import javax.print.SimpleDoc
 import javax.print.attribute.HashPrintRequestAttributeSet
+import kotlin.math.min
+import kotlin.math.roundToInt
 
 @Composable
 actual fun rememberOrmaOrderDocumentExporter(): OrmaOrderDocumentExporter =
@@ -117,17 +123,26 @@ private fun printReceiptDirect(
 }
 
 private const val ReceiptQrMarkerPrefix = "[[ORMA_QR:"
+private const val ReceiptLogoMarkerPrefix = "[[ORMA_LOGO:"
 private const val ReceiptQrMarkerSuffix = "]]"
+
+private data class ReceiptLogoMarker(
+    val url: String,
+    val maxWidthDots: Int,
+)
 
 private fun receiptPrintBytes(text: String): ByteArray =
     ByteArrayOutputStream().use { output ->
         output.write(byteArrayOf(0x1B, 0x40))
         text.lineSequence().forEach { rawLine ->
             val line = rawLine.trim()
+            val logoMarker = line.receiptLogoMarkerOrNull()
             val qrValue = line.takeIf {
                 it.startsWith(ReceiptQrMarkerPrefix) && it.endsWith(ReceiptQrMarkerSuffix)
             }?.removePrefix(ReceiptQrMarkerPrefix)?.removeSuffix(ReceiptQrMarkerSuffix)?.trim()
-            if (!qrValue.isNullOrBlank()) {
+            if (logoMarker != null) {
+                output.writeEscPosLogo(logoMarker)
+            } else if (!qrValue.isNullOrBlank()) {
                 output.writeEscPosQr(qrValue)
             } else {
                 output.write(rawLine.toByteArray(StandardCharsets.UTF_8))
@@ -137,6 +152,91 @@ private fun receiptPrintBytes(text: String): ByteArray =
         output.write(byteArrayOf(0x0A, 0x0A, 0x1D, 0x56, 0x42, 0x00))
         output.toByteArray()
     }
+
+private fun String.receiptLogoMarkerOrNull(): ReceiptLogoMarker? {
+    if (!startsWith(ReceiptLogoMarkerPrefix) || !endsWith(ReceiptQrMarkerSuffix)) return null
+    val payload = removePrefix(ReceiptLogoMarkerPrefix)
+        .removeSuffix(ReceiptQrMarkerSuffix)
+        .trim()
+    if (payload.isBlank()) return null
+    val url = payload.substringBeforeLast("|", payload).trim()
+    val maxWidthDots = payload.substringAfterLast("|", "")
+        .toIntOrNull()
+        ?.coerceIn(160, 576)
+        ?: 384
+    return ReceiptLogoMarker(url = url, maxWidthDots = maxWidthDots)
+}
+
+private fun ByteArrayOutputStream.writeEscPosLogo(marker: ReceiptLogoMarker) {
+    val image = runCatching { ImageIO.read(URI(marker.url).toURL()) }.getOrNull() ?: return
+    val scaled = image.scaledReceiptLogo(marker.maxWidthDots)
+    write(byteArrayOf(0x1B, 0x61, 0x01))
+    writeEscPosImage(scaled)
+    write(0x0A)
+    write(byteArrayOf(0x1B, 0x61, 0x00))
+}
+
+private fun BufferedImage.scaledReceiptLogo(maxWidthDots: Int): BufferedImage {
+    val maxHeightDots = 180
+    val scale = min(
+        1f,
+        min(
+            maxWidthDots.toFloat() / width.coerceAtLeast(1).toFloat(),
+            maxHeightDots.toFloat() / height.coerceAtLeast(1).toFloat(),
+        ),
+    )
+    val targetWidth = (width * scale).roundToInt().coerceAtLeast(1)
+    val targetHeight = (height * scale).roundToInt().coerceAtLeast(1)
+    if (targetWidth == width && targetHeight == height && type == BufferedImage.TYPE_INT_RGB) return this
+    val scaled = getScaledInstance(targetWidth, targetHeight, Image.SCALE_SMOOTH)
+    val buffered = BufferedImage(targetWidth, targetHeight, BufferedImage.TYPE_INT_RGB)
+    val graphics = buffered.createGraphics()
+    try {
+        graphics.drawImage(scaled, 0, 0, null)
+    } finally {
+        graphics.dispose()
+    }
+    return buffered
+}
+
+private fun ByteArrayOutputStream.writeEscPosImage(image: BufferedImage) {
+    val width = image.width
+    val height = image.height
+    val bytesPerRow = (width + 7) / 8
+    write(
+        byteArrayOf(
+            0x1D,
+            0x76,
+            0x30,
+            0x00,
+            (bytesPerRow and 0xFF).toByte(),
+            ((bytesPerRow shr 8) and 0xFF).toByte(),
+            (height and 0xFF).toByte(),
+            ((height shr 8) and 0xFF).toByte(),
+        ),
+    )
+    for (y in 0 until height) {
+        for (byteX in 0 until bytesPerRow) {
+            var value = 0
+            for (bit in 0 until 8) {
+                val x = byteX * 8 + bit
+                if (x < width && image.isDarkPixel(x, y)) {
+                    value = value or (0x80 shr bit)
+                }
+            }
+            write(value)
+        }
+    }
+}
+
+private fun BufferedImage.isDarkPixel(x: Int, y: Int): Boolean {
+    val pixel = getRGB(x, y)
+    val red = (pixel ushr 16) and 0xFF
+    val green = (pixel ushr 8) and 0xFF
+    val blue = pixel and 0xFF
+    val luminance = (red * 30 + green * 59 + blue * 11) / 100
+    return luminance < 180
+}
 
 private fun ByteArrayOutputStream.writeEscPosQr(value: String) {
     val bytes = value.toByteArray(StandardCharsets.UTF_8)
@@ -173,6 +273,7 @@ private fun printRawNetworkReceipt(
                 output.flush()
             }
         }
+        settleDirectPrinterOutput()
         true
     }.getOrDefault(false)
 
@@ -181,9 +282,17 @@ private fun printRawDeviceReceipt(
     bytes: ByteArray,
 ): Boolean =
     runCatching {
-        Files.write(Paths.get(path), bytes)
+        Files.newOutputStream(Paths.get(path), StandardOpenOption.WRITE).use { output ->
+            output.write(bytes)
+            output.flush()
+        }
+        settleDirectPrinterOutput()
         true
     }.getOrDefault(false)
+
+private fun settleDirectPrinterOutput() {
+    runCatching { Thread.sleep(300) }
+}
 
 private fun printRawBluetoothSerialReceipt(
     target: OrmaPrintTarget,
@@ -272,6 +381,8 @@ private fun printWithLp(
         val printerName = target.address.orEmpty().trim().ifBlank { target.name.trim() }
         val command = buildList {
             add("lp")
+            add("-t")
+            add("ORMA-${System.currentTimeMillis()}")
             if (printerName.isNotBlank()) {
                 add("-d")
                 add(printerName)
@@ -286,7 +397,11 @@ private fun printWithLp(
             process.destroy()
             return@runCatching false
         }
-        process.exitValue() == 0
+        val accepted = process.exitValue() == 0
+        if (accepted) {
+            settleDirectPrinterOutput()
+        }
+        accepted
     }.getOrDefault(false)
 
 private data class PrinterNetworkEndpoint(

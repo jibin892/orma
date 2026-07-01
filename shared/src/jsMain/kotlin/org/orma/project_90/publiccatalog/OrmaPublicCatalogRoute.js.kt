@@ -13,7 +13,7 @@ actual fun currentOrmaPublicCatalogWorkspaceId(): String? {
 
 actual fun currentOrmaPublicCatalogUrl(workspaceId: String): String {
     val origin = browserOrigin().trimEnd('/')
-    return "$origin/?catalog=$workspaceId"
+    return "$origin/catalog/${workspaceId.trim().trim('/')}"
 }
 
 private fun browserPathname(): String =

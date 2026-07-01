@@ -2908,7 +2908,18 @@ private fun String.toPublicCatalogOrderReceipt(): OrmaPublicCatalogOrderReceipt 
 }
 
 private fun String.publicCatalogCanCollectBalancePayment(): Boolean =
-    trim().lowercase() in setOf("confirmed", "part_paid")
+    trim().lowercase() in setOf(
+        "confirmed",
+        "preparing",
+        "ready",
+        "packed",
+        "out_for_delivery",
+        "delivered",
+        "scheduled",
+        "checked_in",
+        "in_progress",
+        "part_paid",
+    )
 
 private fun String.toProductExport(): OrmaProductExport =
     OrmaProductExport(

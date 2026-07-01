@@ -7807,9 +7807,9 @@ class DashboardRepository(
 
     private fun String.dashboardTone(): String =
         when (trim().lowercase()) {
-            "cancelled", "failed", "send_failed" -> "danger"
+            "cancelled", "no_show", "failed", "send_failed" -> "danger"
             "new", "draft", "queued", "part_paid" -> "warning"
-            "paid", "completed", "sent", "ready", "synced" -> "success"
+            "paid", "completed", "sent", "ready", "packed", "out_for_delivery", "delivered", "synced" -> "success"
             else -> "info"
         }
 
@@ -7980,14 +7980,34 @@ class DashboardRepository(
         (total.moneyOrZero() - paidTotal.moneyOrZero()).coerceAtLeast(BigDecimal.ZERO)
 
     private fun OrderResponse.publicCatalogCanCollectBalancePayment(): Boolean =
-        status.normalizedOrderStatus() in setOf("confirmed", "part_paid")
+        status.normalizedOrderStatus() in setOf(
+            "confirmed",
+            "preparing",
+            "ready",
+            "packed",
+            "out_for_delivery",
+            "delivered",
+            "scheduled",
+            "checked_in",
+            "in_progress",
+            "part_paid",
+        )
 
     private fun OrderResponse.publicCatalogStatusMessage(): String =
         when (status.normalizedOrderStatus()) {
             "confirmed" -> "The business confirmed your ${orderType.cleanOrderType().publicCatalogWorkLabel()}."
+            "preparing" -> "The business is preparing your ${orderType.cleanOrderType().publicCatalogWorkLabel()}."
+            "ready" -> "Your ${orderType.cleanOrderType().publicCatalogWorkLabel()} is ready."
+            "packed" -> "Your ${orderType.cleanOrderType().publicCatalogWorkLabel()} is packed."
+            "out_for_delivery" -> "Your ${orderType.cleanOrderType().publicCatalogWorkLabel()} is out for delivery."
+            "delivered" -> "Your ${orderType.cleanOrderType().publicCatalogWorkLabel()} was delivered."
+            "scheduled" -> "The business scheduled your ${orderType.cleanOrderType().publicCatalogWorkLabel()}."
+            "checked_in" -> "Your appointment check-in is recorded."
+            "in_progress" -> "Your ${orderType.cleanOrderType().publicCatalogWorkLabel()} is in progress."
             "part_paid" -> "The business recorded a partial payment for this ${orderType.cleanOrderType().publicCatalogWorkLabel()}."
             "paid" -> "Payment is recorded for this ${orderType.cleanOrderType().publicCatalogWorkLabel()}."
             "completed" -> "This ${orderType.cleanOrderType().publicCatalogWorkLabel()} is completed."
+            "no_show" -> "This appointment was marked as no-show."
             "cancelled" -> "The business rejected or cancelled this ${orderType.cleanOrderType().publicCatalogWorkLabel()}."
             else -> "Your ${orderType.cleanOrderType().publicCatalogWorkLabel()} is waiting for business confirmation."
         }
@@ -8498,8 +8518,38 @@ class DashboardRepository(
     )
 
     private companion object {
-        val AllowedOrderStatuses = setOf("new", "draft", "confirmed", "paid", "part_paid", "completed", "cancelled")
-        val InventoryApplyingStatuses = setOf("confirmed", "paid", "part_paid", "completed")
+        val AllowedOrderStatuses = setOf(
+            "new",
+            "draft",
+            "confirmed",
+            "preparing",
+            "ready",
+            "packed",
+            "out_for_delivery",
+            "delivered",
+            "scheduled",
+            "checked_in",
+            "in_progress",
+            "paid",
+            "part_paid",
+            "completed",
+            "no_show",
+            "cancelled",
+        )
+        val InventoryApplyingStatuses = setOf(
+            "confirmed",
+            "preparing",
+            "ready",
+            "packed",
+            "out_for_delivery",
+            "delivered",
+            "scheduled",
+            "checked_in",
+            "in_progress",
+            "paid",
+            "part_paid",
+            "completed",
+        )
         val FullPaymentStatuses = setOf("paid", "completed")
         val AllowedItemTypes = setOf("product", "service", "appointment")
         val AllowedOrderTypes = setOf("sale", "service", "appointment")

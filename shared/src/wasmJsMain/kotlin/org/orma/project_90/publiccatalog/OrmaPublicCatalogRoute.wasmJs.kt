@@ -14,7 +14,7 @@ actual fun currentOrmaPublicCatalogWorkspaceId(): String? {
 }
 
 actual fun currentOrmaPublicCatalogUrl(workspaceId: String): String =
-    "https://orma-web-dist-dev-api.vercel.app/?catalog=$workspaceId"
+    "https://orma-web-dist-dev-api.vercel.app/catalog/${workspaceId.trim().trim('/')}"
 
 private fun browserPathname(): String =
     browserPathnameJs().toString()

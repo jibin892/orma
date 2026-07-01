@@ -266,6 +266,151 @@ fun OrmaDashboardRevenueChart(
 }
 
 @Composable
+fun OrmaDashboardRevenueSpendChart(
+    series: List<OrmaDashboardRevenuePoint>,
+    currency: String,
+    spendAmount: Double,
+    modifier: Modifier = Modifier,
+    chartHeight: Dp = 184.dp,
+) {
+    val rawRevenueValues = remember(series) {
+        series.map { point -> (point.amount.toDoubleOrNull() ?: 0.0).coerceAtLeast(0.0) }
+    }
+    val values = remember(rawRevenueValues) {
+        when (rawRevenueValues.size) {
+            0 -> listOf(0.0, 0.0)
+            1 -> listOf(0.0, rawRevenueValues.first())
+            else -> rawRevenueValues
+        }
+    }
+    val xValues = remember(values) { values.indices.map { it } }
+    val spendValues = remember(values, spendAmount) {
+        List(values.size) { spendAmount.coerceAtLeast(0.0) }
+    }
+    val maxAmount = remember(values, spendValues) {
+        listOf(
+            values.maxOrNull() ?: 0.0,
+            spendValues.maxOrNull() ?: 0.0,
+        ).maxOrNull() ?: 0.0
+    }
+    val bottomLabels = remember(series, values) {
+        val labels = series.map { it.date.shortChartDateLabel() }
+        when {
+            labels.size == values.size -> labels
+            labels.size == 1 -> listOf("", labels.first())
+            else -> List(values.size) { "" }
+        }
+    }
+    val modelProducer = remember { CartesianChartModelProducer() }
+    val rangeProvider = remember(maxAmount) {
+        CartesianLayerRangeProvider.fixed(
+            minY = 0.0,
+            maxY = (maxAmount * 1.18).coerceAtLeast(1.0),
+        )
+    }
+
+    LaunchedEffect(values, spendValues) {
+        if (values.isNotEmpty()) {
+            modelProducer.runTransaction {
+                lineModel {
+                    series(x = xValues, y = values)
+                    series(x = xValues, y = spendValues)
+                }
+            }
+        }
+    }
+
+    val revenueColor = OrmaColors.Success
+    val spendColor = OrmaColors.Warning
+    val gridLine = rememberLineComponent(
+        fill = Fill(OrmaColors.Accent.copy(alpha = 0.075f)),
+        thickness = 1.dp,
+    )
+    val baselineLine = rememberLineComponent(
+        fill = Fill(OrmaColors.Accent.copy(alpha = 0.16f)),
+        thickness = 1.dp,
+    )
+    val revenueLine = LineCartesianLayer.rememberLine(
+        fill = LineCartesianLayer.LineFill.single(Fill(revenueColor)),
+        stroke = LineCartesianLayer.LineStroke.Continuous(
+            thickness = 2.5.dp,
+            cap = StrokeCap.Round,
+        ),
+        areaFill = LineCartesianLayer.AreaFill.single(
+            Fill(
+                Brush.verticalGradient(
+                    listOf(
+                        revenueColor.copy(alpha = 0.30f),
+                        revenueColor.copy(alpha = 0.10f),
+                        Color.Transparent,
+                    ),
+                ),
+            ),
+        ),
+        interpolator = LineCartesianLayer.Interpolator.catmullRom(),
+    )
+    val spendLine = LineCartesianLayer.rememberLine(
+        fill = LineCartesianLayer.LineFill.single(Fill(spendColor)),
+        stroke = LineCartesianLayer.LineStroke.Continuous(
+            thickness = 2.2.dp,
+            cap = StrokeCap.Round,
+        ),
+        interpolator = LineCartesianLayer.Interpolator.catmullRom(),
+    )
+    val startAxisValueFormatter = remember(currency) {
+        object : CartesianValueFormatter {
+            override fun format(
+                context: CartesianMeasuringContext,
+                value: Double,
+                verticalAxisPosition: Axis.Position.Vertical?,
+            ): CharSequence = value.compactChartAmount(currency)
+        }
+    }
+    val bottomAxisValueFormatter = remember(bottomLabels) {
+        object : CartesianValueFormatter {
+            override fun format(
+                context: CartesianMeasuringContext,
+                value: Double,
+                verticalAxisPosition: Axis.Position.Vertical?,
+            ): CharSequence {
+                val index = value.roundToInt()
+                return bottomLabels.getOrNull(index).orEmpty()
+            }
+        }
+    }
+    CartesianChartHost(
+        chart = rememberCartesianChart(
+            rememberLineCartesianLayer(
+                lineProvider = LineCartesianLayer.LineProvider.series(revenueLine, spendLine),
+                rangeProvider = rangeProvider,
+            ),
+            startAxis = VerticalAxis.rememberStart(
+                line = null,
+                label = null,
+                valueFormatter = startAxisValueFormatter,
+                tick = null,
+                guideline = gridLine,
+                itemPlacer = remember { VerticalAxis.ItemPlacer.count({ 5 }, shiftTopLines = false) },
+            ),
+            bottomAxis = HorizontalAxis.rememberBottom(
+                line = baselineLine,
+                label = null,
+                tick = null,
+                guideline = null,
+                valueFormatter = bottomAxisValueFormatter,
+            ),
+        ),
+        modelProducer = modelProducer,
+        modifier = modifier
+            .height(chartHeight)
+            .semantics {
+                contentDescription = "Revenue and spend chart. Highest value $currency ${maxAmount.toMoneyLabel()}."
+            },
+        scrollState = rememberVicoScrollState(scrollEnabled = false),
+    )
+}
+
+@Composable
 fun OrmaDashboardCustomerMovementChart(
     values: List<Double>,
     labels: List<String>,

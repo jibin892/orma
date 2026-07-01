@@ -1,6 +1,6 @@
 package org.orma.project_90.designsystem
 
-import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -569,9 +569,9 @@ fun OrmaSkeleton(
     val transition = rememberInfiniteTransition(label = "OrmaSkeleton")
     val shimmerX by transition.animateFloat(
         initialValue = -320f,
-        targetValue = 760f,
+        targetValue = 1180f,
         animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = OrmaMotion.SkeletonMillis, easing = FastOutSlowInEasing),
+            animation = tween(durationMillis = OrmaMotion.SkeletonMillis, easing = LinearEasing),
             repeatMode = RepeatMode.Restart,
         ),
         label = "OrmaSkeletonShimmer",
@@ -581,11 +581,13 @@ fun OrmaSkeleton(
             brush = Brush.linearGradient(
                 colors = listOf(
                     OrmaColors.SkeletonBase,
+                    OrmaColors.SkeletonBase,
                     OrmaColors.SkeletonHighlight,
+                    OrmaColors.SkeletonBase,
                     OrmaColors.SkeletonBase,
                 ),
                 start = Offset(shimmerX, 0f),
-                end = Offset(shimmerX + 320f, 0f),
+                end = Offset(shimmerX + 420f, 180f),
             ),
         )
     } else {

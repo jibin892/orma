@@ -677,7 +677,7 @@ class OrderNotificationService(
                 "${orderWorkLabel(context.orderType).replaceFirstChar { it.uppercase() }} ${context.orderNumber} ${orderStatusLabel(context.status)}"
 
             override fun customerBody(context: OrderNotificationContext): String =
-                "Your ${orderWorkLabel(context.orderType)} is now ${orderStatusLabel(context.status).lowercase()}."
+                orderCustomerStatusBody(context)
         };
 
         abstract fun title(context: OrderNotificationContext): String
@@ -702,6 +702,27 @@ class OrderNotificationService(
                 .filter { it.isNotBlank() }
                 .joinToString(" ") { word -> word.replaceFirstChar { it.uppercase() } }
                 .ifBlank { "Updated" }
+
+        protected fun orderCustomerStatusBody(context: OrderNotificationContext): String {
+            val workLabel = orderWorkLabel(context.orderType)
+            return when (context.status.trim().lowercase()) {
+                "confirmed" -> "The business accepted your $workLabel and will start the next step."
+                "preparing" -> "Your $workLabel is being prepared."
+                "ready" -> "Your $workLabel is ready."
+                "packed" -> "Your $workLabel is packed."
+                "out_for_delivery" -> "Your $workLabel is out for delivery."
+                "delivered" -> "Your $workLabel was delivered."
+                "scheduled" -> "Your $workLabel has been scheduled."
+                "checked_in" -> "Your appointment check-in is recorded."
+                "in_progress" -> "Your $workLabel is in progress."
+                "part_paid" -> "The business recorded a partial payment for your $workLabel."
+                "paid" -> "Payment is recorded for your $workLabel."
+                "completed" -> "Your $workLabel is completed."
+                "no_show" -> "This appointment was marked as no-show."
+                "cancelled" -> "The business rejected or cancelled your $workLabel."
+                else -> "Your $workLabel is now ${orderStatusLabel(context.status).lowercase()}."
+            }
+        }
     }
 
     private fun String.notificationPreferenceColumn(): String =
