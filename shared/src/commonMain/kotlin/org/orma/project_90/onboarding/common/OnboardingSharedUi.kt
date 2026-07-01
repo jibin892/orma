@@ -34056,6 +34056,8 @@ private val DashboardPrinterConnectionTypes = listOf(
     "mtp_usb",
     "bluetooth",
     "network",
+    "local_agent",
+    "browser_print",
     "airprint",
     "system",
     "esc_pos",
@@ -34125,6 +34127,8 @@ private fun String.printerConnectionLabel(): String =
         "usb" -> "USB / system"
         "bluetooth" -> "Bluetooth"
         "network" -> "Network IP"
+        "local_agent" -> "Local print agent"
+        "browser_print" -> "Browser print"
         "airprint" -> "AirPrint"
         "system" -> "System printer"
         "esc_pos" -> "ESC/POS"
@@ -34136,6 +34140,8 @@ private fun String.printerAddressLabel(): String =
     when (trim().lowercase()) {
         "network" -> "IP address or hostname"
         "bluetooth" -> "Bluetooth printer name"
+        "local_agent" -> "Local agent URL"
+        "browser_print" -> "Browser print target"
         "mtp_usb" -> "USB device id"
         "airprint" -> "AirPrint printer name"
         "system" -> "System printer name"
@@ -34147,6 +34153,8 @@ private fun String.printerAddressPlaceholder(): String =
     when (trim().lowercase()) {
         "network" -> "192.168.1.45 or receipt-printer.local"
         "bluetooth" -> "BT-Receipt-80"
+        "local_agent" -> "http://127.0.0.1:39201/print"
+        "browser_print" -> "Leave blank to use the browser print dialog"
         "mtp_usb" -> "Leave blank for the connected MTP/USB printer, or use vendorId:productId"
         "airprint" -> "Office AirPrint receipt"
         "system" -> "Default receipt printer"
@@ -34158,6 +34166,8 @@ private fun String.printerSetupHint(): String =
     when (trim().lowercase()) {
         "network" -> "Works best when every counter device can reach the same LAN printer IP."
         "bluetooth" -> "Android prints to a paired Bluetooth device. Desktop uses a matching system printer or macOS Bluetooth serial port when available."
+        "local_agent" -> "Web sends receipts to the ORMA desktop app running on this computer, then the desktop app prints through the OS printer."
+        "browser_print" -> "Web opens the browser print dialog. Choose any printer installed in the operating system."
         "mtp_usb" -> "Android sends ESC/POS directly to the connected portable thermal printer over USB/OTG."
         "airprint" -> "Use this for iPhone, iPad, or macOS devices with AirPrint-visible printers."
         "system" -> "Uses the operating system print dialog on web, desktop, Android, and iOS."
@@ -34188,6 +34198,8 @@ private fun OrmaHardwareConnectorDevice.toPrinterConnectionType(): String {
     val normalized = connectorType.trim().lowercase()
     return when {
         normalized.contains("bluetooth") -> "bluetooth"
+        normalized.contains("local") && normalized.contains("agent") -> "local_agent"
+        normalized.contains("browser") -> "browser_print"
         normalized.contains("mtp") || normalized.contains("usb") -> "mtp_usb"
         address.orEmpty().startsWith("tcp://", ignoreCase = true) -> "network"
         normalized.contains("network") -> "network"
@@ -42452,7 +42464,8 @@ private fun DashboardPrinterDeviceCoveragePanel() {
             )
             OrmaKeyValueList(
                 rows = listOf(
-                    "Web and desktop" to "System printer, macOS Bluetooth serial, raw path, or tcp://IP:9100",
+                    "Web" to "Browser print dialog or ORMA desktop local print agent",
+                    "Desktop Mac/Windows" to "OS printer first, then raw path, macOS Bluetooth serial, or tcp://IP:9100",
                     "Android" to "MTP/USB OTG, Bluetooth SPP, network ESC/POS, or system print",
                     "iPhone and iPad" to "AirPrint or installed print services",
                 ),

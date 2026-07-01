@@ -11,8 +11,14 @@ actual fun rememberOrmaHardwareConnectorSnapshot(): OrmaHardwareConnectorSnapsho
             printDevices = listOf(
                 OrmaHardwareConnectorDevice(
                     name = "Browser system print",
-                    connectorType = "System dialog",
+                    connectorType = "Browser print",
                     status = "available",
+                ),
+                OrmaHardwareConnectorDevice(
+                    name = "ORMA desktop local print agent",
+                    connectorType = "Local print agent",
+                    address = "http://127.0.0.1:39201/print",
+                    status = "available when desktop app is open",
                 ),
             ),
             barcodeDevices = listOf(
@@ -22,7 +28,7 @@ actual fun rememberOrmaHardwareConnectorSnapshot(): OrmaHardwareConnectorSnapsho
                     status = "listening",
                 ),
             ),
-            printFallback = "Browsers do not expose installed printer names. Use system print or a saved tcp://IP:9100 network printer.",
+            printFallback = "Browsers do not expose installed printer names. Use browser print, or open ORMA desktop on this computer and select the local print agent.",
             barcodeFallback = "Connect a scanner in keyboard mode and keep ORMA focused while scanning.",
         )
     }

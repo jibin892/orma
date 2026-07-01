@@ -8549,6 +8549,8 @@ class DashboardRepository(
             "network",
             "airprint",
             "system",
+            "browser_print",
+            "local_agent",
             "esc_pos",
         )
     }

@@ -47,31 +47,42 @@ actual fun rememberOrmaOrderDocumentExporter(): OrmaOrderDocumentExporter =
                 }.getOrDefault(false)
 
             override fun printHtml(title: String, html: String): Boolean =
-                runCatching {
-                    val file = writePrintableHtml(title = title, html = html)
-                    if (!Desktop.isDesktopSupported()) return@runCatching false
-                    val desktop = Desktop.getDesktop()
-                    when {
-                        desktop.isSupported(Desktop.Action.PRINT) -> desktop.print(file.toFile())
-                        desktop.isSupported(Desktop.Action.OPEN) -> desktop.open(file.toFile())
-                        else -> return@runCatching false
-                    }
-                    true
-                }.getOrDefault(false)
+                ormaPrintHtmlOnJvm(title = title, html = html)
 
             override fun printReceipt(
                 title: String,
                 html: String,
                 text: String,
                 target: OrmaPrintTarget?,
-            ): Boolean {
-                if (target != null && printReceiptDirect(target = target, text = text)) {
-                    return true
-                }
-                return printHtml(title = title, html = html)
-            }
+            ): Boolean =
+                ormaPrintReceiptOnJvm(title = title, html = html, text = text, target = target)
         }
     }
+
+fun ormaPrintHtmlOnJvm(title: String, html: String): Boolean =
+    runCatching {
+        val file = writePrintableHtml(title = title, html = html)
+        if (!Desktop.isDesktopSupported()) return@runCatching false
+        val desktop = Desktop.getDesktop()
+        when {
+            desktop.isSupported(Desktop.Action.PRINT) -> desktop.print(file.toFile())
+            desktop.isSupported(Desktop.Action.OPEN) -> desktop.open(file.toFile())
+            else -> return@runCatching false
+        }
+        true
+    }.getOrDefault(false)
+
+fun ormaPrintReceiptOnJvm(
+    title: String,
+    html: String,
+    text: String,
+    target: OrmaPrintTarget?,
+): Boolean {
+    if (target != null && printReceiptDirect(target = target, text = text)) {
+        return true
+    }
+    return ormaPrintHtmlOnJvm(title = title, html = html)
+}
 
 private fun printReceiptDirect(
     target: OrmaPrintTarget,
@@ -81,6 +92,8 @@ private fun printReceiptDirect(
     val address = target.address.orEmpty().trim()
     val bytes = receiptPrintBytes(text)
     return when {
+        type == "browser_print" -> false
+        type == "local_agent" -> false
         type == "bluetooth" -> {
             printRawBluetoothSerialReceipt(target = target, bytes = bytes) ||
                 printWithSystemPrinter(target = target, bytes = bytes) ||

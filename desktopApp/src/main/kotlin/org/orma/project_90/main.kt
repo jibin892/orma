@@ -10,10 +10,14 @@ import javax.imageio.ImageIO
 
 fun main() {
     configureDesktopIcon()
+    OrmaLocalPrintAgent.start()
 
     application {
         Window(
-            onCloseRequest = ::exitApplication,
+            onCloseRequest = {
+                OrmaLocalPrintAgent.stop()
+                exitApplication()
+            },
             icon = painterResource("orma-app-icon.png"),
             state = rememberWindowState(width = 1180.dp, height = 760.dp),
             title = "Orma",
