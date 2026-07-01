@@ -215,6 +215,8 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
             workspaceLogoUrl = workspace?.logoUrl.orEmpty(),
             workspaceCoverFileName = workspace?.coverFileName.orEmpty(),
             workspaceCoverUrl = workspace?.coverUrl.orEmpty(),
+            workspaceReceiptLogoFileName = workspace?.receiptLogoFileName.orEmpty(),
+            workspaceReceiptLogoUrl = workspace?.receiptLogoUrl.orEmpty(),
             notificationsEnabled = backendSession.user.notificationsEnabled,
             notificationChannels = backendSession.user.notificationChannels,
             teamProfileName = if (resolvedPath == AccessPath.TeamMember) profileName else "",
@@ -246,6 +248,8 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
                 postalCode = workspace?.postalCode?.takeIf { it.isNotBlank() }
                     ?: authenticatedState.draft.postalCode,
                 logoFileName = authenticatedState.draft.logoFileName.ifBlank { workspace?.logoFileName.orEmpty() },
+                receiptLogoFileName = authenticatedState.draft.receiptLogoFileName
+                    .ifBlank { workspace?.receiptLogoFileName.orEmpty() },
                 invoicePrefix = workspace?.invoicePrefix?.takeIf { it.isNotBlank() }
                     ?: authenticatedState.draft.invoicePrefix,
                 nextInvoiceNumber = workspace?.nextInvoiceNumber?.takeIf { it.isNotBlank() }
@@ -551,6 +555,68 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
                 code = result.code,
             )
             is OrmaLogoPickerResult.Success -> uploadBusinessCover(result.image)
+        }
+    }
+
+    fun uploadReceiptLogo(image: OrmaPickedImage) {
+        val snapshot = state
+        if (snapshot.receiptLogoUploadLoading) return
+        if (image.sizeBytes > MaxLogoUploadBytes) {
+            applyBackendFailure(
+                title = "Receipt logo too large",
+                message = "Choose a PNG, JPG, or WebP image up to 5 MB.",
+                code = "RECEIPT_LOGO_TOO_LARGE",
+            )
+            return
+        }
+        val idToken = backendTokenOrError(snapshot) ?: return
+        state = snapshot.copy(
+            receiptLogoUploadLoading = true,
+            authStatusMessage = null,
+            authErrorTitle = null,
+            authErrorMessage = null,
+            authErrorCode = null,
+            draft = snapshot.draft.copy(
+                receiptLogoFileName = image.fileName,
+                receiptLogoPreviewContentType = image.contentType,
+                receiptLogoPreviewBytes = image.bytes,
+            ),
+        )
+        scope.launch {
+            when (val result = backendClient.uploadReceiptLogo(idToken, image)) {
+                is OrmaBackendResult.Success -> {
+                    val storagePath = result.value.storagePath.ifBlank { image.fileName }
+                    state = state.copy(
+                        receiptLogoUploadLoading = false,
+                        workspaceReceiptLogoFileName = storagePath,
+                        workspaceReceiptLogoUrl = result.value.downloadUrl.orEmpty(),
+                        authStatusMessage = "Receipt logo uploaded.",
+                        authErrorTitle = null,
+                        authErrorMessage = null,
+                        authErrorCode = null,
+                        draft = state.draft.copy(
+                            receiptLogoFileName = storagePath,
+                            receiptLogoPreviewContentType = image.contentType,
+                            receiptLogoPreviewBytes = image.bytes,
+                        ),
+                    )
+                }
+                is OrmaBackendResult.Failure -> applyBackendFailure(result.title, result.message, result.code)
+            }
+        }
+    }
+
+    fun handleReceiptLogoPickerResult(result: OrmaLogoPickerResult) {
+        when (result) {
+            OrmaLogoPickerResult.Cancelled -> {
+                state = state.copy(receiptLogoUploadLoading = false)
+            }
+            is OrmaLogoPickerResult.Failure -> applyBackendFailure(
+                title = result.title,
+                message = result.message,
+                code = result.code,
+            )
+            is OrmaLogoPickerResult.Success -> uploadReceiptLogo(result.image)
         }
     }
 
@@ -2740,6 +2806,7 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
 
     val logoPicker = rememberOrmaBusinessLogoPicker(::handleLogoPickerResult)
     val coverPicker = rememberOrmaBusinessLogoPicker(::handleCoverPickerResult)
+    val receiptLogoPicker = rememberOrmaBusinessLogoPicker(::handleReceiptLogoPickerResult)
 
     LaunchedEffect(Unit) {
         restoreSavedSession()
@@ -2913,6 +2980,12 @@ fun OrmaOnboardingFlow(modifier: Modifier = Modifier) {
             if (snapshot.coverUploadLoading || snapshot.onboardingLoading) return@OnboardingActions
             if (backendTokenOrError(snapshot) == null) return@OnboardingActions
             coverPicker.launch()
+        },
+        onReceiptLogoUploadRequest = {
+            val snapshot = state
+            if (snapshot.receiptLogoUploadLoading || snapshot.onboardingLoading) return@OnboardingActions
+            if (backendTokenOrError(snapshot) == null) return@OnboardingActions
+            receiptLogoPicker.launch()
         },
         onSetupStepChange = { state = state.copy(setupStep = it) },
         onNotificationDecision = ::saveNotificationDecision,

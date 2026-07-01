@@ -103,6 +103,7 @@ fun com.orma.backend.db.WorkspaceRecord.toResponse(): WorkspaceResponse =
         onboardingComplete = onboardingComplete,
         logoFileName = logoFileName,
         coverFileName = coverFileName,
+        receiptLogoFileName = receiptLogoFileName,
         website = website,
         isTaxRegistered = isTaxRegistered,
         taxNumber = taxNumber,
@@ -125,6 +126,7 @@ fun com.orma.backend.db.WorkspaceRecord.toResponse(config: AppConfig): Workspace
     toResponse().copy(
         logoUrl = logoFileName.toMediaUrl(config),
         coverUrl = coverFileName.toMediaUrl(config),
+        receiptLogoUrl = receiptLogoFileName.toMediaUrl(config),
     )
 
 fun String?.toMediaUrl(config: AppConfig): String? {

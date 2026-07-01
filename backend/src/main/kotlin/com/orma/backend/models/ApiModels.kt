@@ -101,6 +101,8 @@ data class WorkspaceResponse(
     val logoUrl: String? = null,
     val coverFileName: String? = null,
     val coverUrl: String? = null,
+    val receiptLogoFileName: String? = null,
+    val receiptLogoUrl: String? = null,
     val website: String? = null,
     val isTaxRegistered: Boolean? = null,
     val taxNumber: String? = null,

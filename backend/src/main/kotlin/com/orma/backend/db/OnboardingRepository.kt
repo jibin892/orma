@@ -41,6 +41,7 @@ data class WorkspaceRecord(
     val onboardingComplete: Boolean,
     val logoFileName: String?,
     val coverFileName: String?,
+    val receiptLogoFileName: String?,
     val website: String? = null,
     val isTaxRegistered: Boolean? = null,
     val taxNumber: String? = null,
@@ -461,6 +462,15 @@ class OnboardingRepository(
         }
     }
 
+    suspend fun saveReceiptLogo(
+        workspaceId: String,
+        storagePath: String,
+    ) = withContext(Dispatchers.IO) {
+        dataSource.connection.use { connection ->
+            connection.updateReceiptLogo(workspaceId, storagePath)
+        }
+    }
+
     suspend fun saveProductImage(
         workspaceId: String,
         userId: String,
@@ -570,6 +580,7 @@ class OnboardingRepository(
                 bw.onboarding_completed_at is not null as onboarding_complete,
                 bw.logo_file_name,
                 bw.cover_file_name,
+                bw.receipt_logo_file_name,
                 bw.website,
                 bw.is_tax_registered,
                 bw.tax_number,
@@ -715,6 +726,7 @@ class OnboardingRepository(
                 onboarding_completed_at is not null as onboarding_complete,
                 logo_file_name,
                 cover_file_name,
+                receipt_logo_file_name,
                 website,
                 is_tax_registered,
                 tax_number,
@@ -783,6 +795,7 @@ class OnboardingRepository(
                 onboarding_completed_at is not null as onboarding_complete,
                 logo_file_name,
                 cover_file_name,
+                receipt_logo_file_name,
                 website,
                 is_tax_registered,
                 tax_number,
@@ -1404,6 +1417,22 @@ class OnboardingRepository(
         }
     }
 
+    private fun Connection.updateReceiptLogo(
+        workspaceId: String,
+        storagePath: String,
+    ) {
+        val sql = """
+            update business_workspaces
+            set receipt_logo_file_name = ?, updated_at = now()
+            where id = ?::uuid
+        """.trimIndent()
+        prepareStatement(sql).use { statement ->
+            statement.setString(1, storagePath)
+            statement.setString(2, workspaceId)
+            statement.executeUpdate()
+        }
+    }
+
     private fun Connection.insertProductImage(
         workspaceId: String,
         userId: String,
@@ -1668,6 +1697,7 @@ class OnboardingRepository(
             onboardingComplete = getBoolean("onboarding_complete"),
             logoFileName = getString("logo_file_name"),
             coverFileName = runCatching { getString("cover_file_name") }.getOrNull(),
+            receiptLogoFileName = runCatching { getString("receipt_logo_file_name") }.getOrNull(),
             website = runCatching { getString("website") }.getOrNull(),
             isTaxRegistered = runCatching { getBoolean("is_tax_registered") }.getOrNull(),
             taxNumber = runCatching { getString("tax_number") }.getOrNull(),

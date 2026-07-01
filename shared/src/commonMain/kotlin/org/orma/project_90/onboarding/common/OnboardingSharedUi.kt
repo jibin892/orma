@@ -34272,6 +34272,17 @@ private fun receiptLogoMark(name: String): String {
     return "[$initials]"
 }
 
+private fun receiptLogoHtml(name: String, logoUrl: String?): String {
+    val url = logoUrl
+        ?.trim()
+        ?.takeIf { it.startsWith("https://") || it.startsWith("http://") }
+    return if (url != null) {
+        """<img class="receipt-logo" src="${url.orderDocumentEscaped()}" alt="Receipt logo">"""
+    } else {
+        """<p class="logo-mark">${receiptLogoMark(name).orderDocumentEscaped()}</p>"""
+    }
+}
+
 private fun receiptTimedGreeting(): String {
     val hour = ormaCurrentIsoDate().substringAfter('T', "").take(2).toIntOrNull()
     return when (hour) {
@@ -34286,9 +34297,11 @@ private fun printerTestPrintHtml(
     workspaceName: String,
     printer: OrmaPrinterProfile,
     catalogUrl: String?,
+    receiptLogoUrl: String? = null,
 ): String {
     val businessName = workspaceName.ifBlank { "ORMA workspace" }
     val textAlign = if (printer.headerAlignment.printerHeaderAlignment() == "left") "left" else "center"
+    val logoMargin = if (textAlign == "left") "0 auto 6px 0" else "0 auto 6px"
     val catalogBlock = if (printer.showCatalogQr && !catalogUrl.isNullOrBlank()) {
         val qrSvg = ormaQrCodeSvg(catalogUrl)
         """
@@ -34321,6 +34334,7 @@ private fun printerTestPrintHtml(
             h1 { font-size: 18px; margin: 0 0 4px; }
             p { margin: 0 0 8px; }
             .muted { color: #6F8583; }
+            .receipt-logo { display: block; max-width: 54mm; max-height: 18mm; object-fit: contain; margin: $logoMargin; }
             .line { border-top: 1px dashed #9AA9A7; margin: 10px 0; }
             .qr { text-align: center; margin: 8px 0; }
             .qr svg { display: block; margin: 0 auto 6px; width: 88px; height: 88px; }
@@ -34331,7 +34345,7 @@ private fun printerTestPrintHtml(
         <body>
           <div class="receipt">
             <div class="header">
-              ${if (printer.printLogo) "<p>${receiptLogoMark(businessName).orderDocumentEscaped()}</p>" else ""}
+              ${if (printer.printLogo) receiptLogoHtml(businessName, receiptLogoUrl) else ""}
               <h1>${businessName.orderDocumentEscaped()}</h1>
               <p class="muted">Printer test</p>
             </div>
@@ -35875,8 +35889,9 @@ private fun orderReceiptHtml(
     val showAddress = printer?.showBusinessAddress != false
     val alignment = printer?.headerAlignment?.printerHeaderAlignment() ?: "center"
     val headerAlign = if (alignment == "left") "left" else "center"
+    val logoMargin = if (headerAlign == "left") "0 auto 6px 0" else "0 auto 6px"
     val logoHtml = if (printer?.printLogo == true) {
-        """<p class="logo-mark">${receiptLogoMark(issuerName).orderDocumentEscaped()}</p>"""
+        receiptLogoHtml(issuerName, state.workspaceReceiptLogoUrl)
     } else {
         ""
     }
@@ -35927,6 +35942,13 @@ private fun orderReceiptHtml(
             .center { text-align: center; }
             .header { text-align: $headerAlign; }
             .logo-mark { margin-bottom: 4px; font-weight: 700; letter-spacing: 1px; }
+            .receipt-logo {
+              display: block;
+              max-width: 54mm;
+              max-height: 18mm;
+              object-fit: contain;
+              margin: $logoMargin;
+            }
             h1 { margin: 0 0 4px; font-size: 18px; font-weight: 600; }
             p { margin: 0; }
             .muted { color: rgba(23, 59, 61, 0.56); }
@@ -39945,6 +39967,9 @@ private fun DashboardMobileAccountContent(
         .ifBlank { state.draft.logoFileName }
         .ifBlank { state.workspaceLogoUrl }
     val coverFileName = state.workspaceCoverFileName.ifBlank { state.workspaceCoverUrl }
+    val receiptLogoFileName = state.workspaceReceiptLogoFileName
+        .ifBlank { state.draft.receiptLogoFileName }
+        .ifBlank { state.workspaceReceiptLogoUrl }
     val orderingUrl = state.workspaceId.trim().takeIf { it.isNotBlank() }?.let(::currentOrmaPublicCatalogUrl)
     val activeItemType = state.activeDashboardItemType()
 
@@ -39986,6 +40011,17 @@ private fun DashboardMobileAccountContent(
                     body = if (coverFileName.isNotBlank()) "Cover photo selected" else "Add a public catalog cover.",
                     trailingText = if (coverFileName.isNotBlank()) "Change" else "Add",
                     onClick = actions.onCoverUploadRequest,
+                )
+                DashboardMobileAccountRow(
+                    icon = DashboardNavIconKind.Invoice,
+                    title = "MTP receipt logo",
+                    body = if (receiptLogoFileName.isNotBlank()) {
+                        "Receipt logo selected"
+                    } else {
+                        "Add a small thermal receipt logo."
+                    },
+                    trailingText = if (receiptLogoFileName.isNotBlank()) "Change" else "Add",
+                    onClick = actions.onReceiptLogoUploadRequest,
                 )
             } else {
                 DashboardMobileAccountRow(
@@ -40159,6 +40195,7 @@ private fun DashboardMobileAccountContent(
                                     workspaceName = workspaceName,
                                     printer = printer,
                                     catalogUrl = orderingUrl,
+                                    receiptLogoUrl = state.workspaceReceiptLogoUrl,
                                 ),
                                 text = printerTestPrintText(
                                     workspaceName = workspaceName,
@@ -40239,6 +40276,7 @@ private fun DashboardMobileAccountContent(
             roleLabel = roleLabel,
             logoFileName = logoFileName,
             coverFileName = coverFileName,
+            receiptLogoFileName = receiptLogoFileName,
             orderingUrl = orderingUrl,
             canManageAccountSetup = canManageAccountSetup,
             onEditBusiness = {
@@ -40252,6 +40290,10 @@ private fun DashboardMobileAccountContent(
             onChangeCover = {
                 showBusinessProfileSheet = false
                 actions.onCoverUploadRequest()
+            },
+            onChangeReceiptLogo = {
+                showBusinessProfileSheet = false
+                actions.onReceiptLogoUploadRequest()
             },
             onDismiss = { showBusinessProfileSheet = false },
         )
@@ -40439,11 +40481,13 @@ private fun DashboardMobileBusinessProfileSheet(
     roleLabel: String,
     logoFileName: String,
     coverFileName: String,
+    receiptLogoFileName: String,
     orderingUrl: String?,
     canManageAccountSetup: Boolean,
     onEditBusiness: () -> Unit,
     onChangeLogo: () -> Unit,
     onChangeCover: () -> Unit,
+    onChangeReceiptLogo: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val draft = state.draft
@@ -40490,6 +40534,7 @@ private fun DashboardMobileBusinessProfileSheet(
             rows = listOf(
                 "Logo" to if (logoFileName.isNotBlank()) "Uploaded" else "Not uploaded",
                 "Cover photo" to if (coverFileName.isNotBlank()) "Uploaded" else "Not uploaded",
+                "MTP receipt logo" to if (receiptLogoFileName.isNotBlank()) "Uploaded" else "Not uploaded",
                 "Public ordering" to (orderingUrl ?: "Not available"),
             ),
         )
@@ -40518,6 +40563,12 @@ private fun DashboardMobileBusinessProfileSheet(
                     enabled = !state.coverUploadLoading,
                 )
             }
+            OrmaSecondaryButton(
+                text = if (receiptLogoFileName.isNotBlank()) "Change receipt logo" else "Add receipt logo",
+                onClick = onChangeReceiptLogo,
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !state.receiptLogoUploadLoading,
+            )
         } else {
             DashboardChecklistRow(text = "This role can view account details. Owner or account manager permission is required to edit business setup, logo, and cover photo.")
         }
@@ -41606,6 +41657,9 @@ private fun DashboardAccountLogoCard(
         .ifBlank { draft.logoFileName }
     val logoRemoteUrl = state.workspaceLogoUrl
     val coverFileName = state.workspaceCoverFileName.ifBlank { state.workspaceCoverUrl }
+    val receiptLogoFileName = state.workspaceReceiptLogoFileName
+        .ifBlank { draft.receiptLogoFileName }
+    val receiptLogoRemoteUrl = state.workspaceReceiptLogoUrl
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -41615,12 +41669,12 @@ private fun DashboardAccountLogoCard(
             tone = OrmaStatusTone.Success,
         )
         Text(
-            text = "Business logo and cover",
+            text = "Business media and receipts",
             style = MaterialTheme.typography.titleMedium,
             color = OrmaColors.TextPrimary,
         )
         Text(
-            text = "Used on your workspace, public catalog, QR ordering, invoices, and customer-facing documents.",
+            text = "Used on your workspace, public catalog, invoices, and MTP thermal receipts.",
             style = MaterialTheme.typography.bodyMedium,
             color = OrmaColors.TextSecondary,
         )
@@ -41639,6 +41693,23 @@ private fun DashboardAccountLogoCard(
             selected = logoFileName.isNotBlank() || logoRemoteUrl.isNotBlank() || draft.logoPreviewBytes.isNotEmpty(),
             uploading = state.logoUploadLoading,
             onClick = actions.onLogoUploadRequest,
+        )
+        LogoUploadCard(
+            initials = businessInitial(draft),
+            fileName = receiptLogoFileName,
+            remoteUrl = receiptLogoRemoteUrl,
+            previewBytes = draft.receiptLogoPreviewBytes,
+            selected = receiptLogoFileName.isNotBlank() ||
+                receiptLogoRemoteUrl.isNotBlank() ||
+                draft.receiptLogoPreviewBytes.isNotEmpty(),
+            uploading = state.receiptLogoUploadLoading,
+            uploadTitle = "Uploading MTP receipt logo",
+            readyTitle = "MTP receipt logo ready",
+            emptyTitle = "Upload MTP receipt logo",
+            emptyBody = "Small high-contrast PNG/JPG for thermal receipts. Used when the printer setting is enabled.",
+            previewContentDescription = "MTP receipt logo preview",
+            actionText = "Choose receipt logo",
+            onClick = actions.onReceiptLogoUploadRequest,
         )
     }
 }
@@ -42031,6 +42102,7 @@ private fun DashboardAccountPrinterCard(
                                 workspaceName = state.workspaceName.ifBlank { state.draft.businessName },
                                 printer = printer,
                                 catalogUrl = orderingUrl,
+                                receiptLogoUrl = state.workspaceReceiptLogoUrl,
                             ),
                             text = printerTestPrintText(
                                 workspaceName = state.workspaceName.ifBlank { state.draft.businessName },
@@ -42587,8 +42659,8 @@ private fun PrinterFormSheet(
             onSelected = { draft = draft.copy(headerAlignment = it) },
         )
         OrmaSwitchRow(
-            title = "Print logo mark",
-            body = "Print compact business initials above the receipt header.",
+            title = "Print receipt logo",
+            body = "Use the uploaded MTP receipt logo on receipt preview/system print. Direct thermal print falls back to a compact mark.",
             checked = draft.printLogo,
             onCheckedChange = { draft = draft.copy(printLogo = it) },
         )
@@ -43153,6 +43225,12 @@ private fun LogoUploadCard(
     previewBytes: ByteArray,
     selected: Boolean,
     uploading: Boolean,
+    uploadTitle: String = "Uploading business logo",
+    readyTitle: String = "Business logo ready",
+    emptyTitle: String = "Upload business logo",
+    emptyBody: String = "PNG or JPG, ideally square. Used on invoices and estimates.",
+    previewContentDescription: String = "Business logo preview",
+    actionText: String = "Choose logo",
     onClick: () -> Unit,
 ) {
     Surface(
@@ -43191,17 +43269,23 @@ private fun LogoUploadCard(
                             remoteUrl = remoteUrl,
                             previewBytes = previewBytes,
                             selected = selected,
+                            contentDescription = previewContentDescription,
                         )
                         LogoUploadCopy(
                             selected = selected,
                             fileName = fileName,
                             uploading = uploading,
+                            uploadTitle = uploadTitle,
+                            readyTitle = readyTitle,
+                            emptyTitle = emptyTitle,
+                            emptyBody = emptyBody,
                             modifier = Modifier.weight(1f),
                         )
                     }
                     LogoUploadActionPill(
                         selected = selected,
                         uploading = uploading,
+                        actionText = actionText,
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
@@ -43216,14 +43300,19 @@ private fun LogoUploadCard(
                         remoteUrl = remoteUrl,
                         previewBytes = previewBytes,
                         selected = selected,
+                        contentDescription = previewContentDescription,
                     )
                     LogoUploadCopy(
                         selected = selected,
                         fileName = fileName,
                         uploading = uploading,
+                        uploadTitle = uploadTitle,
+                        readyTitle = readyTitle,
+                        emptyTitle = emptyTitle,
+                        emptyBody = emptyBody,
                         modifier = Modifier.weight(1f),
                     )
-                    LogoUploadActionPill(selected = selected, uploading = uploading)
+                    LogoUploadActionPill(selected = selected, uploading = uploading, actionText = actionText)
                 }
             }
         }
@@ -43354,6 +43443,7 @@ private fun LogoPreviewTile(
     remoteUrl: String = "",
     previewBytes: ByteArray,
     selected: Boolean,
+    contentDescription: String = "Business logo preview",
 ) {
     val hasPreview = previewBytes.isNotEmpty()
     val hasRemotePreview = remoteUrl.isNotBlank()
@@ -43377,7 +43467,7 @@ private fun LogoPreviewTile(
                 hasPreview -> {
                     OrmaLogoPreviewImage(
                         bytes = previewBytes,
-                        contentDescription = "Business logo preview",
+                        contentDescription = contentDescription,
                         modifier = Modifier
                             .fillMaxSize()
                             .clip(RoundedCornerShape(22.dp)),
@@ -43386,7 +43476,7 @@ private fun LogoPreviewTile(
                 hasRemotePreview -> {
                     OrmaRemoteImage(
                         url = remoteUrl,
-                        contentDescription = "Business logo preview",
+                        contentDescription = contentDescription,
                         modifier = Modifier
                             .fillMaxSize()
                             .clip(RoundedCornerShape(22.dp)),
@@ -43416,6 +43506,10 @@ private fun LogoUploadCopy(
     selected: Boolean,
     fileName: String,
     uploading: Boolean,
+    uploadTitle: String = "Uploading business logo",
+    readyTitle: String = "Business logo ready",
+    emptyTitle: String = "Upload business logo",
+    emptyBody: String = "PNG or JPG, ideally square. Used on invoices and estimates.",
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -43424,9 +43518,9 @@ private fun LogoUploadCopy(
     ) {
         Text(
             text = when {
-                uploading -> "Uploading business logo"
-                selected -> "Business logo ready"
-                else -> "Upload business logo"
+                uploading -> uploadTitle
+                selected -> readyTitle
+                else -> emptyTitle
             },
             style = MaterialTheme.typography.titleSmall,
             color = OrmaColors.TextPrimary,
@@ -43437,7 +43531,7 @@ private fun LogoUploadCopy(
             text = when {
                 uploading -> "Please wait while ORMA saves the image."
                 selected -> displayLogoFileName(fileName)
-                else -> "PNG or JPG, ideally square. Used on invoices and estimates."
+                else -> emptyBody
             },
             style = MaterialTheme.typography.bodyMedium,
             color = OrmaColors.TextSecondary,
@@ -43451,6 +43545,7 @@ private fun LogoUploadCopy(
 private fun LogoUploadActionPill(
     selected: Boolean,
     uploading: Boolean,
+    actionText: String = "Choose logo",
     modifier: Modifier = Modifier,
 ) {
     Surface(
@@ -43470,7 +43565,7 @@ private fun LogoUploadActionPill(
                 text = when {
                     uploading -> "Uploading"
                     selected -> "Change"
-                    else -> "Choose logo"
+                    else -> actionText
                 },
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.SemiBold,

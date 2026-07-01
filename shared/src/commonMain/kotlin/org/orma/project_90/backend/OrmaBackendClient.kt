@@ -52,6 +52,8 @@ data class OrmaBackendWorkspace(
     val logoUrl: String?,
     val coverFileName: String?,
     val coverUrl: String?,
+    val receiptLogoFileName: String?,
+    val receiptLogoUrl: String?,
     val website: String? = null,
     val isTaxRegistered: Boolean? = null,
     val taxNumber: String? = null,
@@ -1265,6 +1267,27 @@ class OrmaBackendClient(
         )
     }
 
+    suspend fun uploadReceiptLogo(
+        idToken: String,
+        image: OrmaPickedImage,
+    ): OrmaBackendResult<OrmaMediaUpload> {
+        val actionTitle = "Upload receipt logo"
+        return executeBackendRequest(
+            actionTitle = actionTitle,
+            request = {
+                ormaPostMultipartAuthorized(
+                    url = config.url("/media/receipt-logo"),
+                    bearerToken = idToken,
+                    fileFieldName = "file",
+                    fileName = image.fileName,
+                    contentType = image.contentType,
+                    bytes = image.bytes,
+                )
+            },
+            parse = { it.toMediaUpload() },
+        )
+    }
+
     suspend fun uploadProductImage(
         idToken: String,
         productId: String,
@@ -2381,6 +2404,8 @@ private fun String.toBackendSession(): OrmaBackendSession {
                 logoUrl = it.jsonString("logoUrl"),
                 coverFileName = it.jsonString("coverFileName"),
                 coverUrl = it.jsonString("coverUrl"),
+                receiptLogoFileName = it.jsonString("receiptLogoFileName"),
+                receiptLogoUrl = it.jsonString("receiptLogoUrl"),
                 website = it.jsonString("website"),
                 isTaxRegistered = it.jsonBoolean("isTaxRegistered"),
                 taxNumber = it.jsonString("taxNumber"),
@@ -2430,6 +2455,8 @@ private fun String.toBackendWorkspace(): OrmaBackendWorkspace =
         logoUrl = jsonString("logoUrl"),
         coverFileName = jsonString("coverFileName"),
         coverUrl = jsonString("coverUrl"),
+        receiptLogoFileName = jsonString("receiptLogoFileName"),
+        receiptLogoUrl = jsonString("receiptLogoUrl"),
         website = jsonString("website"),
         isTaxRegistered = jsonBoolean("isTaxRegistered"),
         taxNumber = jsonString("taxNumber"),

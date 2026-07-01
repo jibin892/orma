@@ -97,6 +97,42 @@ fun Route.mediaRoutes(
         )
     }
 
+    post("/media/receipt-logo") {
+        val repository = onboardingRepository ?: return@post call.respondDatabaseNotConfigured()
+        val firebaseUser = call.verifiedFirebaseUser(config) ?: return@post
+        val upload = call.receiveImageUpload(requireProductId = false) ?: return@post
+
+        val session = repository.resolveSession(
+            firebaseUser = firebaseUser,
+            providerFallback = upload.fields["provider"],
+            emailFallback = upload.fields["email"],
+            phoneNumberFallback = upload.fields["phoneNumber"],
+            displayNameFallback = upload.fields["displayName"],
+        )
+        val workspaceId = session.workspace?.id
+        val storagePath = if (workspaceId == null) {
+            "users/${firebaseUser.uid}/receipt-logo/${UUID.randomUUID()}.${upload.extension}"
+        } else {
+            "business/$workspaceId/receipt-logo/${UUID.randomUUID()}.${upload.extension}"
+        }
+
+        val stored = call.storeImageOrRespond(storageService, storagePath, upload) ?: return@post
+        if (workspaceId != null) {
+            repository.saveReceiptLogo(workspaceId, stored.storagePath)
+        }
+
+        call.respond(
+            MediaUploadResponse(
+                type = "receipt_logo",
+                workspaceId = workspaceId,
+                storagePath = stored.storagePath,
+                downloadUrl = stored.downloadUrl,
+                contentType = stored.contentType,
+                sizeBytes = stored.sizeBytes,
+            ),
+        )
+    }
+
     post("/media/product-images") {
         val repository = onboardingRepository ?: return@post call.respondDatabaseNotConfigured()
         val firebaseUser = call.verifiedFirebaseUser(config) ?: return@post
