@@ -55,6 +55,31 @@ fun OrmaQrCode(
     }
 }
 
+fun ormaQrCodeSvg(
+    value: String,
+    moduleColor: String = "#143D3D",
+    backgroundColor: String = "#FFFFFF",
+): String {
+    val modules = runCatching { OrmaQrMatrix.create(value) }.getOrNull() ?: return ""
+    val quietZone = 4
+    val size = modules.size + quietZone * 2
+    val rects = buildString {
+        modules.forEachIndexed { y, row ->
+            row.forEachIndexed { x, dark ->
+                if (dark) {
+                    append("""<rect x="${x + quietZone}" y="${y + quietZone}" width="1" height="1"/>""")
+                }
+            }
+        }
+    }
+    return """
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 $size $size" width="116" height="116" shape-rendering="crispEdges" aria-label="QR code">
+          <rect width="$size" height="$size" fill="$backgroundColor"/>
+          <g fill="$moduleColor">$rects</g>
+        </svg>
+    """.trimIndent()
+}
+
 private object OrmaQrMatrix {
     private const val Version = 5
     private const val Size = Version * 4 + 17

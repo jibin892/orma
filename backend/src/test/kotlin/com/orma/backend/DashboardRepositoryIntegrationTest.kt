@@ -10,7 +10,9 @@ import com.orma.backend.db.PublicCatalogOrderSubmitResult
 import com.orma.backend.models.CustomerRequest
 import com.orma.backend.models.OrderItemRequest
 import com.orma.backend.models.OrderRequest
+import com.orma.backend.models.PrinterProfileRequest
 import com.orma.backend.models.ProductRequest
+import com.orma.backend.models.ProductVariantRequest
 import com.orma.backend.models.PublicCatalogOrderItemRequest
 import com.orma.backend.models.PublicCatalogOrderRequest
 import java.sql.Connection
@@ -128,6 +130,193 @@ class DashboardRepositoryIntegrationTest {
 
         assertIs<PublicCatalogOrderSubmitResult.ItemsUnavailable>(result)
     }
+
+    @Test
+    fun updateProductPersistsProductStockTrackingToggle() = withDashboardTestDatabase { repository, fixture ->
+        val product = runBlocking {
+            repository.createProduct(
+                firebaseUser = fixture.ownerUser,
+                request = ProductRequest(
+                    name = fixture.uniqueName("Product Stock Toggle"),
+                    sellingPrice = "80",
+                    costPrice = "35",
+                    stockQuantity = "12",
+                    reorderLevel = "3",
+                    trackStock = true,
+                    currency = "INR",
+                ),
+            )
+        }
+        assertNotNull(product)
+        assertEquals(true, product.trackStock)
+
+        val updated = runBlocking {
+            repository.updateProduct(
+                firebaseUser = fixture.ownerUser,
+                productId = product.id,
+                request = ProductRequest(
+                    name = product.name,
+                    sellingPrice = product.sellingPrice,
+                    costPrice = product.costPrice,
+                    stockQuantity = product.stockQuantity,
+                    reorderLevel = product.reorderLevel,
+                    trackStock = false,
+                    currency = product.currency,
+                ),
+            )
+        }
+
+        assertNotNull(updated)
+        assertEquals(false, updated.trackStock)
+        assertEquals(0.0, updated.stockQuantity.toDoubleOrNull())
+        assertEquals(0.0, updated.reorderLevel.toDoubleOrNull())
+
+        val reloaded = runBlocking {
+            repository.products(
+                firebaseUser = fixture.ownerUser,
+                filters = DashboardQueryFilters(query = product.name),
+            )
+        }?.items?.firstOrNull { it.id == product.id }
+
+        assertNotNull(reloaded)
+        assertEquals(false, reloaded.trackStock)
+        assertEquals(0.0, reloaded.stockQuantity.toDoubleOrNull())
+        assertEquals(0.0, reloaded.reorderLevel.toDoubleOrNull())
+    }
+
+    @Test
+    fun updateProductPersistsVariantStockTrackingToggle() = withDashboardTestDatabase { repository, fixture ->
+        val product = runBlocking {
+            repository.createProduct(
+                firebaseUser = fixture.ownerUser,
+                request = ProductRequest(
+                    name = fixture.uniqueName("Variant Stock Toggle"),
+                    sellingPrice = "70",
+                    costPrice = "30",
+                    stockQuantity = "10",
+                    reorderLevel = "0",
+                    trackStock = true,
+                    currency = "INR",
+                    variants = listOf(
+                        ProductVariantRequest(
+                            name = "Large (500ml)",
+                            sellingPrice = "70",
+                            stockQuantity = "4",
+                            trackStock = true,
+                        ),
+                    ),
+                ),
+            )
+        }
+        assertNotNull(product)
+        val variant = product.variants.first()
+        assertEquals(true, variant.trackStock)
+
+        val updated = runBlocking {
+            repository.updateProduct(
+                firebaseUser = fixture.ownerUser,
+                productId = product.id,
+                request = ProductRequest(
+                    name = product.name,
+                    sellingPrice = product.sellingPrice,
+                    costPrice = product.costPrice,
+                    stockQuantity = product.stockQuantity,
+                    reorderLevel = product.reorderLevel,
+                    trackStock = product.trackStock,
+                    currency = product.currency,
+                    variants = listOf(
+                        ProductVariantRequest(
+                            id = variant.id,
+                            name = variant.name,
+                            sellingPrice = variant.sellingPrice,
+                            stockQuantity = variant.stockQuantity,
+                            trackStock = false,
+                        ),
+                    ),
+                ),
+            )
+        }
+        assertNotNull(updated)
+        assertEquals(false, updated.variants.firstOrNull { it.id == variant.id }?.trackStock)
+
+        val reloaded = runBlocking {
+            repository.products(
+                firebaseUser = fixture.ownerUser,
+                filters = DashboardQueryFilters(query = product.name),
+            )
+        }?.items?.firstOrNull { it.id == product.id }
+
+        assertNotNull(reloaded)
+        assertEquals(false, reloaded.variants.firstOrNull { it.id == variant.id }?.trackStock)
+    }
+
+    @Test
+    fun printerReceiptLayoutOptionsPersistAcrossUpdateAndList() = withDashboardTestDatabase { repository, fixture ->
+        val printer = runBlocking {
+            repository.createPrinter(
+                firebaseUser = fixture.ownerUser,
+                request = PrinterProfileRequest(
+                    name = fixture.uniqueName("Mobile Thermal"),
+                    connectionType = "bluetooth",
+                    address = "66:32:D4:4A:B2:B3",
+                    paperWidthMm = 58,
+                    dpi = 203,
+                    isDefaultReceipt = true,
+                    printLogo = true,
+                    headerAlignment = "left",
+                    showBusinessAddress = false,
+                    showCatalogQr = true,
+                    showTimedGreeting = false,
+                ),
+            )
+        }
+        assertNotNull(printer)
+        assertEquals(true, printer.printLogo)
+        assertEquals("left", printer.headerAlignment)
+        assertEquals(false, printer.showBusinessAddress)
+        assertEquals(true, printer.showCatalogQr)
+        assertEquals(false, printer.showTimedGreeting)
+
+        val updated = runBlocking {
+            repository.updatePrinter(
+                firebaseUser = fixture.ownerUser,
+                printerId = printer.id,
+                request = PrinterProfileRequest(
+                    name = printer.name,
+                    connectionType = printer.connectionType,
+                    address = printer.address,
+                    paperWidthMm = printer.paperWidthMm,
+                    dpi = printer.dpi,
+                    isDefaultReceipt = true,
+                    printLogo = false,
+                    headerAlignment = "center",
+                    showBusinessAddress = true,
+                    showCatalogQr = false,
+                    showTimedGreeting = true,
+                ),
+            )
+        }
+        assertNotNull(updated)
+        assertEquals(false, updated.printLogo)
+        assertEquals("center", updated.headerAlignment)
+        assertEquals(true, updated.showBusinessAddress)
+        assertEquals(false, updated.showCatalogQr)
+        assertEquals(true, updated.showTimedGreeting)
+
+        val reloaded = runBlocking {
+            repository.printers(
+                firebaseUser = fixture.ownerUser,
+                filters = DashboardQueryFilters(query = printer.name),
+            )
+        }?.items?.firstOrNull { it.id == printer.id }
+
+        assertNotNull(reloaded)
+        assertEquals(false, reloaded.printLogo)
+        assertEquals("center", reloaded.headerAlignment)
+        assertEquals(true, reloaded.showBusinessAddress)
+        assertEquals(false, reloaded.showCatalogQr)
+        assertEquals(true, reloaded.showTimedGreeting)
+    }
 }
 
 private inline fun withDashboardTestDatabase(
@@ -188,6 +377,7 @@ private fun Connection.createDashboardIntegrationFixture(): DashboardIntegration
             "create_offer",
             "manage_stock",
             "manage_customers",
+            "manage_account",
             "download_invoice",
         ),
     )

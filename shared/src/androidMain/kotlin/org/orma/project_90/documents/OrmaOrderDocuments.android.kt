@@ -27,6 +27,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
+import java.io.ByteArrayOutputStream
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.UUID
@@ -187,14 +188,13 @@ private fun printEscPosBluetooth(
         if (!adapter.isEnabled) return@runCatching false
         val device = adapter.bondedDevices.orEmpty().firstOrNull { it.matchesPrintTarget(target) }
             ?: return@runCatching false
+        val bytes = receiptPrintBytes(text)
         Thread {
             runCatching {
                 device.createRfcommSocketToServiceRecord(SerialPortProfileUuid).use { socket ->
                     socket.connect()
                     socket.outputStream.use { output ->
-                        output.write(byteArrayOf(0x1B, 0x40))
-                        output.write(text.toByteArray(Charsets.UTF_8))
-                        output.write(byteArrayOf(0x0A, 0x0A, 0x0A, 0x1D, 0x56, 0x42, 0x00))
+                        output.write(bytes)
                         output.flush()
                     }
                 }
@@ -255,10 +255,49 @@ private fun printEscPosNetwork(
         true
     }.getOrDefault(false)
 
+private const val ReceiptQrMarkerPrefix = "[[ORMA_QR:"
+private const val ReceiptQrMarkerSuffix = "]]"
+
 private fun receiptPrintBytes(text: String): ByteArray =
-    byteArrayOf(0x1B, 0x40) +
-        text.toByteArray(Charsets.UTF_8) +
-        byteArrayOf(0x0A, 0x0A, 0x0A, 0x1D, 0x56, 0x42, 0x00)
+    ByteArrayOutputStream().use { output ->
+        output.write(byteArrayOf(0x1B, 0x40))
+        text.lineSequence().forEach { rawLine ->
+            val line = rawLine.trim()
+            val qrValue = line.takeIf {
+                it.startsWith(ReceiptQrMarkerPrefix) && it.endsWith(ReceiptQrMarkerSuffix)
+            }?.removePrefix(ReceiptQrMarkerPrefix)?.removeSuffix(ReceiptQrMarkerSuffix)?.trim()
+            if (!qrValue.isNullOrBlank()) {
+                output.writeEscPosQr(qrValue)
+            } else {
+                output.write(rawLine.toByteArray(Charsets.UTF_8))
+                output.write(0x0A)
+            }
+        }
+        output.write(byteArrayOf(0x0A, 0x0A, 0x1D, 0x56, 0x42, 0x00))
+        output.toByteArray()
+    }
+
+private fun ByteArrayOutputStream.writeEscPosQr(value: String) {
+    val bytes = value.toByteArray(Charsets.UTF_8)
+    val storeLength = bytes.size + 3
+    write(byteArrayOf(0x1D, 0x28, 0x6B, 0x04, 0x00, 0x31, 0x41, 0x32, 0x00))
+    write(byteArrayOf(0x1D, 0x28, 0x6B, 0x03, 0x00, 0x31, 0x43, 0x06))
+    write(byteArrayOf(0x1D, 0x28, 0x6B, 0x03, 0x00, 0x31, 0x45, 0x31))
+    write(
+        byteArrayOf(
+            0x1D,
+            0x28,
+            0x6B,
+            (storeLength % 256).toByte(),
+            (storeLength / 256).toByte(),
+            0x31,
+            0x50,
+            0x30,
+        ),
+    )
+    write(bytes)
+    write(byteArrayOf(0x1D, 0x28, 0x6B, 0x03, 0x00, 0x31, 0x51, 0x30, 0x0A))
+}
 
 private fun Context.hasBluetoothConnectPermission(): Boolean =
     Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||

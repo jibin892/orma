@@ -2,6 +2,8 @@ package org.orma.project_90.devices
 
 import android.Manifest
 import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothClass
+import android.bluetooth.BluetoothDevice
 import android.content.Context
 import android.content.pm.PackageManager
 import android.hardware.usb.UsbConstants
@@ -96,18 +98,29 @@ private fun Context.detectBluetoothConnectorDevices(): AndroidConnectorDevices =
             if (normalized.contains("scan") || normalized.contains("barcode") || normalized.contains("hid")) {
                 barcodeDevices += connector.copy(connectorType = "Bluetooth scanner")
             }
-            if (
-                normalized.contains("print") ||
-                normalized.contains("pos") ||
-                normalized.contains("thermal") ||
-                normalized.contains("mtp") ||
-                normalized.contains("receipt")
-            ) {
+            if (device.looksLikeBluetoothPrinter(normalized)) {
                 printDevices += connector.copy(connectorType = "Bluetooth printer")
             }
         }
         AndroidConnectorDevices(printDevices = printDevices, barcodeDevices = barcodeDevices)
     }.getOrDefault(AndroidConnectorDevices())
+
+private fun BluetoothDevice.looksLikeBluetoothPrinter(normalizedName: String): Boolean {
+    val bluetoothClass = bluetoothClass
+    val classLooksPrintable =
+        bluetoothClass?.majorDeviceClass == BluetoothClass.Device.Major.IMAGING
+    val nameLooksPrintable =
+        normalizedName.contains("print") ||
+            normalizedName.contains("printer") ||
+            normalizedName.contains("pos") ||
+            normalizedName.contains("thermal") ||
+            normalizedName.contains("receipt") ||
+            normalizedName.contains("mpt") ||
+            normalizedName.startsWith("pt-") ||
+            normalizedName.startsWith("pt_") ||
+            normalizedName.startsWith("pt ")
+    return classLooksPrintable || nameLooksPrintable
+}
 
 private fun UsbDevice.productNameOrFallback(): String =
     productName?.trim()?.takeIf { it.isNotBlank() }

@@ -1061,6 +1061,11 @@ data class PrinterProfileRequest(
     val supportsBarcodes: Boolean = true,
     val isDefaultReceipt: Boolean = false,
     val isDefaultBarcode: Boolean = false,
+    val printLogo: Boolean = false,
+    val headerAlignment: String = "center",
+    val showBusinessAddress: Boolean = true,
+    val showCatalogQr: Boolean = false,
+    val showTimedGreeting: Boolean = true,
     val notes: String? = null,
 )
 
@@ -1076,6 +1081,11 @@ data class PrinterProfileResponse(
     val supportsBarcodes: Boolean,
     val isDefaultReceipt: Boolean,
     val isDefaultBarcode: Boolean,
+    val printLogo: Boolean = false,
+    val headerAlignment: String = "center",
+    val showBusinessAddress: Boolean = true,
+    val showCatalogQr: Boolean = false,
+    val showTimedGreeting: Boolean = true,
     val notes: String? = null,
     val status: String,
     val createdAt: String,

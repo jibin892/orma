@@ -208,6 +208,7 @@ import org.orma.project_90.designsystem.OrmaListRow
 import org.orma.project_90.designsystem.OrmaOtpCells
 import org.orma.project_90.designsystem.OrmaPrimaryButton
 import org.orma.project_90.designsystem.OrmaQrCode
+import org.orma.project_90.designsystem.ormaQrCodeSvg
 import org.orma.project_90.designsystem.OrmaScreenColumn
 import org.orma.project_90.designsystem.OrmaSecondaryButton
 import org.orma.project_90.designsystem.OrmaSectionHeader
@@ -4198,10 +4199,15 @@ private fun DashboardBottomBar(
     val dockActive = OrmaColors.Accent
     val dockBackground = OrmaColors.ScreenBackground
     val dockActiveContainer = OrmaColors.Accent.copy(alpha = 0.08f)
-    val dockInactive = OrmaColors.IconTertiary
+    val dockInactive = OrmaColors.Accent.copy(0.7F)
     val density = LocalDensity.current
-    val navigationBottomPadding = with(density) {
+    val rawNavigationBottomPadding = with(density) {
         WindowInsets.navigationBars.getBottom(this).toDp()
+    }
+    val navigationBottomPadding = if (getPlatform().name.startsWith("iOS")) {
+        rawNavigationBottomPadding.coerceAtMost(12.dp)
+    } else {
+        rawNavigationBottomPadding
     }
     val barContentHeight = 68.dp
     val barHeight = barContentHeight + navigationBottomPadding
@@ -4270,7 +4276,7 @@ private fun DashboardBottomBar(
                                         DashboardNavIcon(
                                             kind = item.icon,
                                             color = dockActive,
-                                            modifier = Modifier.size(17.dp),
+                                            modifier = Modifier.size(22.dp),
                                         )
                                         Text(
                                             text = item.bottomLabel(state),
@@ -24325,8 +24331,45 @@ private fun DashboardBookingDetailsContent(
     var showDispatchSheet by rememberSaveable(order.id) { mutableStateOf(false) }
     var addonSessionId by rememberSaveable(order.id) { mutableStateOf<String?>(null) }
     var scheduleSessionId by rememberSaveable(order.id) { mutableStateOf<String?>(null) }
+    var pendingAutoPrintOrderId by rememberSaveable(order.id) { mutableStateOf<String?>(null) }
+    val receiptExporter = rememberOrmaOrderDocumentExporter()
     val canEditSale = state.hasDashboardPermission(DashboardTeamPermissionEditSale)
     val canChangeStatus = state.hasDashboardPermission(DashboardTeamPermissionChangeBookingStatus)
+    fun requestStatusChange(nextStatus: String) {
+        val normalizedStatus = nextStatus.trim().lowercase()
+        if (normalizedStatus == "completed" && order.status.trim().lowercase() != "completed") {
+            pendingAutoPrintOrderId = order.id
+        }
+        onStatusChange(nextStatus)
+    }
+    LaunchedEffect(pendingAutoPrintOrderId, order.id, order.status, actionLoading) {
+        if (
+            pendingAutoPrintOrderId == order.id &&
+            order.status.trim().lowercase() == "completed" &&
+            !actionLoading
+        ) {
+            pendingAutoPrintOrderId = null
+            val printer = state.dashboard.printers.defaultReceiptPrinter()
+            if (printer != null) {
+                val document = orderReceiptDocument(state = state, order = order, printer = printer)
+                val started = receiptExporter.printReceipt(
+                    title = document.title,
+                    html = document.html,
+                    text = document.text,
+                    target = printer.toPrintTarget(),
+                )
+                onDownloadStatus(
+                    if (started) {
+                        "Completed receipt print started for ${printer.name}."
+                    } else {
+                        "Order completed. Printer is not ready; use Print receipt from Documents."
+                    },
+                )
+            } else {
+                onDownloadStatus("Order completed. Add a default receipt printer to auto-print receipts.")
+            }
+        }
+    }
     fun updateSession(
         sessionId: String,
         transform: (OrmaOrderSessionDraft) -> OrmaOrderSessionDraft,
@@ -24393,7 +24436,7 @@ private fun DashboardBookingDetailsContent(
                 )
                 BookingDetailsFulfillmentCard(
                     order = order,
-                    onStatusChange = onStatusChange,
+                    onStatusChange = ::requestStatusChange,
                     canChangeStatus = canChangeStatus,
                     onScheduleDispatch = if (canEditSale) {
                         { showDispatchSheet = true }
@@ -24401,7 +24444,7 @@ private fun DashboardBookingDetailsContent(
                         null
                     },
                     onMarkCompleted = if (canChangeStatus) {
-                        { onStatusChange("completed") }
+                        { requestStatusChange("completed") }
                     } else {
                         null
                     },
@@ -24418,14 +24461,14 @@ private fun DashboardBookingDetailsContent(
         DashboardMobileBookingDetailsContent(
             state = state,
             order = order,
-            onStatusChange = onStatusChange,
+            onStatusChange = ::requestStatusChange,
             onUpdateOrder = onUpdateOrder,
             onResolveOrderChangeRequest = onResolveOrderChangeRequest,
             canEditSale = canEditSale,
             canChangeStatus = canChangeStatus,
             onScheduleDispatch = { showDispatchSheet = true },
             onEditDelivery = { showDeliverySheet = true },
-            onMarkCompleted = { onStatusChange("completed") },
+            onMarkCompleted = { requestStatusChange("completed") },
             onDownloadStatus = onDownloadStatus,
             actionLoading = actionLoading,
         )
@@ -25279,8 +25322,8 @@ private fun BookingDetailsDocumentsCard(
         reportDocumentStatus(exporter.openPdfStatus(document = document, label = "Receipt"))
     }
     fun printReceipt() {
-        val document = orderReceiptDocument(state = state, order = order)
         val printer = state.dashboard.printers.defaultReceiptPrinter()
+        val document = orderReceiptDocument(state = state, order = order, printer = printer)
         reportDocumentStatus(if (exporter.printReceipt(
                 title = document.title,
                 html = document.html,
@@ -27749,6 +27792,25 @@ private fun CustomerBookingHistoryRow(
         val document = orderReceiptPdfDocument(state = state, order = order)
         documentStatus = exporter.openPdfStatus(document = document, label = "Receipt")
     }
+    fun printCustomerReceipt() {
+        val printer = state.dashboard.printers.defaultReceiptPrinter()
+        val document = orderReceiptDocument(state = state, order = order, printer = printer)
+        documentStatus = if (exporter.printReceipt(
+                title = document.title,
+                html = document.html,
+                text = document.text,
+                target = printer?.toPrintTarget(),
+            )
+        ) {
+            if (printer != null) {
+                "Receipt print started for ${printer.name}."
+            } else {
+                "Receipt print view opened."
+            }
+        } else {
+            "Printer is not ready. Check printer name, Bluetooth permission, or use system printer / tcp://IP:9100."
+        }
+    }
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -27825,7 +27887,7 @@ private fun CustomerBookingHistoryRow(
         }
         if (canDownloadDocuments) {
             BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-                if (maxWidth < 430.dp) {
+                if (maxWidth < 520.dp) {
                     Column(
                         modifier = Modifier.fillMaxWidth(),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -27848,6 +27910,11 @@ private fun CustomerBookingHistoryRow(
                         DashboardWideActionButton(
                             text = "Open receipt",
                             onClick = ::openCustomerReceipt,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        DashboardWideActionButton(
+                            text = "Print receipt",
+                            onClick = ::printCustomerReceipt,
                             modifier = Modifier.fillMaxWidth(),
                         )
                     }
@@ -27874,6 +27941,11 @@ private fun CustomerBookingHistoryRow(
                         DashboardWideActionButton(
                             text = "Open receipt",
                             onClick = ::openCustomerReceipt,
+                            modifier = Modifier.weight(1f),
+                        )
+                        DashboardWideActionButton(
+                            text = "Print receipt",
+                            onClick = ::printCustomerReceipt,
                             modifier = Modifier.weight(1f),
                         )
                     }
@@ -30031,6 +30103,20 @@ private fun ProductEditorScreen(
         (draft.durationMinutes.toIntOrNull() ?: 0) > 0 -> null
         else -> "Enter appointment duration in minutes."
     }
+    fun updateProductOptionDrafts(nextOptions: List<OrmaProductVariantDraft>) {
+        val remainingOptions = nextOptions.toMutableList()
+        val mergedVariants = buildList {
+            draft.variants.forEach { current ->
+                if (current.isDashboardPackageDraft(draft.itemType)) {
+                    add(current)
+                } else if (remainingOptions.isNotEmpty()) {
+                    add(remainingOptions.removeAt(0))
+                }
+            }
+            addAll(remainingOptions)
+        }
+        draft = draft.copy(variants = mergedVariants)
+    }
     val taxError = percentageDecimalError(draft.taxRate)
     val formReady = listOf(
         nameError,
@@ -30309,7 +30395,7 @@ private fun ProductEditorScreen(
             unit = draft.unit,
             baseSellingPrice = draft.sellingPrice.trim(),
             variants = productOptionDrafts,
-            onVariantsChange = { draft = draft.copy(variants = packageVariantDrafts + it) },
+            onVariantsChange = ::updateProductOptionDrafts,
         )
         CatalogAvailabilityPicker(
             itemType = draft.itemType,
@@ -30347,53 +30433,72 @@ private fun ProductEditorScreen(
                             taxRate = draft.taxRate.trim().ifBlank { "0" },
                             status = draft.status.normalizedCatalogAvailabilityStatus(),
                             variants = draft.variants
-                                .filter { it.name.trim().isNotBlank() }
-                                .map { variant ->
-                                    variant.copy(
-                                        name = variant.name.trim(),
-                                        sku = variant.sku.trim(),
-                                        barcode = variant.barcode.trim(),
-                                        sellingPrice = variant.sellingPrice.trim().ifBlank { draft.sellingPrice.trim() },
-                                        costPrice = variant.costPrice.trim(),
-                                        stockQuantity = if (draft.itemType == "product") {
-                                            variant.stockQuantity.trim()
-                                        } else {
-                                            ""
-                                        },
-                                        trackStock = draft.itemType == "product" && variant.trackStock,
-                                        durationMinutes = if (draft.itemType == "product") {
-                                            ""
-                                        } else {
-                                            variant.durationMinutes.trim()
-                                        },
-                                        includedQuantity = variant.includedQuantity.trim().ifBlank { "1" },
-                                        addons = if (draft.itemType == "product") {
-                                            emptyList()
-                                        } else {
-                                            variant.addons
-                                                .filter { it.name.trim().isNotBlank() }
-                                                .map { addon ->
-                                                    addon.copy(
-                                                        name = addon.name.trim(),
-                                                        sellingPrice = addon.sellingPrice.trim(),
-                                                        costPrice = addon.costPrice.trim(),
-                                                        durationMinutes = addon.durationMinutes.trim(),
-                                                        status = addon.status.normalizedCatalogAvailabilityStatus(),
-                                                    )
-                                                }
-                                        },
-                                        components = variant.components
-                                            .filter { it.productId.trim().isNotBlank() }
-                                            .map { component ->
-                                                component.copy(
-                                                    productId = component.productId.trim(),
-                                                    variantId = component.variantId.trim(),
-                                                    quantity = component.quantity.trim().ifBlank { "1" },
-                                                    status = component.status.normalizedCatalogAvailabilityStatus(),
-                                                )
+                                .mapIndexedNotNull { index, variant ->
+                                    val cleanVariantName = variant.name.trim()
+                                    val shouldKeepVariant = variant.id.isNotBlank() ||
+                                        cleanVariantName.isNotBlank() ||
+                                        variant.sku.trim().isNotBlank() ||
+                                        variant.barcode.trim().isNotBlank() ||
+                                        variant.sellingPrice.trim().isNotBlank() ||
+                                        variant.costPrice.trim().isNotBlank() ||
+                                        variant.stockQuantity.trim().isNotBlank() ||
+                                        variant.durationMinutes.trim().isNotBlank() ||
+                                        variant.includedQuantity.trim().isNotBlank() ||
+                                        variant.addons.any { it.name.trim().isNotBlank() } ||
+                                        variant.components.any { it.productId.trim().isNotBlank() } ||
+                                        variant.status.normalizedCatalogAvailabilityStatus() != "active" ||
+                                        !variant.trackStock
+                                    if (!shouldKeepVariant) {
+                                        null
+                                    } else {
+                                        variant.copy(
+                                            name = cleanVariantName.ifBlank {
+                                                "${draft.itemType.sellableItemTypeLabel()} variant ${index + 1}"
                                             },
-                                        status = variant.status.normalizedCatalogAvailabilityStatus(),
-                                    )
+                                            sku = variant.sku.trim(),
+                                            barcode = variant.barcode.trim(),
+                                            sellingPrice = variant.sellingPrice.trim().ifBlank { draft.sellingPrice.trim() },
+                                            costPrice = variant.costPrice.trim(),
+                                            stockQuantity = if (draft.itemType == "product") {
+                                                variant.stockQuantity.trim()
+                                            } else {
+                                                ""
+                                            },
+                                            trackStock = draft.itemType == "product" && variant.trackStock,
+                                            durationMinutes = if (draft.itemType == "product") {
+                                                ""
+                                            } else {
+                                                variant.durationMinutes.trim()
+                                            },
+                                            includedQuantity = variant.includedQuantity.trim().ifBlank { "1" },
+                                            addons = if (draft.itemType == "product") {
+                                                emptyList()
+                                            } else {
+                                                variant.addons
+                                                    .filter { it.name.trim().isNotBlank() }
+                                                    .map { addon ->
+                                                        addon.copy(
+                                                            name = addon.name.trim(),
+                                                            sellingPrice = addon.sellingPrice.trim(),
+                                                            costPrice = addon.costPrice.trim(),
+                                                            durationMinutes = addon.durationMinutes.trim(),
+                                                            status = addon.status.normalizedCatalogAvailabilityStatus(),
+                                                        )
+                                                    }
+                                            },
+                                            components = variant.components
+                                                .filter { it.productId.trim().isNotBlank() }
+                                                .map { component ->
+                                                    component.copy(
+                                                        productId = component.productId.trim(),
+                                                        variantId = component.variantId.trim(),
+                                                        quantity = component.quantity.trim().ifBlank { "1" },
+                                                        status = component.status.normalizedCatalogAvailabilityStatus(),
+                                                    )
+                                                },
+                                            status = variant.status.normalizedCatalogAvailabilityStatus(),
+                                        )
+                                    }
                                 },
                         ),
                     )
@@ -34052,7 +34157,7 @@ private fun String.printerAddressPlaceholder(): String =
 private fun String.printerSetupHint(): String =
     when (trim().lowercase()) {
         "network" -> "Works best when every counter device can reach the same LAN printer IP."
-        "bluetooth" -> "Android prints to a paired Bluetooth device. Desktop prints through the operating system printer with the same name."
+        "bluetooth" -> "Android prints to a paired Bluetooth device. Desktop uses a matching system printer or macOS Bluetooth serial port when available."
         "mtp_usb" -> "Android sends ESC/POS directly to the connected portable thermal printer over USB/OTG."
         "airprint" -> "Use this for iPhone, iPad, or macOS devices with AirPrint-visible printers."
         "system" -> "Uses the operating system print dialog on web, desktop, Android, and iOS."
@@ -34071,8 +34176,43 @@ private fun OrmaPrinterProfile.toPrinterDraft(): OrmaPrinterDraft =
         supportsBarcodes = supportsBarcodes,
         isDefaultReceipt = isDefaultReceipt,
         isDefaultBarcode = isDefaultBarcode,
+        printLogo = printLogo,
+        headerAlignment = headerAlignment,
+        showBusinessAddress = showBusinessAddress,
+        showCatalogQr = showCatalogQr,
+        showTimedGreeting = showTimedGreeting,
         notes = notes.orEmpty(),
     )
+
+private fun OrmaHardwareConnectorDevice.toPrinterConnectionType(): String {
+    val normalized = connectorType.trim().lowercase()
+    return when {
+        normalized.contains("bluetooth") -> "bluetooth"
+        normalized.contains("mtp") || normalized.contains("usb") -> "mtp_usb"
+        address.orEmpty().startsWith("tcp://", ignoreCase = true) -> "network"
+        normalized.contains("network") -> "network"
+        else -> "system"
+    }
+}
+
+private fun OrmaPrinterDraft.withDetectedPrinterDevice(device: OrmaHardwareConnectorDevice): OrmaPrinterDraft =
+    copy(
+        name = device.name.take(120),
+        connectionType = device.toPrinterConnectionType(),
+        address = device.address.orEmpty().take(160),
+        paperWidthMm = paperWidthMm.ifBlank { "80" },
+        dpi = dpi.ifBlank { "203" },
+        supportsReceipts = true,
+        isDefaultReceipt = true,
+    )
+
+private fun OrmaPrinterDraft.matchesDetectedPrinterDevice(device: OrmaHardwareConnectorDevice): Boolean {
+    val deviceAddress = device.address.orEmpty().trim()
+    val draftAddress = address.trim()
+    return connectionType == device.toPrinterConnectionType() &&
+        name.equals(device.name, ignoreCase = true) &&
+        (deviceAddress.isBlank() || draftAddress.equals(deviceAddress, ignoreCase = true))
+}
 
 private fun List<OrmaPrinterProfile>.defaultReceiptPrinter(): OrmaPrinterProfile? =
     firstOrNull { it.supportsReceipts && it.isDefaultReceipt }
@@ -34096,14 +34236,77 @@ private fun OrmaPrinterDraft.normalizedPrinterDraft(): OrmaPrinterDraft =
         dpi = dpi.ifBlank { "203" },
         isDefaultReceipt = isDefaultReceipt && supportsReceipts,
         isDefaultBarcode = isDefaultBarcode && supportsBarcodes,
+        headerAlignment = headerAlignment.printerHeaderAlignment(),
         notes = notes.trim(),
     )
+
+private val DashboardPrinterHeaderAlignmentOptions = listOf("center", "left")
+
+private fun String.printerHeaderAlignment(): String {
+    val normalized = trim().lowercase()
+    return if (normalized in DashboardPrinterHeaderAlignmentOptions) normalized else "center"
+}
+
+private fun String.printerHeaderAlignmentLabel(): String =
+    when (printerHeaderAlignment()) {
+        "left" -> "Left"
+        else -> "Centered"
+    }
+
+private fun OrmaPrinterProfile.receiptPrintWidth(): Int =
+    if (paperWidthMm < 70) 32 else 42
+
+private fun OnboardingUiState.publicCatalogUrlOrNull(): String? =
+    workspaceId.trim().takeIf { it.isNotBlank() }?.let(::currentOrmaPublicCatalogUrl)
+
+private fun receiptQrMarker(url: String): String = "[[ORMA_QR:$url]]"
+
+private fun receiptLogoMark(name: String): String {
+    val initials = name
+        .split(Regex("\\s+"))
+        .mapNotNull { part -> part.firstOrNull { it.isLetterOrDigit() } }
+        .take(3)
+        .joinToString("")
+        .uppercase()
+        .ifBlank { "ORMA" }
+    return "[$initials]"
+}
+
+private fun receiptTimedGreeting(): String {
+    val hour = ormaCurrentIsoDate().substringAfter('T', "").take(2).toIntOrNull()
+    return when (hour) {
+        in 5..11 -> "Good morning"
+        in 12..16 -> "Good afternoon"
+        in 17..22 -> "Good evening"
+        else -> "Thank you"
+    }
+}
 
 private fun printerTestPrintHtml(
     workspaceName: String,
     printer: OrmaPrinterProfile,
+    catalogUrl: String?,
 ): String {
     val businessName = workspaceName.ifBlank { "ORMA workspace" }
+    val textAlign = if (printer.headerAlignment.printerHeaderAlignment() == "left") "left" else "center"
+    val catalogBlock = if (printer.showCatalogQr && !catalogUrl.isNullOrBlank()) {
+        val qrSvg = ormaQrCodeSvg(catalogUrl)
+        """
+            <div class="line"></div>
+            <div class="qr">
+              ${qrSvg.ifBlank { "" }}
+              <p class="muted">Catalog QR</p>
+              <p>${catalogUrl.orderDocumentEscaped()}</p>
+            </div>
+        """.trimIndent()
+    } else {
+        ""
+    }
+    val greetingBlock = if (printer.showTimedGreeting) {
+        """<p class="muted">${receiptTimedGreeting().orderDocumentEscaped()}</p>"""
+    } else {
+        ""
+    }
     return """
         <!doctype html>
         <html>
@@ -34114,18 +34317,24 @@ private fun printerTestPrintHtml(
           <style>
             body { margin: 0; color: #143D3D; font-family: Arial, Helvetica, sans-serif; font-size: 13px; }
             .receipt { width: ${printer.paperWidthMm.coerceIn(40, 120)}mm; padding: 10px; }
+            .header { text-align: $textAlign; }
             h1 { font-size: 18px; margin: 0 0 4px; }
             p { margin: 0 0 8px; }
             .muted { color: #6F8583; }
             .line { border-top: 1px dashed #9AA9A7; margin: 10px 0; }
+            .qr { text-align: center; margin: 8px 0; }
+            .qr svg { display: block; margin: 0 auto 6px; width: 88px; height: 88px; }
             .row { display: flex; justify-content: space-between; gap: 12px; margin: 6px 0; }
             .total { font-weight: 700; font-size: 16px; }
           </style>
         </head>
         <body>
           <div class="receipt">
-            <h1>${businessName.orderDocumentEscaped()}</h1>
-            <p class="muted">Printer test</p>
+            <div class="header">
+              ${if (printer.printLogo) "<p>${receiptLogoMark(businessName).orderDocumentEscaped()}</p>" else ""}
+              <h1>${businessName.orderDocumentEscaped()}</h1>
+              <p class="muted">Printer test</p>
+            </div>
             <div class="line"></div>
             <div class="row"><span>Printer</span><strong>${printer.name.orderDocumentEscaped()}</strong></div>
             <div class="row"><span>Connection</span><span>${printer.connectionType.printerConnectionLabel().orderDocumentEscaped()}</span></div>
@@ -34133,6 +34342,8 @@ private fun printerTestPrintHtml(
             <div class="row"><span>DPI</span><span>${printer.dpi}</span></div>
             <div class="line"></div>
             <div class="row total"><span>Status</span><span>READY</span></div>
+            $catalogBlock
+            $greetingBlock
             <p class="muted">If this receipt prints, the device print path is ready.</p>
           </div>
         </body>
@@ -34143,18 +34354,30 @@ private fun printerTestPrintHtml(
 private fun printerTestPrintText(
     workspaceName: String,
     printer: OrmaPrinterProfile,
+    catalogUrl: String?,
 ): String {
-    val width = 42
+    val width = printer.receiptPrintWidth()
+    val businessName = workspaceName.ifBlank { "ORMA workspace" }
+    val alignment = printer.headerAlignment.printerHeaderAlignment()
     return buildString {
-        appendReceiptCentered(workspaceName.ifBlank { "ORMA workspace" }, width)
-        appendReceiptCentered("Printer test", width)
+        if (printer.printLogo) appendReceiptAligned(receiptLogoMark(businessName), width, alignment)
+        appendReceiptAligned(businessName, width, alignment)
+        appendReceiptAligned("Printer test", width, alignment)
         appendReceiptRule(width)
         appendReceiptRow("Printer", printer.name, width)
         appendReceiptRow("Connection", printer.connectionType.printerConnectionLabel(), width)
         appendReceiptRow("Paper", "${printer.paperWidthMm}mm", width)
         appendReceiptRow("DPI", printer.dpi.toString(), width)
+        appendReceiptRow("Header", printer.headerAlignment.printerHeaderAlignmentLabel(), width)
         appendReceiptRule(width)
         appendReceiptRow("Status", "READY", width)
+        if (printer.showCatalogQr && !catalogUrl.isNullOrBlank()) {
+            appendReceiptAligned("Catalog QR", width, alignment)
+            appendLine(receiptQrMarker(catalogUrl))
+            appendLine(catalogUrl.receiptLine(width))
+            appendReceiptRule(width)
+        }
+        if (printer.showTimedGreeting) appendReceiptAligned(receiptTimedGreeting(), width, alignment)
         appendLine("If this prints, the device path is ready.".receiptLine(width))
         appendLine()
         appendLine()
@@ -34936,14 +35159,15 @@ private fun orderInvoicePdfDocument(
 private fun orderReceiptDocument(
     state: OnboardingUiState,
     order: OrmaOrder,
+    printer: OrmaPrinterProfile? = null,
 ): OrderHtmlDocument {
     val reference = order.orderNumber.ifBlank { order.id.take(8).uppercase() }
     val title = "Receipt $reference"
     return OrderHtmlDocument(
         title = title,
         fileName = "${orderDocumentFileStem(reference)}-receipt.html",
-        html = orderReceiptHtml(state = state, order = order, reference = reference, title = title),
-        text = orderReceiptText(state = state, order = order, reference = reference),
+        html = orderReceiptHtml(state = state, order = order, reference = reference, title = title, printer = printer),
+        text = orderReceiptText(state = state, order = order, reference = reference, printer = printer),
     )
 }
 
@@ -35645,8 +35869,42 @@ private fun orderReceiptHtml(
     order: OrmaOrder,
     reference: String,
     title: String,
-): String =
-    """
+    printer: OrmaPrinterProfile? = null,
+): String {
+    val issuerName = invoiceIssuerName(state)
+    val showAddress = printer?.showBusinessAddress != false
+    val alignment = printer?.headerAlignment?.printerHeaderAlignment() ?: "center"
+    val headerAlign = if (alignment == "left") "left" else "center"
+    val logoHtml = if (printer?.printLogo == true) {
+        """<p class="logo-mark">${receiptLogoMark(issuerName).orderDocumentEscaped()}</p>"""
+    } else {
+        ""
+    }
+    val addressHtml = if (showAddress) {
+        """<p class="muted">${invoiceIssuerSubLine(state).orderDocumentLineBreaks()}</p>"""
+    } else {
+        ""
+    }
+    val catalogUrl = state.publicCatalogUrlOrNull()
+    val catalogQrHtml = if (printer?.showCatalogQr == true && !catalogUrl.isNullOrBlank()) {
+        val qrSvg = ormaQrCodeSvg(catalogUrl)
+        """
+            <div class="rule"></div>
+            <section class="qr">
+              ${qrSvg.ifBlank { "" }}
+              <p class="muted">Order again</p>
+              <p>${catalogUrl.orderDocumentEscaped()}</p>
+            </section>
+        """.trimIndent()
+    } else {
+        ""
+    }
+    val greetingHtml = if (printer?.showTimedGreeting != false) {
+        """<p class="center muted">${receiptTimedGreeting().orderDocumentEscaped()}</p>"""
+    } else {
+        ""
+    }
+    return """
         <!doctype html>
         <html>
         <head>
@@ -35667,10 +35925,14 @@ private fun orderReceiptHtml(
             }
             .receipt { padding: 10px 0; }
             .center { text-align: center; }
+            .header { text-align: $headerAlign; }
+            .logo-mark { margin-bottom: 4px; font-weight: 700; letter-spacing: 1px; }
             h1 { margin: 0 0 4px; font-size: 18px; font-weight: 600; }
             p { margin: 0; }
             .muted { color: rgba(23, 59, 61, 0.56); }
             .rule { border-top: 1px dashed rgba(23, 59, 61, 0.32); margin: 10px 0; }
+            .qr { text-align: center; margin: 8px 0; }
+            .qr svg { display: block; margin: 0 auto 6px; width: 96px; height: 96px; }
             .row {
               display: flex;
               justify-content: space-between;
@@ -35700,9 +35962,10 @@ private fun orderReceiptHtml(
         </head>
         <body>
           <main class="receipt">
-            <section class="center">
-              <h1>${invoiceIssuerName(state).orderDocumentEscaped()}</h1>
-              <p class="muted">${invoiceIssuerSubLine(state).orderDocumentLineBreaks()}</p>
+            <section class="header">
+              $logoHtml
+              <h1>${issuerName.orderDocumentEscaped()}</h1>
+              $addressHtml
             </section>
             <div class="rule"></div>
             ${orderDocumentReceiptRow("Receipt", reference)}
@@ -35717,25 +35980,35 @@ private fun orderReceiptHtml(
             ${orderDocumentReceiptRow("Paid", dashboardMoney(order.paidTotal, order.currency))}
             ${orderDocumentReceiptRow("Balance", order.balanceDueText())}
             <div class="row total"><span>Total</span><span>${dashboardMoney(order.total, order.currency).orderDocumentEscaped()}</span></div>
+            $catalogQrHtml
             <div class="rule"></div>
+            $greetingHtml
             <p class="center muted">Thank you</p>
           </main>
         </body>
         </html>
     """.trimIndent()
+}
 
 private fun orderReceiptText(
     state: OnboardingUiState,
     order: OrmaOrder,
     reference: String,
+    printer: OrmaPrinterProfile? = null,
 ): String {
-    val width = 42
+    val width = printer?.receiptPrintWidth() ?: 42
+    val alignment = printer?.headerAlignment?.printerHeaderAlignment() ?: "center"
+    val issuerName = invoiceIssuerName(state)
+    val catalogUrl = state.publicCatalogUrlOrNull()
     return buildString {
-        appendReceiptCentered(invoiceIssuerName(state), width)
-        invoiceIssuerSubLine(state)
-            .lines()
-            .filter { it.isNotBlank() }
-            .forEach { appendReceiptCentered(it, width) }
+        if (printer?.printLogo == true) appendReceiptAligned(receiptLogoMark(issuerName), width, alignment)
+        appendReceiptAligned(issuerName, width, alignment)
+        if (printer?.showBusinessAddress != false) {
+            invoiceIssuerSubLine(state)
+                .lines()
+                .filter { it.isNotBlank() }
+                .forEach { appendReceiptAligned(it, width, alignment) }
+        }
         appendReceiptRule(width)
         appendReceiptRow("Receipt", reference, width)
         appendReceiptRow("Date", invoiceIssueDateLabel(order), width)
@@ -35759,15 +36032,26 @@ private fun orderReceiptText(
         appendReceiptRule(width)
         appendReceiptRow("TOTAL", dashboardMoney(order.total, order.currency), width)
         appendReceiptRule(width)
-        appendReceiptCentered("Thank you", width)
+        if (printer?.showCatalogQr == true && !catalogUrl.isNullOrBlank()) {
+            appendReceiptAligned("Order again", width, alignment)
+            appendLine(receiptQrMarker(catalogUrl))
+            appendLine(catalogUrl.receiptLine(width))
+            appendReceiptRule(width)
+        }
+        if (printer?.showTimedGreeting != false) appendReceiptAligned(receiptTimedGreeting(), width, alignment)
+        appendReceiptAligned("Thank you", width, alignment)
         appendLine()
         appendLine()
     }
 }
 
 private fun StringBuilder.appendReceiptCentered(value: String, width: Int) {
+    appendReceiptAligned(value, width, "center")
+}
+
+private fun StringBuilder.appendReceiptAligned(value: String, width: Int, alignment: String) {
     val line = value.receiptLine(width)
-    val padding = ((width - line.length) / 2).coerceAtLeast(0)
+    val padding = if (alignment.printerHeaderAlignment() == "left") 0 else ((width - line.length) / 2).coerceAtLeast(0)
     appendLine("${" ".repeat(padding)}$line")
 }
 
@@ -39874,10 +40158,12 @@ private fun DashboardMobileAccountContent(
                                 html = printerTestPrintHtml(
                                     workspaceName = workspaceName,
                                     printer = printer,
+                                    catalogUrl = orderingUrl,
                                 ),
                                 text = printerTestPrintText(
                                     workspaceName = workspaceName,
                                     printer = printer,
+                                    catalogUrl = orderingUrl,
                                 ),
                                 target = printer.toPrintTarget(),
                             )
@@ -40394,7 +40680,11 @@ private fun DashboardMobilePrinterCell(
 ) {
     DashboardMobileAccountMiniCell(
         title = printer.name,
-        body = "${printer.connectionType.printerConnectionLabel()} / ${printer.paperWidthMm}mm",
+        body = buildList {
+            add("${printer.connectionType.printerConnectionLabel()} / ${printer.paperWidthMm}mm")
+            add(printer.headerAlignment.printerHeaderAlignmentLabel())
+            if (printer.showCatalogQr) add("Catalog QR")
+        }.joinToString(" / "),
         badgeText = when {
             printer.isDefaultReceipt && printer.isDefaultBarcode -> "DEFAULT"
             printer.isDefaultReceipt -> "RECEIPT"
@@ -41635,6 +41925,7 @@ private fun DashboardAccountPrinterCard(
     val editingPrinter = state.dashboard.printers.firstOrNull { it.id == editingPrinterId }
     val exporter = rememberOrmaOrderDocumentExporter()
     val connectorSnapshot = rememberOrmaHardwareConnectorSnapshot()
+    val orderingUrl = state.publicCatalogUrlOrNull()
     DashboardRecordCard {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -41739,10 +42030,12 @@ private fun DashboardAccountPrinterCard(
                             html = printerTestPrintHtml(
                                 workspaceName = state.workspaceName.ifBlank { state.draft.businessName },
                                 printer = printer,
+                                catalogUrl = orderingUrl,
                             ),
                             text = printerTestPrintText(
                                 workspaceName = state.workspaceName.ifBlank { state.draft.businessName },
                                 printer = printer,
+                                catalogUrl = orderingUrl,
                             ),
                             target = printer.toPrintTarget(),
                         )
@@ -41919,6 +42212,95 @@ private fun DashboardConnectorDeviceRow(device: OrmaHardwareConnectorDevice) {
 }
 
 @Composable
+private fun DashboardDetectedPrinterPicker(
+    devices: List<OrmaHardwareConnectorDevice>,
+    draft: OrmaPrinterDraft,
+    onSelected: (OrmaHardwareConnectorDevice) -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = OrmaShapes.StandardCell,
+        color = OrmaColors.ScreenBackground,
+        contentColor = OrmaColors.TextPrimary,
+        border = BorderStroke(0.6.dp, OrmaColors.Hairline),
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(
+                    text = "Detected mobile printers",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = OrmaColors.TextPrimary,
+                )
+                Text(
+                    text = "Select a paired portable printer to use direct mobile thermal printing.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = OrmaColors.TextSecondary,
+                )
+            }
+            devices.forEach { device ->
+                val selected = draft.matchesDetectedPrinterDevice(device)
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onSelected(device) },
+                    shape = OrmaShapes.StandardCell,
+                    color = if (selected) OrmaColors.Accent.copy(alpha = 0.08f) else OrmaColors.CellBackground,
+                    contentColor = OrmaColors.TextPrimary,
+                    border = BorderStroke(
+                        0.8.dp,
+                        if (selected) OrmaColors.Accent.copy(alpha = 0.28f) else OrmaColors.Hairline.copy(alpha = 0.7f),
+                    ),
+                    tonalElevation = 0.dp,
+                    shadowElevation = 0.dp,
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        DashboardNavIcon(
+                            kind = DashboardNavIconKind.Printing,
+                            color = if (selected) OrmaColors.Accent else OrmaColors.IconPrimary,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            Text(
+                                text = device.name,
+                                style = MaterialTheme.typography.labelLarge,
+                                color = if (selected) OrmaColors.Accent else OrmaColors.TextPrimary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                text = listOf(device.connectorType, device.address.orEmpty(), device.status)
+                                    .filter { it.isNotBlank() }
+                                    .joinToString(" / "),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = OrmaColors.TextSecondary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        OrmaBadge(
+                            text = if (selected) "SELECTED" else "DIRECT",
+                            tone = if (selected) OrmaStatusTone.Success else OrmaStatusTone.Info,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun BarcodeConnectorSheet(
     state: OnboardingUiState,
     snapshot: OrmaHardwareConnectorSnapshot,
@@ -41998,7 +42380,7 @@ private fun DashboardPrinterDeviceCoveragePanel() {
             )
             OrmaKeyValueList(
                 rows = listOf(
-                    "Web and desktop" to "System printer, raw device path, or tcp://IP:9100 thermal",
+                    "Web and desktop" to "System printer, macOS Bluetooth serial, raw path, or tcp://IP:9100",
                     "Android" to "MTP/USB OTG, Bluetooth SPP, network ESC/POS, or system print",
                     "iPhone and iPad" to "AirPrint or installed print services",
                 ),
@@ -42067,6 +42449,9 @@ private fun DashboardPrinterRow(
                     "DPI" to printer.dpi.toString(),
                     "Receipts" to if (printer.supportsReceipts) "Yes" else "No",
                     "Barcodes" to if (printer.supportsBarcodes) "Yes" else "No",
+                    "Header" to printer.headerAlignment.printerHeaderAlignmentLabel(),
+                    "Catalog QR" to if (printer.showCatalogQr) "Yes" else "No",
+                    "Greeting" to if (printer.showTimedGreeting) "Timed" else "Off",
                 ),
             )
             Text(
@@ -42135,6 +42520,8 @@ private fun PrinterFormSheet(
     val actionLoading = state.dashboard.isActionLoading(
         printer?.id?.let(DashboardActionKey::printer) ?: DashboardActionKey.PrinterCreate,
     )
+    val connectorSnapshot = rememberOrmaHardwareConnectorSnapshot()
+    val detectedPrinterDevices = connectorSnapshot.printDevices
     var draft by remember(printer?.id) {
         mutableStateOf(printer?.toPrinterDraft() ?: OrmaPrinterDraft(isDefaultReceipt = true))
     }
@@ -42155,6 +42542,15 @@ private fun PrinterFormSheet(
             label = { it.printerConnectionLabel() },
             onSelected = { draft = draft.copy(connectionType = it) },
         )
+        if (detectedPrinterDevices.isNotEmpty()) {
+            DashboardDetectedPrinterPicker(
+                devices = detectedPrinterDevices,
+                draft = draft,
+                onSelected = { device ->
+                    draft = draft.withDetectedPrinterDevice(device)
+                },
+            )
+        }
         OrmaTextField(
             value = draft.address,
             onValueChange = { draft = draft.copy(address = it.take(160)) },
@@ -42179,6 +42575,41 @@ private fun PrinterFormSheet(
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             )
         }
+        Text(
+            text = "Receipt layout",
+            style = MaterialTheme.typography.labelLarge,
+            color = OrmaColors.TextPrimary,
+        )
+        DashboardCompactSegmentedPicker(
+            options = DashboardPrinterHeaderAlignmentOptions,
+            selected = draft.headerAlignment.printerHeaderAlignment(),
+            label = { it.printerHeaderAlignmentLabel() },
+            onSelected = { draft = draft.copy(headerAlignment = it) },
+        )
+        OrmaSwitchRow(
+            title = "Print logo mark",
+            body = "Print compact business initials above the receipt header.",
+            checked = draft.printLogo,
+            onCheckedChange = { draft = draft.copy(printLogo = it) },
+        )
+        OrmaSwitchRow(
+            title = "Print business address",
+            body = "Show address and contact under the business name.",
+            checked = draft.showBusinessAddress,
+            onCheckedChange = { draft = draft.copy(showBusinessAddress = it) },
+        )
+        OrmaSwitchRow(
+            title = "Catalog QR on receipts",
+            body = "Print the public catalog QR so customers can order again.",
+            checked = draft.showCatalogQr,
+            onCheckedChange = { draft = draft.copy(showCatalogQr = it) },
+        )
+        OrmaSwitchRow(
+            title = "Timed greeting",
+            body = "Add morning, afternoon, or evening greeting based on print time.",
+            checked = draft.showTimedGreeting,
+            onCheckedChange = { draft = draft.copy(showTimedGreeting = it) },
+        )
         OrmaSwitchRow(
             title = "Print receipts and bills",
             body = "Use this printer for work orders, bills, bookings, and receipts.",

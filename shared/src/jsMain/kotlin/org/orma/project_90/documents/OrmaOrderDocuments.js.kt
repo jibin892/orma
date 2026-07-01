@@ -153,16 +153,42 @@ private fun printHtmlFromBrowser(title: String, html: String): Boolean =
         (() => {
           try {
             if (typeof window === 'undefined') return false;
+            const writeAndPrint = function (targetWindow, cleanup) {
+              targetWindow.document.open();
+              targetWindow.document.write(html);
+              targetWindow.document.close();
+              targetWindow.document.title = title || 'ORMA receipt';
+              targetWindow.focus();
+              targetWindow.setTimeout(function () {
+                targetWindow.print();
+                if (typeof cleanup === 'function') {
+                  targetWindow.setTimeout(cleanup, 1000);
+                }
+              }, 180);
+            };
             const printWindow = window.open('', '_blank', 'width=420,height=720');
-            if (!printWindow || !printWindow.document) return false;
-            printWindow.document.open();
-            printWindow.document.write(html);
-            printWindow.document.close();
-            printWindow.document.title = title || 'ORMA receipt';
-            printWindow.focus();
-            printWindow.setTimeout(function () {
-              printWindow.print();
-            }, 180);
+            if (printWindow && printWindow.document) {
+              writeAndPrint(printWindow);
+              return true;
+            }
+            if (typeof document === 'undefined' || !document.body) return false;
+            const iframe = document.createElement('iframe');
+            iframe.style.position = 'fixed';
+            iframe.style.right = '0';
+            iframe.style.bottom = '0';
+            iframe.style.width = '0';
+            iframe.style.height = '0';
+            iframe.style.border = '0';
+            iframe.setAttribute('aria-hidden', 'true');
+            document.body.appendChild(iframe);
+            const frameWindow = iframe.contentWindow;
+            if (!frameWindow || !frameWindow.document) {
+              if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
+              return false;
+            }
+            writeAndPrint(frameWindow, function () {
+              if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
+            });
             return true;
           } catch (error) {
             return false;

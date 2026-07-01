@@ -3,6 +3,7 @@ package org.orma.project_90.documents
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import java.awt.Desktop
+import java.io.ByteArrayOutputStream
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.URI
@@ -64,8 +65,8 @@ actual fun rememberOrmaOrderDocumentExporter(): OrmaOrderDocumentExporter =
                 text: String,
                 target: OrmaPrintTarget?,
             ): Boolean {
-                if (target != null) {
-                    return printReceiptDirect(target = target, text = text)
+                if (target != null && printReceiptDirect(target = target, text = text)) {
+                    return true
                 }
                 return printHtml(title = title, html = html)
             }
@@ -80,6 +81,11 @@ private fun printReceiptDirect(
     val address = target.address.orEmpty().trim()
     val bytes = receiptPrintBytes(text)
     return when {
+        type == "bluetooth" -> {
+            printRawBluetoothSerialReceipt(target = target, bytes = bytes) ||
+                printWithSystemPrinter(target = target, bytes = bytes) ||
+                printWithLp(target = target, bytes = bytes)
+        }
         type == "network" || address.startsWith("tcp://", ignoreCase = true) -> {
             printRawNetworkReceipt(address = address, bytes = bytes) ||
                 printWithSystemPrinter(target = target, bytes = bytes) ||
@@ -97,10 +103,49 @@ private fun printReceiptDirect(
     }
 }
 
+private const val ReceiptQrMarkerPrefix = "[[ORMA_QR:"
+private const val ReceiptQrMarkerSuffix = "]]"
+
 private fun receiptPrintBytes(text: String): ByteArray =
-    byteArrayOf(0x1B, 0x40) +
-        text.toByteArray(StandardCharsets.UTF_8) +
-        byteArrayOf(0x0A, 0x0A, 0x0A, 0x1D, 0x56, 0x42, 0x00)
+    ByteArrayOutputStream().use { output ->
+        output.write(byteArrayOf(0x1B, 0x40))
+        text.lineSequence().forEach { rawLine ->
+            val line = rawLine.trim()
+            val qrValue = line.takeIf {
+                it.startsWith(ReceiptQrMarkerPrefix) && it.endsWith(ReceiptQrMarkerSuffix)
+            }?.removePrefix(ReceiptQrMarkerPrefix)?.removeSuffix(ReceiptQrMarkerSuffix)?.trim()
+            if (!qrValue.isNullOrBlank()) {
+                output.writeEscPosQr(qrValue)
+            } else {
+                output.write(rawLine.toByteArray(StandardCharsets.UTF_8))
+                output.write(0x0A)
+            }
+        }
+        output.write(byteArrayOf(0x0A, 0x0A, 0x1D, 0x56, 0x42, 0x00))
+        output.toByteArray()
+    }
+
+private fun ByteArrayOutputStream.writeEscPosQr(value: String) {
+    val bytes = value.toByteArray(StandardCharsets.UTF_8)
+    val storeLength = bytes.size + 3
+    write(byteArrayOf(0x1D, 0x28, 0x6B, 0x04, 0x00, 0x31, 0x41, 0x32, 0x00))
+    write(byteArrayOf(0x1D, 0x28, 0x6B, 0x03, 0x00, 0x31, 0x43, 0x06))
+    write(byteArrayOf(0x1D, 0x28, 0x6B, 0x03, 0x00, 0x31, 0x45, 0x31))
+    write(
+        byteArrayOf(
+            0x1D,
+            0x28,
+            0x6B,
+            (storeLength % 256).toByte(),
+            (storeLength / 256).toByte(),
+            0x31,
+            0x50,
+            0x30,
+        ),
+    )
+    write(bytes)
+    write(byteArrayOf(0x1D, 0x28, 0x6B, 0x03, 0x00, 0x31, 0x51, 0x30, 0x0A))
+}
 
 private fun printRawNetworkReceipt(
     address: String,
@@ -126,6 +171,53 @@ private fun printRawDeviceReceipt(
         Files.write(Paths.get(path), bytes)
         true
     }.getOrDefault(false)
+
+private fun printRawBluetoothSerialReceipt(
+    target: OrmaPrintTarget,
+    bytes: ByteArray,
+): Boolean {
+    val osName = System.getProperty("os.name").orEmpty().lowercase()
+    if (!osName.contains("mac")) return false
+    val serialPort = findMacBluetoothSerialPort(target) ?: return false
+    return printRawDeviceReceipt(path = serialPort.toString(), bytes = bytes)
+}
+
+private fun findMacBluetoothSerialPort(target: OrmaPrintTarget): Path? =
+    runCatching {
+        val candidates = listOf(target.address.orEmpty(), target.name)
+            .map { it.bluetoothPortToken() }
+            .filter { it.isNotBlank() }
+        if (candidates.isEmpty()) return@runCatching null
+        val devDir = Paths.get("/dev")
+        if (!Files.isDirectory(devDir)) return@runCatching null
+        Files.list(devDir).use { stream ->
+            stream
+                .filter { path ->
+                    val name = path.fileName.toString()
+                    name.startsWith("cu.", ignoreCase = true) || name.startsWith("tty.", ignoreCase = true)
+                }
+                .sorted { first, second ->
+                    val firstName = first.fileName.toString()
+                    val secondName = second.fileName.toString()
+                    when {
+                        firstName.startsWith("cu.", ignoreCase = true) && secondName.startsWith("tty.", ignoreCase = true) -> -1
+                        firstName.startsWith("tty.", ignoreCase = true) && secondName.startsWith("cu.", ignoreCase = true) -> 1
+                        else -> firstName.compareTo(secondName, ignoreCase = true)
+                    }
+                }
+                .filter { path ->
+                    val portToken = path.fileName.toString().bluetoothPortToken()
+                    candidates.any { candidate ->
+                        portToken.contains(candidate) || candidate.contains(portToken)
+                    }
+                }
+                .findFirst()
+                .orElse(null)
+        }
+    }.getOrNull()
+
+private fun String.bluetoothPortToken(): String =
+    lowercase().filter { it.isLetterOrDigit() }
 
 private fun printWithSystemPrinter(
     target: OrmaPrintTarget,

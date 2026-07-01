@@ -5127,9 +5127,10 @@ class DashboardRepository(
             insert into printer_profiles (
                 workspace_id, name, connection_type, address, paper_width_mm, dpi,
                 supports_receipts, supports_barcodes, is_default_receipt, is_default_barcode,
-                notes, updated_at
+                print_logo, header_alignment, show_business_address, show_catalog_qr,
+                show_timed_greeting, notes, updated_at
             )
-            values (?::uuid, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now())
+            values (?::uuid, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now())
             returning *
         """.trimIndent()
         return prepareStatement(sql).use { statement ->
@@ -5153,14 +5154,16 @@ class DashboardRepository(
             update printer_profiles
             set name = ?, connection_type = ?, address = ?, paper_width_mm = ?, dpi = ?,
                 supports_receipts = ?, supports_barcodes = ?, is_default_receipt = ?,
-                is_default_barcode = ?, notes = ?, updated_at = now()
+                is_default_barcode = ?, print_logo = ?, header_alignment = ?,
+                show_business_address = ?, show_catalog_qr = ?, show_timed_greeting = ?,
+                notes = ?, updated_at = now()
             where id = ?::uuid and workspace_id = ?::uuid and status = 'active'
             returning *
         """.trimIndent()
         return prepareStatement(sql).use { statement ->
             statement.bindPrinterRequest(request, startIndex = 1)
-            statement.setString(11, cleanPrinterId)
-            statement.setString(12, workspaceId)
+            statement.setString(16, cleanPrinterId)
+            statement.setString(17, workspaceId)
             statement.executeQuery().use { result ->
                 if (result.next()) result.toPrinterProfileResponse() else null
             }
@@ -6384,7 +6387,12 @@ class DashboardRepository(
         setBoolean(startIndex + 6, request.supportsBarcodes)
         setBoolean(startIndex + 7, request.isDefaultReceipt && request.supportsReceipts)
         setBoolean(startIndex + 8, request.isDefaultBarcode && request.supportsBarcodes)
-        setNullableString(startIndex + 9, request.notes?.cleanOptional())
+        setBoolean(startIndex + 9, request.printLogo)
+        setString(startIndex + 10, request.headerAlignment.cleanPrinterHeaderAlignment())
+        setBoolean(startIndex + 11, request.showBusinessAddress)
+        setBoolean(startIndex + 12, request.showCatalogQr)
+        setBoolean(startIndex + 13, request.showTimedGreeting)
+        setNullableString(startIndex + 14, request.notes?.cleanOptional())
     }
 
     private fun ResultSet.toProductCategoryResponse(): ProductCategoryResponse =
@@ -6637,6 +6645,11 @@ class DashboardRepository(
             supportsBarcodes = getBoolean("supports_barcodes"),
             isDefaultReceipt = getBoolean("is_default_receipt"),
             isDefaultBarcode = getBoolean("is_default_barcode"),
+            printLogo = getBoolean("print_logo"),
+            headerAlignment = getString("header_alignment") ?: "center",
+            showBusinessAddress = getBoolean("show_business_address"),
+            showCatalogQr = getBoolean("show_catalog_qr"),
+            showTimedGreeting = getBoolean("show_timed_greeting"),
             notes = getString("notes"),
             status = getString("status"),
             createdAt = getString("created_at"),
@@ -7870,6 +7883,11 @@ class DashboardRepository(
     private fun String.cleanPrinterConnectionType(): String {
         val normalized = trim().lowercase().filter { it.isLetterOrDigit() || it == '_' }
         return if (normalized in AllowedPrinterConnectionTypes) normalized else "mtp_usb"
+    }
+
+    private fun String.cleanPrinterHeaderAlignment(): String {
+        val normalized = trim().lowercase().filter { it.isLetterOrDigit() || it == '_' }
+        return if (normalized in setOf("left", "center")) normalized else "center"
     }
 
     private fun String.cleanOfferScope(): String {
