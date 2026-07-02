@@ -119,6 +119,7 @@ data class WorkspaceResponse(
     val currency: String? = null,
     val taxMode: String? = null,
     val pricesIncludeTax: Boolean? = null,
+    val enabledOrderStatuses: List<String>? = null,
 )
 
 @Serializable
@@ -145,6 +146,16 @@ data class BusinessSetupRequest(
     val currency: String,
     val taxMode: String,
     val pricesIncludeTax: Boolean,
+)
+
+@Serializable
+data class WorkspaceOrderStatusPreferenceRequest(
+    val enabledStatuses: List<String> = emptyList(),
+)
+
+@Serializable
+data class WorkspaceOrderStatusPreferenceResponse(
+    val enabledStatuses: List<String> = emptyList(),
 )
 
 @Serializable

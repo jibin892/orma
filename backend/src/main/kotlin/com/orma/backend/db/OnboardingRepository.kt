@@ -58,6 +58,7 @@ data class WorkspaceRecord(
     val currency: String? = null,
     val taxMode: String? = null,
     val pricesIncludeTax: Boolean? = null,
+    val enabledOrderStatuses: List<String>? = null,
 )
 
 data class OnboardingSessionRecord(
@@ -596,7 +597,8 @@ class OnboardingRepository(
                 bw.invoice_footer,
                 bw.currency,
                 bw.tax_mode,
-                bw.prices_include_tax
+                bw.prices_include_tax,
+                bw.enabled_order_statuses
             from workspace_members wm
             join business_workspaces bw on bw.id = wm.workspace_id
             where wm.user_id = ?::uuid
@@ -1714,6 +1716,7 @@ class OnboardingRepository(
             currency = runCatching { getString("currency") }.getOrNull(),
             taxMode = runCatching { getString("tax_mode") }.getOrNull(),
             pricesIncludeTax = runCatching { getBoolean("prices_include_tax") }.getOrNull(),
+            enabledOrderStatuses = getOptionalStringArray("enabled_order_statuses"),
         )
 
     private fun ResultSet.toTeamMemberRecord(): TeamMemberRecord =
@@ -1816,6 +1819,15 @@ class OnboardingRepository(
                 else -> emptyList()
             }
         }.getOrDefault(emptyList())
+
+    private fun ResultSet.getOptionalStringArray(column: String): List<String>? =
+        runCatching {
+            val value = getArray(column)?.array ?: return@runCatching null
+            when (value) {
+                is Array<*> -> value.mapNotNull { it?.toString() }
+                else -> emptyList()
+            }
+        }.getOrNull()
 
     private fun String.cleanActivityType(): String =
         trim()

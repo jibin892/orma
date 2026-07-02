@@ -120,6 +120,7 @@ fun com.orma.backend.db.WorkspaceRecord.toResponse(): WorkspaceResponse =
         currency = currency,
         taxMode = taxMode,
         pricesIncludeTax = pricesIncludeTax,
+        enabledOrderStatuses = enabledOrderStatuses,
     )
 
 fun com.orma.backend.db.WorkspaceRecord.toResponse(config: AppConfig): WorkspaceResponse =

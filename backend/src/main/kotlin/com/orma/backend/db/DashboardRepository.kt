@@ -57,6 +57,8 @@ import com.orma.backend.models.SupplierRequest
 import com.orma.backend.models.SupplierResponse
 import com.orma.backend.models.WorkspacePaymentMethodRequest
 import com.orma.backend.models.WorkspacePaymentMethodResponse
+import com.orma.backend.models.WorkspaceOrderStatusPreferenceRequest
+import com.orma.backend.models.WorkspaceOrderStatusPreferenceResponse
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.time.LocalDate
@@ -88,6 +90,7 @@ data class DashboardWorkspaceAccess(
     val displayName: String? = null,
     val email: String? = null,
     val phoneNumber: String? = null,
+    val enabledOrderStatuses: List<String>? = null,
 )
 
 data class DashboardQueryFilters(
@@ -1882,6 +1885,34 @@ class DashboardRepository(
         }
     }
 
+    suspend fun updateWorkspaceOrderStatusPreferences(
+        firebaseUser: VerifiedFirebaseUser,
+        request: WorkspaceOrderStatusPreferenceRequest,
+    ): WorkspaceOrderStatusPreferenceResponse? = withContext(Dispatchers.IO) {
+        dataSource.connection.use { connection ->
+            val access = connection.resolveWorkspaceAccess(firebaseUser) ?: return@withContext null
+            access.requirePermission(PermissionManageAccount, "manage order statuses")
+            val statuses = request.enabledStatuses
+                .map { it.normalizedOrderStatus() }
+                .filter { it in AllowedOrderStatuses }
+                .toMutableSet()
+                .apply { addAll(RequiredOrderStatuses) }
+                .let { enabled -> AllowedOrderStatuses.filter { it in enabled } }
+            connection.prepareStatement(
+                """
+                update business_workspaces
+                set enabled_order_statuses = ?, updated_at = now()
+                where id = ?::uuid
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setArray(1, connection.createArrayOf("text", statuses.toTypedArray()))
+                statement.setString(2, access.workspaceId)
+                statement.executeUpdate()
+            }
+            WorkspaceOrderStatusPreferenceResponse(statuses)
+        }
+    }
+
     suspend fun resolveOrderChangeRequest(
         firebaseUser: VerifiedFirebaseUser,
         orderId: String,
@@ -2474,6 +2505,7 @@ class DashboardRepository(
                 wm.permissions,
                 bw.currency,
                 bw.business_mode,
+                bw.enabled_order_statuses,
                 au.display_name,
                 au.email,
                 au.phone_number
@@ -2497,6 +2529,7 @@ class DashboardRepository(
                         permissions = result.getStringArray("permissions"),
                         currency = result.getString("currency") ?: "INR",
                         businessMode = result.getString("business_mode") ?: "product_selling",
+                        enabledOrderStatuses = result.getOptionalStringArray("enabled_order_statuses"),
                         displayName = result.getString("display_name"),
                         email = result.getString("email"),
                         phoneNumber = result.getString("phone_number"),
@@ -2523,6 +2556,15 @@ class DashboardRepository(
                 else -> emptyList()
             }
         }.getOrDefault(emptyList())
+
+    private fun ResultSet.getOptionalStringArray(column: String): List<String>? =
+        runCatching {
+            val value = getArray(column)?.array ?: return@runCatching null
+            when (value) {
+                is Array<*> -> value.mapNotNull { it?.toString() }
+                else -> emptyList()
+            }
+        }.getOrNull()
 
     private fun Connection.scalarDecimal(sql: String, vararg params: String): BigDecimal =
         prepareStatement(sql).use { statement ->
@@ -5266,6 +5308,7 @@ class DashboardRepository(
         discountTotalOverride: BigDecimal = BigDecimal.ZERO,
     ): OrderResponse {
         val status = request.status.normalizedOrderStatus()
+        access.requireEnabledOrderStatus(status)
         val orderType = request.orderType.cleanOrderType()
         if (orderType == "appointment" && request.scheduledAt.cleanOptional() == null) {
             throw DashboardOrderValidationException(
@@ -5501,6 +5544,7 @@ class DashboardRepository(
     ): OrderResponse? {
         val cleanOrderId = orderId.cleanUuidOrNull() ?: return null
         val status = request.status.normalizedOrderStatus()
+        access.requireEnabledOrderStatus(status)
         val orderType = request.orderType.cleanOrderType()
         if (orderType == "appointment" && request.scheduledAt.cleanOptional() == null) {
             throw DashboardOrderValidationException(
@@ -5642,6 +5686,7 @@ class DashboardRepository(
         requestedPaidTotal: String? = null,
     ): OrderResponse? {
         val status = requestedStatus.normalizedOrderStatus()
+        access.requireEnabledOrderStatus(status)
         val currentSql = """
             select status, inventory_applied, total, payment_mode
             from orders
@@ -8399,6 +8444,20 @@ class DashboardRepository(
         }
     }
 
+    private fun DashboardWorkspaceAccess.requireEnabledOrderStatus(status: String) {
+        val configured = enabledOrderStatuses ?: return
+        val enabled = configured
+            .map { it.normalizedOrderStatus() }
+            .filter { it in AllowedOrderStatuses }
+            .toSet() + RequiredOrderStatuses
+        if (status !in enabled) {
+            throw DashboardOrderValidationException(
+                code = "order_status_disabled",
+                publicMessage = "${status.dashboardLabel()} is disabled for this workspace. Enable it in Account > Manage status first.",
+            )
+        }
+    }
+
     private fun String.catalogCreatePermission(): String =
         when (trim().lowercase()) {
             "service" -> PermissionCreateService
@@ -8536,6 +8595,7 @@ class DashboardRepository(
             "no_show",
             "cancelled",
         )
+        val RequiredOrderStatuses = setOf("new", "confirmed", "completed", "cancelled")
         val InventoryApplyingStatuses = setOf(
             "confirmed",
             "preparing",

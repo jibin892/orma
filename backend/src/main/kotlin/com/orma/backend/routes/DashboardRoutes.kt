@@ -33,6 +33,7 @@ import com.orma.backend.models.SupplierListResponse
 import com.orma.backend.models.SupplierRequest
 import com.orma.backend.models.WorkspacePaymentMethodListResponse
 import com.orma.backend.models.WorkspacePaymentMethodRequest
+import com.orma.backend.models.WorkspaceOrderStatusPreferenceRequest
 import com.orma.backend.notifications.OrderNotificationService
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
@@ -608,6 +609,19 @@ fun Route.dashboardRoutes(
         val firebaseUser = call.verifiedFirebaseUser(config) ?: return@get
         val methods = repository.paymentMethods(firebaseUser, call.dashboardFilters()) ?: return@get call.workspaceNotFound()
         call.respond(WorkspacePaymentMethodListResponse(methods.items, methods.pagination))
+    }
+
+    put("/workspace/order-statuses") {
+        val repository = dashboardRepository ?: return@put call.dashboardDatabaseNotConfigured()
+        val firebaseUser = call.verifiedFirebaseUser(config) ?: return@put
+        val request = call.receive<WorkspaceOrderStatusPreferenceRequest>()
+        val response = try {
+            repository.updateWorkspaceOrderStatusPreferences(firebaseUser, request)
+        } catch (error: DashboardOrderValidationException) {
+            call.respondValidation(error.code, error.message ?: "Check order status settings.")
+            return@put
+        }
+        call.respondWorkspaceResult(response)
     }
 
     post("/payment-methods") {
